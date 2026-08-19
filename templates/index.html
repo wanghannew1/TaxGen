@@ -1,0 +1,624 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>个税模板填表工具</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+    <style>
+        :root {
+            --primary: #1a5276;
+            --primary-dark: #154360;
+            --accent: #1abc9c;
+            --accent-dark: #16a085;
+            --light-bg: #f8f9fa;
+            --card-shadow: 0 4px 12px rgba(0, 0, 0, 0.08);
+        }
+
+        body {
+            background: linear-gradient(135deg, #e8f0f7 0%, #f5f5f5 100%);
+            padding: 24px;
+            font-family: "Microsoft YaHei", "Segoe UI", sans-serif;
+            min-height: 100vh;
+        }
+
+        .container {
+            max-width: 900px;
+            margin: 0 auto;
+        }
+
+        .page-header {
+            text-align: center;
+            margin-bottom: 32px;
+        }
+
+        .page-header h2 {
+            color: var(--primary-dark);
+            font-weight: 600;
+            margin-bottom: 4px;
+        }
+
+        .page-header p {
+            color: #6c757d;
+            font-size: 0.9rem;
+        }
+
+        .card {
+            margin-bottom: 20px;
+            box-shadow: var(--card-shadow);
+            border: none;
+            border-radius: 10px;
+            overflow: hidden;
+            transition: box-shadow 0.2s ease;
+        }
+
+        .card:hover {
+            box-shadow: 0 6px 20px rgba(0, 0, 0, 0.12);
+        }
+
+        .card-header {
+            background-color: #fff;
+            font-weight: 600;
+            border-bottom: 2px solid var(--accent);
+            padding: 14px 20px;
+            color: var(--primary-dark);
+        }
+
+        .card-body {
+            padding: 20px;
+            background-color: #fff;
+        }
+
+        .btn-generate {
+            width: 100%;
+            padding: 12px;
+            font-size: 1.1em;
+            background-color: var(--primary);
+            border: none;
+            border-radius: 8px;
+            transition: background-color 0.2s ease, transform 0.05s ease;
+        }
+
+        .btn-generate:hover:not(:disabled) {
+            background-color: var(--primary-dark);
+        }
+
+        .btn-generate:active:not(:disabled) {
+            transform: translateY(1px);
+        }
+
+        .btn-generate:disabled {
+            opacity: 0.6;
+        }
+
+        .btn-download {
+            background-color: var(--accent);
+            border: none;
+            border-radius: 6px;
+            padding: 6px 16px;
+            font-size: 0.85rem;
+            transition: background-color 0.2s ease;
+        }
+
+        .btn-download:hover {
+            background-color: var(--accent-dark);
+        }
+
+        .btn-validate {
+            background-color: var(--primary);
+            border: none;
+            border-radius: 8px;
+            padding: 10px 24px;
+            font-size: 1rem;
+            transition: background-color 0.2s ease;
+        }
+
+        .btn-validate:hover {
+            background-color: var(--primary-dark);
+        }
+
+        .loading {
+            display: none;
+        }
+
+        .results {
+            display: none;
+        }
+
+        .validation-pass {
+            color: #28a745;
+            font-weight: 600;
+        }
+
+        .validation-fail {
+            color: #dc3545;
+            font-weight: 600;
+        }
+
+        .template-checkboxes label {
+            margin-right: 20px;
+        }
+
+        .step-indicator {
+            display: flex;
+            justify-content: space-between;
+            margin-bottom: 24px;
+            padding: 0 10px;
+        }
+
+        .step {
+            flex: 1;
+            text-align: center;
+            position: relative;
+        }
+
+        .step:not(:last-child):after {
+            content: '';
+            position: absolute;
+            top: 14px;
+            left: 50%;
+            right: -50%;
+            height: 2px;
+            background-color: #dee2e6;
+            z-index: 0;
+        }
+
+        .step.active {
+            color: var(--primary);
+        }
+
+        .step-number {
+            width: 28px;
+            height: 28px;
+            border-radius: 50%;
+            background-color: #dee2e6;
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 0.8rem;
+            font-weight: 600;
+            margin-bottom: 4px;
+            z-index: 1;
+            position: relative;
+        }
+
+        .step.active .step-number {
+            background-color: var(--primary);
+            color: #fff;
+        }
+
+        .spinner-border {
+            width: 2rem;
+            height: 2rem;
+        }
+
+        .error-alert {
+            border-radius: 8px;
+            padding: 12px 16px;
+            margin-bottom: 16px;
+        }
+
+        .validation-details-table th {
+            background-color: #f8f9fa;
+            font-size: 0.85rem;
+        }
+
+        .validation-details-table td {
+            font-size: 0.85rem;
+        }
+
+        .stat-card {
+            text-align: center;
+            padding: 16px;
+            border-radius: 8px;
+            background-color: #f8f9fa;
+        }
+
+        .stat-card .stat-value {
+            font-size: 2rem;
+            font-weight: 700;
+            line-height: 1.2;
+        }
+
+        .stat-card .stat-label {
+            font-size: 0.85rem;
+            color: #6c757d;
+            margin-top: 4px;
+        }
+
+        .stat-pass {
+            border-top: 3px solid #28a745;
+        }
+
+        .stat-fail {
+            border-top: 3px solid #dc3545;
+        }
+
+        .stat-total {
+            border-top: 3px solid var(--primary);
+        }
+
+        .empty-state {
+            text-align: center;
+            padding: 32px;
+            color: #6c757d;
+        }
+
+        @media (max-width: 576px) {
+            body {
+                padding: 12px;
+            }
+
+            .card-body {
+                padding: 16px;
+            }
+
+            .step-indicator {
+                display: none;
+            }
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="page-header">
+            <h2>个税模板填表工具</h2>
+            <p>根据工资数据自动生成各类个税模板 Excel 文件</p>
+        </div>
+
+        <!-- Step Indicator -->
+        <div class="step-indicator">
+            <div class="step active">
+                <div class="step-number">1</div>
+                <div>选择月份</div>
+            </div>
+            <div class="step">
+                <div class="step-number">2</div>
+                <div>选择模板</div>
+            </div>
+            <div class="step">
+                <div class="step-number">3</div>
+                <div>生成文件</div>
+            </div>
+            <div class="step">
+                <div class="step-number">4</div>
+                <div>验证报告</div>
+            </div>
+        </div>
+
+        <!-- Step 1: Month Selection -->
+        <div class="card">
+            <div class="card-header">步骤 1：选择工资所属月份</div>
+            <div class="card-body">
+                <select id="monthSelect" class="form-select form-select-lg">
+                    <option value="">加载中...</option>
+                </select>
+            </div>
+        </div>
+
+        <!-- Step 2: Template Selection -->
+        <div class="card">
+            <div class="card-header">步骤 2：选择要生成的模板</div>
+            <div class="card-body template-checkboxes">
+                <div class="form-check mb-3">
+                    <input class="form-check-input" type="checkbox" id="selectAll">
+                    <label class="form-check-label" for="selectAll"><strong>全选 / 取消全选</strong></label>
+                </div>
+                <hr>
+                <div class="form-check">
+                    <input class="form-check-input template-cb" type="checkbox" id="normalSalary" value="normalSalary" checked>
+                    <label class="form-check-label" for="normalSalary">正常工资薪金所得</label>
+                </div>
+                <div class="form-check">
+                    <input class="form-check-input template-cb" type="checkbox" id="laborService" value="laborService">
+                    <label class="form-check-label" for="laborService">劳务报酬所得</label>
+                </div>
+                <div class="form-check">
+                    <input class="form-check-input template-cb" type="checkbox" id="annualBonus" value="annualBonus">
+                    <label class="form-check-label" for="annualBonus">全年一次性奖金收入</label>
+                </div>
+                <div class="form-check">
+                    <input class="form-check-input template-cb" type="checkbox" id="personnelInfo" value="personnelInfo">
+                    <label class="form-check-label" for="personnelInfo">人员信息采集导入模板</label>
+                </div>
+            </div>
+        </div>
+
+        <!-- Step 3: Generate -->
+        <div class="card">
+            <div class="card-body">
+                <button id="btnGenerate" class="btn btn-primary btn-generate">
+                    生成 Excel 文件
+                </button>
+                <div id="loading" class="loading text-center mt-3">
+                    <div class="spinner-border text-primary" role="status">
+                        <span class="visually-hidden">生成中...</span>
+                    </div>
+                    <p class="mt-2">正在生成文件，请稍候...</p>
+                </div>
+            </div>
+        </div>
+
+        <!-- Error Message -->
+        <div id="errorBox" class="error-alert alert alert-danger" style="display: none;"></div>
+
+        <!-- Step 4: Results -->
+        <div id="results" class="card results">
+            <div class="card-header">生成结果</div>
+            <div class="card-body">
+                <table class="table table-striped" id="resultsTable">
+                    <thead>
+                        <tr>
+                            <th>文件名</th>
+                            <th>类型</th>
+                            <th>记录数</th>
+                            <th>验证通过</th>
+                            <th>验证失败</th>
+                            <th>操作</th>
+                        </tr>
+                    </thead>
+                    <tbody></tbody>
+                </table>
+            </div>
+        </div>
+
+        <!-- Step 5: Validation Report -->
+        <div id="validationReport" class="card" style="display: none;">
+            <div class="card-header">
+                验证报告
+                <button id="btnValidate" class="btn btn-sm btn-validate text-white">
+                    刷新验证
+                </button>
+            </div>
+            <div class="card-body">
+                <div class="row text-center mb-3">
+                    <div class="col">
+                        <div class="stat-card stat-total">
+                            <div class="stat-value" id="totalCount">0</div>
+                            <div class="stat-label">总计记录</div>
+                        </div>
+                    </div>
+                    <div class="col">
+                        <div class="stat-card stat-pass">
+                            <div class="stat-value validation-pass" id="passCount">0</div>
+                            <div class="stat-label">验证通过</div>
+                        </div>
+                    </div>
+                    <div class="col">
+                        <div class="stat-card stat-fail">
+                            <div class="stat-value validation-fail" id="failCount">0</div>
+                            <div class="stat-label">验证失败</div>
+                        </div>
+                    </div>
+                </div>
+                <div class="progress mb-3" style="height: 20px;">
+                    <div id="passRateBar" class="progress-bar bg-success" role="progressbar" style="width: 0%;">0%</div>
+                </div>
+                <div id="validationDetails">
+                    <table class="table table-bordered table-hover validation-details-table" id="validationTable">
+                        <thead>
+                            <tr>
+                                <th>姓名</th>
+                                <th>职工号</th>
+                                <th>本期收入</th>
+                                <th>左值</th>
+                                <th>右值</th>
+                                <th>差值</th>
+                            </tr>
+                        </thead>
+                        <tbody></tbody>
+                    </table>
+                    <div id="emptyValidation" class="empty-state">暂无验证失败记录</div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
+    <script>
+        // DOM elements
+        const monthSelect = document.getElementById('monthSelect');
+        const selectAllCb = document.getElementById('selectAll');
+        const templateCbs = document.querySelectorAll('.template-cb');
+        const btnGenerate = document.getElementById('btnGenerate');
+        const loadingDiv = document.getElementById('loading');
+        const resultsCard = document.getElementById('results');
+        const errorBox = document.getElementById('errorBox');
+        const resultsTbody = document.querySelector('#resultsTable tbody');
+        const validationReport = document.getElementById('validationReport');
+        const btnValidate = document.getElementById('btnValidate');
+        const validationTbody = document.querySelector('#validationTable tbody');
+        const emptyValidation = document.getElementById('emptyValidation');
+
+        // Load months on page load
+        document.addEventListener('DOMContentLoaded', loadMonths);
+
+        // Select all / deselect all
+        selectAllCb.addEventListener('change', function() {
+            templateCbs.forEach(cb => {
+                cb.checked = this.checked;
+            });
+        });
+
+        // Sync select-all state when individual checkboxes change
+        templateCbs.forEach(cb => {
+            cb.addEventListener('change', updateSelectAllState);
+        });
+
+        function updateSelectAllState() {
+            const allChecked = Array.from(templateCbs).every(cb => cb.checked);
+            selectAllCb.checked = allChecked;
+            selectAllCb.indeterminate = !allChecked && Array.from(templateCbs).some(cb => cb.checked);
+        }
+
+        // Generate button
+        btnGenerate.addEventListener('click', generate);
+
+        // Validate button
+        btnValidate.addEventListener('click', validateData);
+
+        function showError(message) {
+            errorBox.textContent = message;
+            errorBox.style.display = 'block';
+        }
+
+        function hideError() {
+            errorBox.style.display = 'none';
+        }
+
+        function getSelectedTemplates() {
+            return Array.from(document.querySelectorAll('.template-cb:checked'))
+                .map(cb => cb.value);
+        }
+
+        async function loadMonths() {
+            try {
+                const resp = await fetch('/api/months');
+                if (!resp.ok) {
+                    throw new Error(`服务器返回错误: ${resp.status}`);
+                }
+                const months = await resp.json();
+                let options = '<option value="">请选择月份</option>';
+                months.forEach(m => {
+                    options += `<option value="${m.value}">${m.label}</option>`;
+                });
+                monthSelect.innerHTML = options;
+            } catch (e) {
+                monthSelect.innerHTML = '<option value="">加载失败，请刷新重试</option>';
+                showError(`加载月份列表失败: ${e.message}`);
+            }
+        }
+
+        async function generate() {
+            hideError();
+
+            const month = monthSelect.value;
+            if (!month) {
+                showError('请选择月份');
+                return;
+            }
+
+            const templates = getSelectedTemplates();
+            if (templates.length === 0) {
+                showError('请选择至少一个模板');
+                return;
+            }
+
+            // Show loading state
+            btnGenerate.disabled = true;
+            loadingDiv.style.display = 'block';
+            resultsCard.style.display = 'none';
+            validationReport.style.display = 'none';
+
+            try {
+                const resp = await fetch('/api/generate', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ month: parseInt(month), templates })
+                });
+                const data = await resp.json();
+
+                if (!resp.ok || data.error) {
+                    showError(data.error || '生成失败，请稍后重试');
+                    return;
+                }
+
+                // Populate results table
+                resultsTbody.innerHTML = '';
+                if (data.files && data.files.length > 0) {
+                    data.files.forEach(f => {
+                        const passClass = f.validation_fail > 0 ? 'validation-fail' : 'validation-pass';
+                        const passText = f.validation_fail > 0
+                            ? `${f.validation_pass} 通过 / ${f.validation_fail} 失败`
+                            : `${f.validation_pass} 通过`;
+                        resultsTbody.innerHTML += `
+                            <tr>
+                                <td>${f.name}</td>
+                                <td>${f.type}</td>
+                                <td>${f.count}</td>
+                                <td class="${passClass}">${passText}</td>
+                                <td class="validation-fail">${f.validation_fail}</td>
+                                <td><a href="${f.download_url}" class="btn btn-sm btn-download">下载</a></td>
+                            </tr>
+                        `;
+                    });
+                    resultsCard.style.display = 'block';
+                } else {
+                    showError('未生成任何文件，请检查数据后重试');
+                }
+
+            } catch (e) {
+                showError(`生成失败: ${e.message}`);
+            } finally {
+                btnGenerate.disabled = false;
+                loadingDiv.style.display = 'none';
+            }
+        }
+
+        async function validateData() {
+            hideError();
+
+            const month = monthSelect.value;
+            if (!month) {
+                showError('请选择月份');
+                return;
+            }
+
+            btnValidate.disabled = true;
+            btnValidate.textContent = '验证中...';
+
+            try {
+                const resp = await fetch(`/api/validate/${month}`);
+                if (!resp.ok) {
+                    const data = await resp.json();
+                    throw new Error(data.error || '验证失败');
+                }
+                const data = await resp.json();
+
+                // Update summary stats
+                document.getElementById('totalCount').textContent = data.total_count;
+                document.getElementById('passCount').textContent = data.pass_count;
+                document.getElementById('failCount').textContent = data.fail_count;
+
+                // Update pass rate bar
+                const passRate = data.total_count > 0
+                    ? (data.pass_count / data.total_count * 100)
+                    : 0;
+                const passRateBar = document.getElementById('passRateBar');
+                passRateBar.style.width = `${passRate}%`;
+                passRateBar.textContent = `${passRate.toFixed(1)}%`;
+
+                // Populate validation details table
+                validationTbody.innerHTML = '';
+                if (data.details && data.details.length > 0) {
+                    data.details.forEach(d => {
+                        validationTbody.innerHTML += `
+                            <tr>
+                                <td>${d.姓名 || ''}</td>
+                                <td>${d.职工号 || ''}</td>
+                                <td>${d.本期收入 !== undefined ? d.本期收入 : ''}</td>
+                                <td>${d.左 !== undefined ? d.左 : ''}</td>
+                                <td>${d.右 !== undefined ? d.右 : ''}</td>
+                                <td>${d.差值 !== undefined ? d.差值 : ''}</td>
+                            </tr>
+                        `;
+                    });
+                    emptyValidation.style.display = 'none';
+                    validationTable.style.display = 'table';
+                } else {
+                    emptyValidation.style.display = 'block';
+                    validationTable.style.display = 'none';
+                }
+
+                validationReport.style.display = 'block';
+
+            } catch (e) {
+                showError(`验证失败: ${e.message}`);
+            } finally {
+                btnValidate.disabled = false;
+                btnValidate.textContent = '刷新验证';
+            }
+        }
+    </script>
+</body>
+</html>

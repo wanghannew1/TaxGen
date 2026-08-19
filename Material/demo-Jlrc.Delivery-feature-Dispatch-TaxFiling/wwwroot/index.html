@@ -1,0 +1,699 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>个税申报数据转换工具</title>
+<base href="./">
+<script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
+<style>
+* { margin: 0; padding: 0; box-sizing: border-box; }
+body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; background: #f0f2f5; color: #333; min-height: 100vh; }
+.container { max-width: 1060px; margin: 0 auto; padding: 32px 20px; }
+.header { text-align: center; margin-bottom: 28px; }
+.header h1 { font-size: 22px; color: #1a1a1a; }
+.header p { color: #888; font-size: 13px; margin-top: 4px; }
+.card { background: #fff; border-radius: 10px; box-shadow: 0 1px 6px rgba(0,0,0,.07); padding: 20px 24px; margin-bottom: 16px; }
+.card h2 { font-size: 15px; margin-bottom: 14px; color: #1a1a1a; display: flex; align-items: center; gap: 8px; }
+.upload-zone { border: 2px dashed #d9d9d9; border-radius: 8px; padding: 32px; text-align: center; cursor: pointer; transition: all .3s; }
+.upload-zone:hover, .upload-zone.dragover { border-color: #1677ff; background: #f0f5ff; }
+.upload-zone .icon { font-size: 40px; color: #1677ff; margin-bottom: 8px; }
+.upload-zone p { color: #666; font-size: 14px; }
+.upload-zone .hint { color: #999; font-size: 12px; margin-top: 6px; }
+.file-item { display: flex; align-items: center; gap: 10px; padding: 8px 12px; background: #fafafa; border-radius: 6px; font-size: 13px; }
+.file-item .name { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.file-item .remove { color: #ff4d4f; cursor: pointer; font-weight: bold; }
+.row { display: flex; gap: 12px; flex-wrap: wrap; }
+.col { flex: 1; min-width: 200px; }
+.btn { padding: 9px 22px; border: none; border-radius: 6px; font-size: 13px; cursor: pointer; transition: all .2s; }
+.btn-primary { background: #1677ff; color: #fff; }
+.btn-primary:hover { background: #4096ff; }
+.btn-primary:disabled { background: #a0c4ff; cursor: not-allowed; }
+.btn-default { background: #f5f5f5; color: #333; border: 1px solid #d9d9d9; }
+.btn-default:hover { border-color: #1677ff; color: #1677ff; }
+.btn-success { background: #52c41a; color: #fff; }
+.btn-success:hover { background: #73d13d; }
+.btn-group { display: flex; gap: 10px; margin-top: 14px; flex-wrap: wrap; }
+.template-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 8px; margin: 10px 0; }
+.template-item { display: flex; align-items: center; gap: 8px; padding: 8px 12px; border: 1px solid #e8e8e8; border-radius: 6px; cursor: pointer; transition: all .2s; font-size: 13px; }
+.template-item:hover { border-color: #1677ff; }
+.template-item.selected { border-color: #1677ff; background: #f0f5ff; }
+.template-item input { accent-color: #1677ff; }
+.progress-section { display: none; margin-top: 14px; }
+.progress-bar-bg { height: 8px; background: #f0f0f0; border-radius: 4px; overflow: hidden; }
+.progress-bar { height: 100%; background: #1677ff; border-radius: 4px; width: 0; transition: width .3s; }
+.progress-text { font-size: 13px; color: #666; text-align: center; margin-top: 8px; }
+.result-section { display: none; margin-top: 14px; }
+.result-success { background: #f6ffed; border: 1px solid #b7eb8f; border-radius: 8px; padding: 16px; text-align: center; }
+.result-error { background: #fff2f0; border: 1px solid #ffccc7; border-radius: 8px; padding: 16px; text-align: center; }
+.result-error p { color: #ff4d4f; font-size: 13px; }
+.stage-grid { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 12px; margin: 10px 0; }
+.stage-box { border: 1px solid #e8e8e8; border-radius: 8px; padding: 12px; font-size: 13px; }
+.stage-box h3 { font-size: 13px; margin-bottom: 8px; color: #1677ff; }
+.stage-box .label { color: #888; font-size: 11px; }
+.stage-box .value { margin-bottom: 4px; }
+table { width: 100%; border-collapse: collapse; font-size: 12px; }
+th, td { padding: 5px 8px; text-align: left; border-bottom: 1px solid #f0f0f0; }
+th { background: #fafafa; font-weight: 600; position: sticky; top: 0; }
+.scroll-table { max-height: 300px; overflow-y: auto; border: 1px solid #e8e8e8; border-radius: 6px; }
+.validation-pass { color: #52c41a; }
+.validation-fail { color: #ff4d4f; }
+.validation-no-diff { color: #1677ff; }
+.hidden { display: none; }
+.download-links { margin-top: 12px; display: flex; gap: 10px; flex-wrap: wrap; justify-content: center; }
+.download-links a { color: #1677ff; text-decoration: none; font-size: 13px; padding: 6px 14px; border: 1px solid #1677ff; border-radius: 4px; }
+.download-links a:hover { background: #1677ff; color: #fff; }
+.badge { display: inline-block; padding: 1px 8px; border-radius: 10px; font-size: 11px; font-weight: 500; }
+.badge-blue { background: #e6f4ff; color: #1677ff; }
+.badge-green { background: #f6ffed; color: #52c41a; }
+.badge-orange { background: #fff7e6; color: #fa8c16; }
+@media (max-width: 700px) { .stage-grid { grid-template-columns: 1fr; } }
+
+/* 操作记录表 */
+.log-table-wrap { max-height: 360px; overflow-y: auto; border: 1px solid #e8e8e8; border-radius: 6px; }
+.log-table { width: 100%; border-collapse: collapse; font-size: 12px; }
+.log-table th { background: #fafafa; font-weight: 600; position: sticky; top: 0; z-index: 1; }
+.log-table td { padding: 6px 10px; border-bottom: 1px solid #f0f0f0; vertical-align: top; }
+.log-table tr:hover { background: #f5f5f5; }
+.log-table tr:nth-child(even) { background: #fafbfc; }
+.log-table tr:nth-child(even):hover { background: #f0f5ff; }
+.log-type-info { color: #1677ff; }
+.log-type-warn { color: #fa8c16; }
+.log-type-error { color: #ff4d4f; }
+.log-stage { display: inline-block; padding: 1px 6px; border-radius: 3px; background: #f0f5ff; color: #1677ff; font-size: 11px; white-space: nowrap; }
+
+/* 回到顶部按钮 */
+#backToTop { position: fixed; right: 24px; bottom: 32px; width: 40px; height: 40px; border-radius: 50%; background: #1677ff; color: #fff; border: none; font-size: 18px; cursor: pointer; box-shadow: 0 2px 8px rgba(0,0,0,.15); display: none; align-items: center; justify-content: center; transition: opacity .3s, background .2s; z-index: 999; opacity: 0.85; }
+#backToTop:hover { background: #4096ff; opacity: 1; }
+
+/* 固定重置按钮 */
+#resetBtn { position: fixed; right: 24px; bottom: 82px; padding: 6px 14px; border-radius: 20px; background: #ff4d4f; color: #fff; border: none; font-size: 12px; cursor: pointer; box-shadow: 0 2px 8px rgba(0,0,0,.15); display: none; align-items: center; gap: 4px; transition: opacity .3s, background .2s; z-index: 999; opacity: 0.9; white-space: nowrap; }
+#resetBtn:hover { background: #ff7875; opacity: 1; }
+</style>
+</head>
+<body>
+<div class="container">
+  <div class="header">
+    <h1>个税申报数据转换工具</h1>
+    <p>上传劳务派遣工资表 → 选择导出类型 → 生成个税申报模板</p>
+  </div>
+
+  <!-- Step 1: Upload -->
+  <div class="card">
+    <h2>📂 第一步：上传数据源文件</h2>
+    <div class="upload-zone" id="uploadZone">
+      <div class="icon">⬆</div>
+      <p>点击或拖拽 Excel 文件到此处</p>
+      <p class="hint">仅支持数据源文件：东北师范大学人事处xxxx年xx月劳务派遣人员工资发放表（.xls）</p>
+    </div>
+    <input type="file" id="fileInput" accept=".xls,.xlsx" style="display:none">
+    <div id="fileInfo" class="file-item hidden" style="margin-top:12px">
+      <span class="name" id="fileName"></span>
+      <span class="remove" id="removeFileBtn">✕</span>
+    </div>
+    <div class="btn-group">
+      <button class="btn btn-default" id="previewBtn" disabled>📋 预览数据</button>
+    </div>
+  </div>
+
+  <!-- Step 2: Preview & Template Selection -->
+  <div class="card" id="previewCard" style="display:none">
+    <h2>🔍 第二步：数据预览 &amp; 选择导出类型</h2>
+
+    <div class="stage-grid" id="stageGrid">
+      <div class="stage-box">
+        <h3>📥 数据来源</h3>
+        <div id="sourceInfo"><span class="label">等待解析...</span></div>
+      </div>
+      <div class="stage-box">
+        <h3>⚙️ 转换过程</h3>
+        <div id="processInfo"><span class="label">选择右侧模板类型查看详细规则</span></div>
+      </div>
+      <div class="stage-box">
+        <h3>📤 目标说明</h3>
+        <div id="targetInfo"><span class="label">选择右侧模板类型查看目标列说明</span></div>
+      </div>
+    </div>
+
+    <div style="margin-top:12px">
+      <p style="font-size:13px;color:#888;margin-bottom:8px">选择要导出的模板类型：</p>
+      <div class="template-grid" id="templateGrid">
+        <label class="template-item" data-type="normalSalary">
+          <input type="checkbox" checked> 正常工资薪金所得
+          <span class="badge badge-blue">推荐</span>
+        </label>
+        <label class="template-item" data-type="laborService">
+          <input type="checkbox"> 劳务报酬所得
+          <span class="badge badge-orange">待定</span>
+        </label>
+        <label class="template-item" data-type="annualBonus">
+          <input type="checkbox"> 全年一次性奖金收入
+          <span class="badge badge-orange">待定</span>
+        </label>
+        <label class="template-item" data-type="personnelInfo">
+          <input type="checkbox"> 人员信息采集导入模板
+          <span class="badge badge-green">自动</span>
+        </label>
+      </div>
+    </div>
+
+    <div class="scroll-table" id="previewTable" style="margin-top:12px">
+      <table>
+        <thead><tr id="previewHeader"></tr></thead>
+        <tbody id="previewBody"></tbody>
+      </table>
+    </div>
+
+    <div id="recordCount" style="font-size:13px;color:#888;margin-top:8px"></div>
+  </div>
+
+  <!-- Validation Results -->
+  <div class="card" id="validationCard" style="display:none">
+    <h2>📐 验证结果（正常工资薪金所得）</h2>
+    <div class="scroll-table">
+      <table>
+        <thead><tr><th>姓名</th><th>身份证</th><th>本期收入</th><th>养老</th><th>失业</th><th>医疗</th><th>公积金</th><th>验证结果</th></tr></thead>
+        <tbody id="validationBody"></tbody>
+      </table>
+    </div>
+  </div>
+
+  <!-- 处理日志 (终端风格) -->
+  <div class="card" id="terminalCard" style="display:none">
+    <h2>🖥️ 处理日志 <span id="termToggle" style="cursor:pointer;font-size:12px;color:#1677ff;margin-left:auto" onclick="toggleTerminal()">收起 ▲</span></h2>
+    <div id="termContainer" style="max-height:400px;overflow-y:auto;font-size:12px;font-family:Consolas,'Courier New',monospace;background:#1e1e1e;color:#d4d4d4;border-radius:6px;padding:12px">
+    </div>
+  </div>
+
+  <!-- 操作记录表 -->
+  <div class="card" id="logCard" style="display:none">
+    <h2>📋 操作记录
+      <span style="font-size:12px;color:#888;font-weight:normal;margin-left:12px" id="logStats"></span>
+      <button class="btn btn-success" style="padding:4px 12px;font-size:12px;margin-left:8px" onclick="exportLogs()">📥 导出操作记录表</button>
+      <button class="btn btn-primary" style="padding:4px 14px;font-size:12px;margin-left:auto" id="startBtn">🚀 确认结果并开始转换</button>
+    </h2>
+    <div class="log-table-wrap">
+      <table class="log-table">
+        <thead><tr><th style="width:40px">#</th><th style="width:140px">时间</th><th style="width:180px">阶段</th><th style="width:60px">类型</th><th>详情</th></tr></thead>
+        <tbody id="logBody"></tbody>
+      </table>
+    </div>
+  </div>
+
+  <!-- Step 3: Progress -->
+  <div class="card" id="progressCard" style="display:none">
+    <h2>⏳ 第三步：转换中</h2>
+    <div class="progress-section" style="display:block">
+      <div class="progress-bar-bg"><div class="progress-bar" id="progressBar"></div></div>
+      <div class="progress-text" id="progressText">准备中...</div>
+    </div>
+  </div>
+
+  <!-- Step 4: Result -->
+  <div class="card" id="resultCard" style="display:none">
+    <h2>✅ 第四步：完成</h2>
+    <div class="result-section" style="display:block">
+      <div class="result-success" id="resultSuccess">
+        <p style="font-size:15px;font-weight:600;margin-bottom:8px">✅ 转换完成</p>
+        <p id="resultMsg" style="margin-bottom:10px"></p>
+        <div class="download-links" id="downloadLinks"></div>
+      </div>
+      <div class="result-error hidden" id="resultError">
+        <p id="errorMsg"></p>
+      </div>
+    </div>
+  </div>
+</div>
+
+<button id="backToTop" title="回到顶部">⬆</button>
+<button id="resetBtn" title="重新开始">🔄 重新开始</button>
+
+<script>
+const uploadZone = document.getElementById('uploadZone');
+const fileInput = document.getElementById('fileInput');
+const fileInfo = document.getElementById('fileInfo');
+const fileName = document.getElementById('fileName');
+const removeFileBtn = document.getElementById('removeFileBtn');
+const previewBtn = document.getElementById('previewBtn');
+const previewCard = document.getElementById('previewCard');
+const sourceInfo = document.getElementById('sourceInfo');
+const processInfo = document.getElementById('processInfo');
+const targetInfo = document.getElementById('targetInfo');
+const templateGrid = document.getElementById('templateGrid');
+const previewHeader = document.getElementById('previewHeader');
+const previewBody = document.getElementById('previewBody');
+const recordCount = document.getElementById('recordCount');
+const startBtn = document.getElementById('startBtn');
+const progressCard = document.getElementById('progressCard');
+const progressBar = document.getElementById('progressBar');
+const progressText = document.getElementById('progressText');
+const resultCard = document.getElementById('resultCard');
+const resultSuccess = document.getElementById('resultSuccess');
+const resultMsg = document.getElementById('resultMsg');
+const downloadLinks = document.getElementById('downloadLinks');
+const resultError = document.getElementById('resultError');
+const errorMsg = document.getElementById('errorMsg');
+const validationCard = document.getElementById('validationCard');
+const validationBody = document.getElementById('validationBody');
+const logBody = document.getElementById('logBody');
+const logStats = document.getElementById('logStats');
+const termContainer = document.getElementById('termContainer');
+const terminalCard = document.getElementById('terminalCard');
+
+let uploadedFile = null;
+let currentTaskId = null;
+let previewData = null;
+let allLogs = [];
+let logSeq = 0;
+let termCollapsed = false;
+
+function scrollToCard(el) {
+  if (!el) return;
+  setTimeout(() => el.scrollIntoView({ behavior: 'smooth', block: 'start' }), 100);
+}
+
+// 回到顶部按钮
+const backToTopBtn = document.getElementById('backToTop');
+const resetBtn = document.getElementById('resetBtn');
+window.addEventListener('scroll', () => {
+  backToTopBtn.style.display = window.scrollY > 200 ? 'flex' : 'none';
+});
+backToTopBtn.addEventListener('click', () => {
+  window.scrollTo({ top: 0, behavior: 'smooth' });
+});
+
+function toggleTerminal() {
+  termCollapsed = !termCollapsed;
+  termContainer.style.display = termCollapsed ? 'none' : 'block';
+  document.getElementById('termToggle').textContent = termCollapsed ? '展开 ▼' : '收起 ▲';
+}
+
+function appendTermLine(stage, type, message) {
+  terminalCard.style.display = 'block';
+  const colorMap = { info: '#d4d4d4', warn: '#e5c07b', error: '#e06c75' };
+  const tagMap = { info: 'INFO', warn: 'WARN', error: 'ERR ' };
+  const color = colorMap[type] || '#d4d4d4';
+  const tag = tagMap[type] || 'INFO';
+  const time = new Date().toLocaleTimeString();
+  const line = document.createElement('div');
+  line.style.marginBottom = '2px';
+  line.style.lineHeight = '1.6';
+  line.innerHTML = `<span style="color:#6a9955">[${time}]</span> <span style="color:#569cd6">[${stage}]</span> <span style="color:${color}">[${tag}]</span> ${message}`;
+  termContainer.appendChild(line);
+  termContainer.scrollTop = termContainer.scrollHeight;
+}
+
+function clearTerminal() {
+  termContainer.innerHTML = '';
+  terminalCard.style.display = 'none';
+}
+
+function appendLog(stage, type, message) {
+  document.getElementById('logCard').style.display = 'block';
+  logSeq++;
+  const now = new Date();
+  const time = now.toLocaleString('zh-CN', { hour12: false });
+  const typeLabel = { info: '信息', warn: '警告', error: '错误' }[type] || '信息';
+  const typeClass = 'log-type-' + type;
+
+  allLogs.push({ 序号: logSeq, 时间: time, 阶段: stage, 类型: typeLabel, 详情: message });
+
+  const tr = document.createElement('tr');
+  tr.innerHTML = `<td style="text-align:center;color:#999">${logSeq}</td>
+    <td style="white-space:nowrap;color:#888">${time}</td>
+    <td><span class="log-stage">${stage}</span></td>
+    <td class="${typeClass}">${typeLabel}</td>
+    <td>${message}</td>`;
+  logBody.appendChild(tr);
+
+  const wrap = logBody.parentElement;
+  wrap.scrollTop = wrap.scrollHeight;
+
+  appendTermLine(stage, type, message);
+
+  const infoCount = allLogs.filter(l => l.类型 === '信息').length;
+  const warnCount = allLogs.filter(l => l.类型 === '警告').length;
+  const errCount = allLogs.filter(l => l.类型 === '错误').length;
+  logStats.textContent = `共 ${allLogs.length} 条` + (warnCount ? ` | ${warnCount} 警告` : '') + (errCount ? ` | ${errCount} 错误` : '');
+}
+
+function clearLogs() {
+  allLogs = [];
+  logSeq = 0;
+  logBody.innerHTML = '';
+  document.getElementById('logCard').style.display = 'none';
+  logStats.textContent = '';
+  clearTerminal();
+}
+
+function showPreviewLogs(logs) {
+  if (!logs || logs.length === 0) return;
+  logs.forEach(l => appendLog(l.stage, l.type, l.message));
+}
+
+function showConvertLogs(logs) {
+  if (!logs || logs.length === 0) return;
+  logs.forEach(l => appendLog(l.stage, l.type, l.message));
+}
+
+function exportLogs() {
+  if (allLogs.length === 0) { alert('暂无操作记录'); return; }
+  const data = allLogs.map(l => ({
+    '序号': l.序号,
+    '时间': l.时间,
+    '阶段': l.阶段,
+    '类型': l.类型,
+    '详情': l.详情,
+  }));
+  const ws = XLSX.utils.json_to_sheet(data);
+  ws['!cols'] = [
+    { wch: 6 },   // 序号
+    { wch: 22 },  // 时间
+    { wch: 16 },  // 阶段
+    { wch: 8 },   // 类型
+    { wch: 80 },  // 详情
+  ];
+  const wb = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb, ws, '操作记录');
+  const ts = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
+  XLSX.writeFile(wb, `操作记录_${ts}.xlsx`);
+}
+
+const TEMPLATE_INFO = {
+  normalSalary: {
+    name: '正常工资薪金所得',
+    process: '本期收入 = 应发工资 - 补缴及退款保险(个人) - 大病险(个人) - 采暖费 - 独生子女费<br>基本养老保险费 = 扣款明细→养老→个人<br>失业保险费 = 扣款明细→失业→个人<br>基本医疗保险费 = 扣款明细→医疗→个人<br>住房公积金 = 扣款明细→公积金→个人<br>企业(职业)年金 = 0<br>备注 = 标题去掉"东北师范大学人事处"+"某年某月"+"劳务派遣人员工资发放表"',
+    target: '工号, *姓名, *证件类型, *证件号码, 本期收入, 本期免税收入, 基本养老保险费, 失业保险费, 基本医疗保险费, 住房公积金, ..., 企业(职业)年金, ..., 备注'
+  },
+  laborService: {
+    name: '劳务报酬所得',
+    process: '所得项目 = "劳务报酬"(固定)<br>收入 = 应发工资',
+    target: '工号, *姓名, *证件类型, *证件号码, *所得项目, *收入, 免税收入, 商业健康保险, 税延养老保险, 其他, 允许扣除的税费, 减免税额, 协定减免, 备注'
+  },
+  annualBonus: {
+    name: '全年一次性奖金收入',
+    process: '全年一次性奖金额 = 奖金',
+    target: '工号, *姓名, *证件类型, *证件号码, *全年一次性奖金额, 免税收入, 其他, 准予扣除的捐赠额, 减免税额, 协定减免, 备注'
+  },
+  personnelInfo: {
+    name: '人员信息采集导入模板',
+    process: '*证件类型 = "居民身份证"<br>*国籍(地区) = "中国"<br>*性别 = 身份证第17位(奇男偶女)<br>*出生日期 = 身份证第7-14位<br>*任职受雇从业类型 = "雇员"',
+    target: '工号, *姓名, *证件类型, *证件号码, *国籍(地区), *性别, *出生日期, 任职受雇从业类型, 手机号码, 学历, 开户银行, 银行账号, ...(共51列)'
+  }
+};
+
+// Upload
+uploadZone.addEventListener('click', () => fileInput.click());
+uploadZone.addEventListener('dragover', e => { e.preventDefault(); uploadZone.classList.add('dragover'); });
+uploadZone.addEventListener('dragleave', () => uploadZone.classList.remove('dragover'));
+uploadZone.addEventListener('drop', e => { e.preventDefault(); uploadZone.classList.remove('dragover'); handleFile(e.dataTransfer.files[0]); });
+fileInput.addEventListener('change', () => { if (fileInput.files[0]) handleFile(fileInput.files[0]); });
+
+function handleFile(file) {
+  if (!file.name.match(/\.xlsx?$/i)) { alert('请上传 Excel 文件'); return; }
+  uploadedFile = file;
+  fileInfo.classList.remove('hidden');
+  fileName.textContent = `${file.name} (${(file.size/1024).toFixed(1)} KB)`;
+  previewBtn.disabled = false;
+  resetBtn.style.display = 'flex';
+}
+
+removeFileBtn.addEventListener('click', () => {
+  uploadedFile = null;
+  fileInfo.classList.add('hidden');
+  previewBtn.disabled = true;
+  previewCard.style.display = 'none';
+});
+
+// Preview
+previewBtn.addEventListener('click', async () => {
+  if (!uploadedFile) return;
+  const formData = new FormData();
+  formData.append('file', uploadedFile);
+
+  try {
+    previewBtn.disabled = true;
+    previewBtn.textContent = '⏳ 解析中...';
+    clearLogs();
+    appendLog('上传文件', 'info', `文件: ${uploadedFile.name}, 大小: ${(uploadedFile.size/1024).toFixed(1)} KB`);
+
+    const res = await fetch('api/convert/preview', { method: 'POST', body: formData });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.message || '预览失败');
+
+    previewData = data;
+    showPreview(data);
+    previewCard.style.display = 'block';
+    scrollToCard(previewCard);
+  } catch (e) {
+    alert('预览失败: ' + e.message);
+  } finally {
+    previewBtn.disabled = false;
+    previewBtn.textContent = '📋 预览数据';
+  }
+});
+
+function showPreview(data) {
+  sourceInfo.innerHTML = `<div class="value"><strong>${data.title}</strong></div>
+    <div><span class="label">总记录数：</span>${data.total} 人</div>
+    <div><span class="label">数据列：</span>序号, 姓名, 身份证, 部门, 职工号, 基本工资, 应发工资, 采暖费, 奖金, 补发, 扣款明细(养老/失业/医疗/公积金个人), 个人所得税, 实发工资</div>`;
+
+  showPreviewLogs(data.logs);
+
+  const cols = ['职工号', '姓名', '应发工资', '实发工资', '采暖费', '奖金', '养老个人', '失业个人', '医疗个人', '公积金个人', '个人所得税', '大病险个人', '独生子女费', '本期收入(计算)', '免税(计算)'];
+  previewHeader.innerHTML = cols.map(c => `<th>${c}</th>`).join('');
+
+  previewBody.innerHTML = data.records.map(r => {
+    const valid = r.validation || '';
+    const vClass = valid.includes('通过') ? 'validation-pass' : 'validation-fail';
+    return `<tr>
+      <td>${r.职工号}</td><td>${r.姓名}</td>
+      <td>${r.应发工资 ?? ''}</td><td>${r.实发工资 ?? ''}</td>
+      <td>${r.采暖费 ?? ''}</td><td>${r.奖金 ?? ''}</td>
+      <td>${r.养老个人 ?? ''}</td><td>${r.失业个人 ?? ''}</td>
+      <td>${r.医疗个人 ?? ''}</td><td>${r.公积金个人 ?? ''}</td>
+      <td>${r.个人所得税 ?? ''}</td><td>${r.大病险个人 ?? ''}</td>
+      <td>${r.独生子女费 ?? ''}</td><td><strong>${r.本期收入 ?? ''}</strong></td>
+      <td><strong>${r.免税 ?? ''}</strong></td>
+    </tr>`;
+  }).join('');
+
+  recordCount.textContent = `共 ${data.total} 条记录`;
+
+  if (data.records && data.records.length > 0) {
+    validationCard.style.display = 'block';
+    validationBody.innerHTML = data.records.map(r => {
+      const v = r.validation || '';
+      const parts = v.split('|');
+      const result = parts.length > 2 ? parts[2].trim() : '';
+      const noDiff = result.includes('无差值');
+      const cssClass = noDiff ? 'validation-no-diff' : result.includes('通过') ? 'validation-pass' : 'validation-fail';
+      return `<tr>
+        <td>${r.姓名}</td><td>${r.身份证}</td>
+        <td>${r.本期收入 ?? ''}</td>
+        <td>${r.养老个人 ?? ''}</td><td>${r.失业个人 ?? ''}</td>
+        <td>${r.医疗个人 ?? ''}</td><td>${r.公积金个人 ?? ''}</td>
+        <td class="${cssClass}">${result}</td>
+      </tr>`;
+    }).join('');
+  }
+
+  updateTemplateInfo('normalSalary');
+}
+
+// Template selection
+templateGrid.querySelectorAll('.template-item').forEach(el => {
+  const cb = el.querySelector('input');
+  el.addEventListener('click', (e) => {
+    if (e.target.tagName !== 'INPUT') cb.checked = !cb.checked;
+    el.classList.toggle('selected', cb.checked);
+    updateTemplateInfo(el.dataset.type);
+  });
+  el.classList.add('selected');
+});
+
+function updateTemplateInfo(type) {
+  const info = TEMPLATE_INFO[type];
+  if (!info) return;
+  processInfo.innerHTML = info.process;
+  targetInfo.innerHTML = info.target;
+}
+
+// Start convert
+startBtn.addEventListener('click', async () => {
+  if (!uploadedFile) return;
+
+  const selected = [];
+  templateGrid.querySelectorAll('.template-item').forEach(el => {
+    if (el.querySelector('input').checked) selected.push(el.dataset.type);
+  });
+  if (selected.length === 0) { alert('请至少选择一个导出类型'); return; }
+
+  const formData = new FormData();
+  formData.append('file', uploadedFile);
+  selected.forEach(t => formData.append('templates', t));
+
+  progressCard.style.display = 'block';
+  resultCard.style.display = 'none';
+  scrollToCard(progressCard);
+  startBtn.disabled = true;
+  previewBtn.disabled = true;
+  appendLog('开始转换', 'info', `选择的模板类型: ${selected.map(t => TEMPLATE_INFO[t]?.name || t).join(', ')}`);
+
+  try {
+    const res = await fetch('api/convert/start', { method: 'POST', body: formData });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.message || '启动失败');
+    currentTaskId = data.taskId;
+    await pollProgress(currentTaskId);
+  } catch (e) {
+    showError(e.message);
+  }
+});
+
+async function pollProgress(taskId) {
+  const evtSource = new EventSource(`api/convert/progress/${taskId}`);
+  evtSource.onmessage = (event) => {
+    try {
+      const data = JSON.parse(event.data);
+      progressBar.style.width = data.percent + '%';
+      progressText.textContent = data.message || '处理中...';
+      if (data.logs && data.logs.length > 0) {
+        showConvertLogs(data.logs);
+      }
+      if (data.status === 'completed') {
+        evtSource.close();
+        showResult(data);
+      } else if (data.status === 'failed') {
+        evtSource.close();
+        showError(data.error || data.message);
+      }
+    } catch (e) { }
+  };
+  evtSource.onerror = () => {
+    evtSource.close();
+    pollStatus(taskId);
+  };
+}
+
+async function pollStatus(taskId) {
+  for (let i = 0; i < 120; i++) {
+    await new Promise(r => setTimeout(r, 1000));
+    try {
+      const res = await fetch(`api/convert/status/${taskId}`);
+      const data = await res.json();
+      if (!res.ok) continue;
+      progressBar.style.width = data.percent + '%';
+      progressText.textContent = data.message || '处理中...';
+      if (data.logs && data.logs.length > 0) {
+        showConvertLogs(data.logs);
+      }
+      if (data.status === 'completed') { showResult(data); return; }
+      if (data.status === 'failed') { showError(data.error || data.message); return; }
+    } catch { }
+  }
+}
+
+function showResult(data) {
+  progressCard.style.display = 'none';
+  resultCard.style.display = 'block';
+  resultSuccess.style.display = 'block';
+  resultError.style.display = 'none';
+  scrollToCard(resultCard);
+  resultMsg.textContent = '';
+  downloadLinks.innerHTML = '';
+
+  if (data.templateResults && data.templateResults.length > 0) {
+    data.templateResults.forEach(tr => {
+      appendLog('汇总', 'info', `${tr.typeName}: ${tr.totalCount} 条记录, ${tr.passCount} 通过, ${tr.failCount} 不通过`);
+    });
+  }
+
+  if (data.resultPaths) {
+    data.resultPaths.forEach((p, i) => {
+      var name = decodeURIComponent(p.replace(/\\/g, '/').split('/').pop());
+      var a = document.createElement('a');
+      a.href = 'api/convert/download/' + currentTaskId + '?index=' + i;
+      a.textContent = name;
+      a.target = '_blank';
+      downloadLinks.appendChild(a);
+    });
+    if (data.resultPaths.length > 1) {
+      const a = document.createElement('a');
+      a.href = `api/convert/download-all/${currentTaskId}`;
+      a.textContent = '📦 打包下载全部';
+      a.target = '_blank';
+      downloadLinks.appendChild(a);
+    }
+  }
+  startBtn.disabled = false;
+  previewBtn.disabled = false;
+}
+
+function showError(msg) {
+  progressCard.style.display = 'none';
+  resultCard.style.display = 'block';
+  resultSuccess.style.display = 'none';
+  resultError.style.display = 'block';
+  scrollToCard(resultCard);
+  errorMsg.textContent = '转换失败: ' + msg;
+  startBtn.disabled = false;
+  previewBtn.disabled = false;
+}
+
+// 重置页面到初始状态
+resetBtn.addEventListener('click', () => {
+  if (!confirm('确定要重新开始吗？当前转换结果将不会保存。')) return;
+
+  uploadedFile = null;
+  currentTaskId = null;
+  previewData = null;
+
+  fileInput.value = '';
+  fileInfo.classList.add('hidden');
+  fileName.textContent = '';
+  previewBtn.disabled = true;
+  previewBtn.textContent = '📋 预览数据';
+
+  previewCard.style.display = 'none';
+  validationCard.style.display = 'none';
+  terminalCard.style.display = 'none';
+  progressCard.style.display = 'none';
+  resultCard.style.display = 'none';
+
+  progressBar.style.width = '0';
+  progressText.textContent = '准备中...';
+  resultMsg.textContent = '';
+  errorMsg.textContent = '';
+  downloadLinks.innerHTML = '';
+  resultSuccess.style.display = 'block';
+  resultError.style.display = 'none';
+  resultError.classList.add('hidden');
+
+  sourceInfo.innerHTML = '<span class="label">等待解析...</span>';
+  processInfo.innerHTML = '<span class="label">选择右侧模板类型查看详细规则</span>';
+  targetInfo.innerHTML = '<span class="label">选择右侧模板类型查看目标列说明</span>';
+  previewHeader.innerHTML = '';
+  previewBody.innerHTML = '';
+  validationBody.innerHTML = '';
+  recordCount.textContent = '';
+
+  clearLogs();
+
+  // 恢复模板选择为默认状态
+  templateGrid.querySelectorAll('.template-item').forEach(el => {
+    const cb = el.querySelector('input');
+    const isDefault = el.dataset.type === 'normalSalary';
+    cb.checked = isDefault;
+    el.classList.toggle('selected', isDefault);
+  });
+
+  startBtn.disabled = false;
+  previewBtn.disabled = false;
+  resetBtn.style.display = 'none';
+
+  window.scrollTo({ top: 0, behavior: 'smooth' });
+});
+</script>
+</body>
+</html>

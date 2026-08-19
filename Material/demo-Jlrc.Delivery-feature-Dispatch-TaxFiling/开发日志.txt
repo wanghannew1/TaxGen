@@ -1,0 +1,129 @@
+v1-Jlrc.Delivery
+v1.4-feature/Dispatch-TaxFiling（OpenCode）
+
+
+######v1.4.0
+Jlrc.Delivery……feature/Dispatch-TaxFiling……feat: 个税申报数据转换工具
+######
+参考“stuff”目录中的“东北师范大学人事处202601（系统）.xls”作为数据源文件模板；
+系统提供上传页面，将数据源文件上传后转换成目标文件；
+目标文件参考“stuff”目录中的“劳务报酬所得（不适用累计预扣法）.xls”、“全年一次性奖金收入.xls”、“人员信息采集导入模板.xls”、“正常工资薪金所得.xls”；
+可以选择导出某个类型的表，也可以选择项导出的一个、多个或者全部表；
+每个阶段都展示转换数据的来源、过程和目标详细说明；
+正常工资薪金所得转换规则如下：
+（目标文件）本期收入=（数据源文件）应发工资-补缴及退款保险金额（个人）（如果有的话）-大病险（个人）（如果有的话）-采暖费（如果有的话）-独生子女费（如果有的话），
+（目标文件）基本养老保险费=（数据源文件）“扣      款      明     细”中“养老”中的“个人”，
+（目标文件）失业保险费=（数据源文件）“扣      款      明     细”中“失业”中的“个人”，
+（目标文件）基本医疗保险费=（数据源文件）“扣      款      明     细”中“医疗”中的“个人”，
+（目标文件）住房公积金=（数据源文件）“扣      款      明     细”中“公积金”中的“个人”，
+（目标文件）备注=（数据源文件）首行去掉文字“某年某月劳务派遣人员工资发放表”；
+正常工资薪金所得验证规则如下：
+（目标文件）本期收入-基本养老保险费-失业保险费-基本医疗保险费-住房公积金-企业(职业)年金=（数据源文件）实发工资+个人所得税-（大病险（个人）（如果有的话）+采暖费（如果有的话）+独生子女费（如果有的话））；
+
+预览失败: Unexpected token '<', "<!DOCTYPE "... is not valid JSON
+https://jlrc.api.jihongfu.com.cn/api/convert/preview
+Request Method
+POST
+Status Code
+404 Not Found
+Remote Address
+47.92.166.44:443
+Referrer Policy
+strict-origin-when-cross-origin 
+本地 publish 完全正确。服务器上 仍然是旧文件（旧的 self-contained .NET 9 版本无法启动）。
+请在服务器上执行以下操作：
+1. 停止 IIS 站点
+2. 清空 publish 目录中的所有文件
+3. 把本地 D:\MyDevelop\jlrc\Jlrc.Delivery\Dispatch-TaxFiling\publish\ 整个目录上传到服务器（34个文件，22MB）
+4. 确保 stuff 目录也存在于 publish 目录中（含模板 xls 文件）
+5. 启动 IIS 站点
+如果服务器上还是 404，请查看 publish/logs/stdout_*.log 文件中的错误信息发给我。
+
+找到问题所在了，服务器上项目在Dispatch-TaxFiling虚拟路径中，所有报错的引用都改成相对路径
+
+原因找到了，publish上传到服务器上与域名指向服务器路径不一样的目录中，然后建立的虚拟路径指向该目录，就一直报找不到api的404错误，分析一下错误的原因
+
+那直接修改一下呗，用相对路径
+
+服务器上将项目包含在“Jlrc.Delivery”站点，创建站点应用程序，路径可以设置为“C:\IIS\Jlrc.Delivery\Dispatch-TaxFiling”。
+
+
+######v1.4.1
+Jlrc.Delivery……feature/Dispatch-TaxFiling……feat: 个税申报数据转换工具（v1.4.1发布版code不更新）
+######
+
+
+######v1.4.2
+Jlrc.Delivery……feature/Dispatch-TaxFiling……feat: 解决访问报HTTP 500.19错误问题。
+######
+服务器上能打开页面“https://jlrc.api.jihongfu.com.cn/Dispatch-TaxFiling/”，同样的程序放到本地就报错“HTTP 错误 500.19 - Internal Server Error 无法访问请求的页面，因为该页的相关配置数据无效。”，怀疑是之前这个要求导致的“服务器上将项目包含在“Jlrc.Delivery”站点，创建站点应用程序，路径可以设置为“C:\IIS\Jlrc.Delivery\Dispatch-TaxFiling”。”；因为服务器上路径在C盘，本地在D盘，现在要改成相对路径，或者Server.MapPath等方法，不要因为服务器所在文件位置不同导致访问不到。
+
+发布到D:\IIS\Jlrc.Delivery\Dispatch-TaxFiling
+
+安装“dotnet-hosting-8.0.29-win.exe”就好了，到底是什么原因呢，好好解释一下。
++ Thought: 1.2s
+根因：IIS 本身不认 ASP.NET Core 应用
+500.19 错误发生在 IIS 读 web.config 的阶段，你的 .NET 程序连启动的机会都没有。关键链路如下：
+1. web.config 里那两行是什么
+publish/web.config 里有两条核心配置：
+<add name="aspNetCore" path="*" verb="*" modules="AspNetCoreModuleV2" ... />
+<aspNetCore processPath="dotnet" arguments=".\TaxFilingService.dll" hostingModel="inprocess" />
+- modules="AspNetCoreModuleV2" 告诉 IIS：把请求交给一个叫 AspNetCoreModuleV2 的 IIS 原生模块处理
+- processPath="dotnet" 告诉 IIS：用 dotnet 命令启动你的 TaxFilingService.dll
+2. 问题出在哪
+IIS 是 Windows 自带的 Web 服务器，默认根本不认识 AspNetCoreModuleV2。这个模块不是 IIS 的一部分，它由 .NET Hosting Bundle 以 IIS 原生扩展（ANCM v2，aspnetcorev2.dll）的形式安装进去的。
+- 你本地只装了 .NET 8 SDK（它只负责编译代码）
+- SDK 不带 IIS 模块。IIS 遇到 modules="AspNetCoreModuleV2" 时去注册表找这个模块 → 找不到 → 无法解析 web.config → 报 HTTP 500.19（配置数据无效）
+3. 为什么服务器能跑、本地不能
+服务器上装了完整的 .NET 8 Hosting Bundle（含 SDK Runtime + IIS 模块），所以模块能找到、请求能转给 dotnet 进程。你本地只装了 SDK，缺了那部分 IIS 原生扩展。
+4. dotnet-hosting-8.0.29-win.exe 装了什么
+它一次性装齐三样东西：
+组件
+.NET 8 Runtime
+ASP.NET Core 模块 V2
+IIS 集成支持
+装完它自动在 IIS 里注册了 AspNetCoreModuleV2，web.config 里的 modules="AspNetCoreModuleV2" 就能找到了，500.19 消失。
+一句话总结
+500.19 = IIS 的配置问题，不是你的代码/路径问题。你的代码从头到尾用的都是相对路径（env.ContentRootPath），C盘/D盘无所谓。报错只是因为 IIS 缺了"看懂 web.config 里 AspNetCoreModuleV2 指令"的那个原生模块，装 Hosting Bundle 补上就通了。
+
+
+######v1.4.3
+Jlrc.Delivery……feature/Dispatch-TaxFiling……feat: 解决访问报HTTP 500.19错误问题。（v1.4.2发布版code不更新）
+######
+
+
+######v1.4.4
+Jlrc.Delivery……feature/Dispatch-TaxFiling……feat: 新增“工资发放2.xls”模板，元素位置调整及新增滚动及复位按钮
+######
+第三步 转换中，应该放到 第二步 最后的 操作记录下面 ，然后才是第四步完成，而且到哪一步页面滚动到哪一步位置
+
+`Problems`
+
+`Problems`
+
+增加随着页面滚动fix的复位按钮
+
+加一个reset按钮恢复到原始页面状态，提示可以重新上传
+
+🔄 重新开始（可重新上传文件）这个按钮不要只放在第四步，要从用户开始操作开始就放在fix位置
+
+又出现另一种格式的输入文档，参考“工资发放2.xls”，需要进行同样的处理
+
+D:\MyDevelop\jlrc\Jlrc.Delivery\Dispatch-TaxFiling\tools\Program.cs(8,20): error CS0103: 当前上下文中不存在名称“File”
+D:\MyDevelop\jlrc\Jlrc.Delivery\Dispatch-TaxFiling\tools\Program.cs(11,5): error CS0103: 当前上下文中不存在名称“Console”
+D:\MyDevelop\jlrc\Jlrc.Delivery\Dispatch-TaxFiling\tools\Program.cs(11,30): error CS0103: 当前上下文中不存在名称“Path”
+D:\MyDevelop\jlrc\Jlrc.Delivery\Dispatch-TaxFiling\tools\Program.cs(12,26): error CS0103: 当前上下文中不存在名称“Math”
+D:\MyDevelop\jlrc\Jlrc.Delivery\Dispatch-TaxFiling\tools\Program.cs(14,28): error CS0103: 当前上下文中不存在名称“Console”
+D:\MyDevelop\jlrc\Jlrc.Delivery\Dispatch-TaxFiling\tools\Program.cs(15,25): error CS0246: 未能找到类型或命名空间名“List<>”(是否缺少 using 指令或程序集引用?)
+D:\MyDevelop\jlrc\Jlrc.Delivery\Dispatch-TaxFiling\tools\Program.cs(16,29): error CS0103: 当前上下文中不存在名称“Math”
+D:\MyDevelop\jlrc\Jlrc.Delivery\Dispatch-TaxFiling\tools\Program.cs(22,13): error CS0103: 当前上下文中不存在名称“Console”
+D:\MyDevelop\jlrc\Jlrc.Delivery\Dispatch-TaxFiling\tools\Program.cs(24,13): error CS0103: 当前上下文中不存在名称“Console”
+D:\MyDevelop\jlrc\Jlrc.Delivery\Dispatch-TaxFiling\tools\Program.cs(29,1): error CS0103: 当前上下文中不存在名称“Console”
+
+生成失败。请修复生成错误并重新运行。
+
+D:\MyDevelop\jlrc\Jlrc.Delivery\Dispatch-TaxFiling\tools\Program.cs(16,34): error CS0121: 以下方法或属性之间的调用具有二义性:“System.Math.Min(short, short)”和“System.Math.Min(int, int)”
+
+生成失败。请修复生成错误并重新运行。
+
+`Problems`

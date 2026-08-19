@@ -1,0 +1,22 @@
+.venv/
+__pycache__/
+*.pyc
+.env
+output/
+.pytest_cache/
+.omo/
+.sisyphus/
+*.xlsx
+
+# Material build artifacts and reference binaries
+Material/**/bin/
+Material/**/obj/
+Material/**/publish/
+Material/**/*.dll
+Material/**/*.exe
+Material/**/*.pdb
+Material/**/*.cache
+Material/**/*.log
+Material/**/*.xls
+Material/**/*.xlsx
+Material/**/*.Zone.Identifier
