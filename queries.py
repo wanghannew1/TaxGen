@@ -6,22 +6,26 @@
 数据表:
 - TC93  工资主表 (~110 万行), 主键 ATC930, ATC931 = 工资所属年月 (YYYYMM)
 - TC94  工资扣款明细表 (~220 万行), 通过 ATC930 关联 TC93
-- AC01  人员信息表, 通过 AAC001 (人员ID) 关联 TC93
+- AC01  人员信息表, 通过 AAC001 (个人编号) 关联 TC93
 
-字段映射 (经 CSV export(4).csv 交叉验证 + Oracle all_col_comments):
-- ATC93BE = 补缴及退款保险差额（个人）
-- ATC93BA = 补缴及退款保险差额（单位）
+字段映射 (all_col_comments 验证):
+- ATC93AA = 本次工资总额
+- ATC936 = 本次免税 (= 采暖费ATC93W21 + 独生子女费ATC93W4)
+- ATC933 = 本次应发工资
+- ATC93C = 本次实发金额(合计)
+- ATC93D = 本次个人所得税
 - ATC93BD = 大病险（个人承担）
 - ATC93BC = 大病险（单位承担）
-- ATC936 = 补发3（第三类补发扣款，如采暖费、独生子女费等专项扣款）
-- ATC93BH = 意外险（个人承担）
+- ATC93BE = 补缴及退款保险差额（个人）
 - ATC93BB = 意外险（单位承担）
+- ATC93BH = 意外险（个人承担）
 - ATC93BF = 转款合计
 - ATC93BG = 补缴及退款个人所得税
-- BAA001 = 养老保险个人部分 (8%)
-- BAA002 = 医疗保险个人部分 (2%)
-- BAA003 = 失业保险个人部分 (0.3%)
-- CAA002 = 住房公积金个人部分 (7%)
+- BAA001 = 当月养老个人缴 (8%)
+- BAA002 = 当月医疗个人缴 (2%)
+- BAA003 = 当月失业个人缴 (0.3%)
+- CAA002 = 个人公积金月缴存额 (7%)
+- ATC937 = 工资发放次数 (同一结算单元同一月份的发放序号)
 
 设计约束:
 - 全部 SQL 使用参数化查询 (bind 变量 :name), 绝不拼接用户输入;
@@ -119,20 +123,18 @@ def get_salary_records(conn, month: int) -> List[SalaryRecord]:
           t93.ATC93W21 AS 采暖费,
           t93.ATC93W1 AS 奖金,
           t93.ATB930 AS 结算单元,
-          t93.ATC937 AS 当月批次,
+          t93.ATC937 AS 工资发放次数,
           t93.ATC93W2 AS 加班费,
           t93.ATC93W3 AS 餐补,
           t93.ATC93W9 AS 岗位工资,
           t93.ATC93W10 AS 绩效奖金,
-          -- 五险一金个人部分 (来自 TC93 本表, Task 3 验证)
           t93.BAA001 AS 养老个人,
           t93.BAA002 AS 医疗个人,
           t93.BAA003 AS 失业个人,
           t93.CAA002 AS 公积金个人,
-          -- 大病险/补缴 (Oracle all_col_comments 确认, ATC930 用于 TC94 关联)
-          t93.ATC93BE AS 补缴及退款保险金额个人,
+          t93.ATC93BE AS 补缴及退款保险差额个人,
           t93.ATC93BD AS 大病险个人,
-          t93.ATC936 AS 补发3,
+          t93.ATC936 AS 本次免税,
           t93.ATC930 AS tc930_id
         FROM TC93 t93
         LEFT JOIN AC01 ac01 ON t93.AAC001 = ac01.AAC001
@@ -144,26 +146,26 @@ def get_salary_records(conn, month: int) -> List[SalaryRecord]:
         cursor.execute(sql, {"month": month})
         for row in cursor.fetchall():
             records.append(SalaryRecord(
-                职工号=str(row[0] or ""),          # AAC001
-                姓名=str(row[1] or ""),            # AAC003
-                身份证=str(row[2] or ""),          # AC01.AAC002
-                工资所属年月=int(row[3] or 0),      # ATC931
-                结算单元=int(row[12] or 0),         # ATB930
-                当月批次=str(row[13] or ""),         # ATC937
-                应发工资=float(row[5] or 0),        # ATC933
-                实发工资=float(row[6] or 0),        # ATC93C
-                个人所得税=float(row[7] or 0),      # ATC93D
-                工资总额=float(row[8] or 0),        # ATC93AA
-                独生子女费=float(row[9] or 0),      # ATC93W4
-                采暖费=float(row[10] or 0),         # ATC93W21
-                奖金=float(row[11] or 0),           # ATC93W1
-                养老个人=float(row[18] or 0),       # BAA001
-                医疗个人=float(row[19] or 0),       # BAA002
-                失业个人=float(row[20] or 0),       # BAA003
-                公积金个人=float(row[21] or 0),     # CAA002
-                补缴及退款保险金额个人=float(row[22] or 0),  # ATC93BE
-                大病险个人=float(row[23] or 0),     # ATC93BD
-                补发3=float(row[24] or 0),          # ATC936
+                职工号=str(row[0] or ""),
+                姓名=str(row[1] or ""),
+                身份证=str(row[2] or ""),
+                工资所属年月=int(row[3] or 0),
+                结算单元=int(row[12] or 0),
+                当月批次=str(row[13] or ""),
+                应发工资=float(row[5] or 0),
+                实发工资=float(row[6] or 0),
+                个人所得税=float(row[7] or 0),
+                工资总额=float(row[8] or 0),
+                独生子女费=float(row[9] or 0),
+                采暖费=float(row[10] or 0),
+                奖金=float(row[11] or 0),
+                养老个人=float(row[18] or 0),
+                医疗个人=float(row[19] or 0),
+                失业个人=float(row[20] or 0),
+                公积金个人=float(row[21] or 0),
+                补缴及退款保险金额个人=float(row[22] or 0),
+                大病险个人=float(row[23] or 0),
+                补发3=float(row[24] or 0),
             ))
     return records
 

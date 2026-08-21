@@ -5,32 +5,32 @@ from typing import Optional
 class SalaryRecord:
     """工资记录 - 等效于 demo 的 SourceRecord"""
     # 基础信息
-    职工号: str = ""  # AAC001
-    姓名: str = ""  # AAC003
-    身份证: str = ""  # AC002 from AC01
-    工资所属年月: int = 0  # ATC931
-    结算单元: int = 0  # ATB930
-    当月批次: str = ""  # ATC937
+    职工号: str = ""  # AAC001 - 个人编号
+    姓名: str = ""  # AAC003 - 姓名
+    身份证: str = ""  # AAC002 - 公民身份号码 (from AC01)
+    工资所属年月: int = 0  # ATC931 - 工资所属年月
+    结算单元: int = 0  # ATB930 - 结算单元流水号
+    当月批次: str = ""  # ATC937 - 工资发放次数
 
     # 工资汇总
-    应发工资: float = 0  # ATC933
-    实发工资: float = 0  # ATC93C
-    个人所得税: float = 0  # ATC93D
-    工资总额: float = 0  # ATC93AA
-    独生子女费: float = 0  # ATC93W4
-    采暖费: float = 0  # ATC93W21
-    奖金: float = 0  # ATC93W1
+    应发工资: float = 0  # ATC933 - 本次应发工资
+    实发工资: float = 0  # ATC93C - 本次实发金额(合计)
+    个人所得税: float = 0  # ATC93D - 本次个人所得税
+    工资总额: float = 0  # ATC93AA - 本次工资总额
+    独生子女费: float = 0  # ATC93W4 - 独生子女费
+    采暖费: float = 0  # ATC93W21 - 采暖费
+    奖金: float = 0  # ATC93W1 - 奖金
 
-    # 五险一金个人部分 (from TC93 columns, verified in Task 3)
-    养老个人: float = 0  # BAA001 (8%)
-    医疗个人: float = 0  # BAA002 (2%)
-    失业个人: float = 0  # BAA003 (0.3%)
-    公积金个人: float = 0  # CAA002 (7%)
+    # 五险一金个人部分
+    养老个人: float = 0  # BAA001 - 当月养老个人缴 (8%)
+    医疗个人: float = 0  # BAA002 - 当月医疗个人缴 (2%)
+    失业个人: float = 0  # BAA003 - 当月失业个人缴 (0.3%)
+    公积金个人: float = 0  # CAA002 - 个人公积金月缴存额 (7%)
 
-    # 补缴/大病险 (confirmed via Oracle all_col_comments on TC93)
-    补缴及退款保险金额个人: float = 0  # ATC93BE
-    大病险个人: float = 0  # ATC93BD
-    补发3: float = 0  # ATC936 - 第三类补发扣款
+    # 补缴/大病险/免税
+    补缴及退款保险金额个人: float = 0  # ATC93BE - 补缴及退款保险差额（个人）
+    大病险个人: float = 0  # ATC93BD - 大病险（个人承担）
+    补发3: float = 0  # ATC936 - 本次免税 (= 采暖费 + 独生子女费)
 
     # 验证字段
     本期收入: float = 0  # 计算得出
