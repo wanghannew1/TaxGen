@@ -4,21 +4,7 @@ from typing import List
 import os
 from openpyxl import Workbook
 from models import SalaryRecord, GenerateResult
-
-
-def calc_本期收入(rec: SalaryRecord) -> float:
-    """本期收入 = 应发工资 - 补缴及退款保险(个人) - 大病险(个人) - 采暖费 - 独生子女费"""
-    result = rec.应发工资
-    result -= rec.补缴及退款保险金额个人
-    result -= rec.大病险个人
-    result -= rec.采暖费
-    result -= rec.独生子女费
-    return result
-
-
-def calc_免税(rec: SalaryRecord) -> float:
-    """免税 = 大病险(个人) + 采暖费 + 独生子女费"""
-    return rec.大病险个人 + rec.采暖费 + rec.独生子女费
+from templates_gen.formulas import calc_本期收入, calc_免税
 
 
 def extract_remark(title: str) -> str:

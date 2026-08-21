@@ -13,6 +13,7 @@
 - ATC93BA = 补缴及退款保险差额（单位）
 - ATC93BD = 大病险（个人承担）
 - ATC93BC = 大病险（单位承担）
+- ATC936 = 补发3（第三类补发扣款，如采暖费、独生子女费等专项扣款）
 - ATC93BH = 意外险（个人承担）
 - ATC93BB = 意外险（单位承担）
 - ATC93BF = 转款合计
@@ -117,6 +118,8 @@ def get_salary_records(conn, month: int) -> List[SalaryRecord]:
           t93.ATC93W4 AS 独生子女费,
           t93.ATC93W21 AS 采暖费,
           t93.ATC93W1 AS 奖金,
+          t93.ATB930 AS 结算单元,
+          t93.ATC937 AS 当月批次,
           t93.ATC93W2 AS 加班费,
           t93.ATC93W3 AS 餐补,
           t93.ATC93W9 AS 岗位工资,
@@ -129,6 +132,7 @@ def get_salary_records(conn, month: int) -> List[SalaryRecord]:
           -- 大病险/补缴 (Oracle all_col_comments 确认, ATC930 用于 TC94 关联)
           t93.ATC93BE AS 补缴及退款保险金额个人,
           t93.ATC93BD AS 大病险个人,
+          t93.ATC936 AS 补发3,
           t93.ATC930 AS tc930_id
         FROM TC93 t93
         LEFT JOIN AC01 ac01 ON t93.AAC001 = ac01.AAC001
@@ -144,6 +148,8 @@ def get_salary_records(conn, month: int) -> List[SalaryRecord]:
                 姓名=str(row[1] or ""),            # AAC003
                 身份证=str(row[2] or ""),          # AC01.AAC002
                 工资所属年月=int(row[3] or 0),      # ATC931
+                结算单元=int(row[12] or 0),         # ATB930
+                当月批次=str(row[13] or ""),         # ATC937
                 应发工资=float(row[5] or 0),        # ATC933
                 实发工资=float(row[6] or 0),        # ATC93C
                 个人所得税=float(row[7] or 0),      # ATC93D
@@ -151,12 +157,13 @@ def get_salary_records(conn, month: int) -> List[SalaryRecord]:
                 独生子女费=float(row[9] or 0),      # ATC93W4
                 采暖费=float(row[10] or 0),         # ATC93W21
                 奖金=float(row[11] or 0),           # ATC93W1
-                养老个人=float(row[16] or 0),       # BAA001
-                医疗个人=float(row[17] or 0),       # BAA002
-                失业个人=float(row[18] or 0),       # BAA003
-                公积金个人=float(row[19] or 0),     # CAA002
-                补缴及退款保险金额个人=float(row[20] or 0),  # ATC93BE
-                大病险个人=float(row[21] or 0),     # ATC93BD
+                养老个人=float(row[18] or 0),       # BAA001
+                医疗个人=float(row[19] or 0),       # BAA002
+                失业个人=float(row[20] or 0),       # BAA003
+                公积金个人=float(row[21] or 0),     # CAA002
+                补缴及退款保险金额个人=float(row[22] or 0),  # ATC93BE
+                大病险个人=float(row[23] or 0),     # ATC93BD
+                补发3=float(row[24] or 0),          # ATC936
             ))
     return records
 
@@ -198,6 +205,58 @@ def get_deduction_details(conn, atc930_list: List[int]) -> Dict[int, DeductionIn
                 field_name = _AAA901_FIELDS.get(aaa901, "其他")
                 setattr(info, field_name, getattr(info, field_name) + amount)
     return results
+
+
+def get_suggestions(conn, pay_month: int) -> List[dict]:
+    """查询TC8M建议的(结算单元+工资所属月份+当月批次)组合。
+
+    基于TC8M.ATC8G7=发放月份, 返回该批次涉及的所有(结算单元, 工资所属月, 批次号)组合,
+    以及每个组合关联到的人员列表和建议本期收入。
+
+    返回: [{unit, salary_month, seq, persons: [{id, name, income}]}]
+    """
+    sql = """
+        SELECT DISTINCT
+            m.ATB930 AS 结算单元,
+            m.ATC931 AS 工资所属月,
+            m.ATC937 AS 当月批次
+        FROM TC8M m
+        WHERE m.ATC8G7 = :pay_month
+        ORDER BY m.ATB930, m.ATC931, m.ATC937
+    """
+    combos = []
+    with conn.cursor() as cursor:
+        cursor.execute(sql, {"pay_month": pay_month})
+        combos = [{"unit": int(r[0] or 0), "salary_month": int(r[1] or 0),
+                    "seq": str(r[2] or ""), "persons": []} for r in cursor.fetchall()]
+
+    if not combos:
+        return []
+
+    # 为每个组合查关联人员和建议收入
+    person_sql = """
+        SELECT s.AAC002 AS 身份证, s.AAC003 AS 姓名,
+               NVL(s.ATC93AA,0) - NVL(s.ATC936,0) - NVL(s.ATC93BD,0) AS 建议收入
+        FROM TC93 s
+        WHERE s.ATB930 = :unit AND s.ATC931 = :salary_month AND s.ATC937 = :seq
+        AND NVL(s.ATC93AA,0) > 0
+        ORDER BY s.AAC003
+    """
+    with conn.cursor() as cursor:
+        for combo in combos:
+            cursor.execute(person_sql, {
+                "unit": combo["unit"],
+                "salary_month": combo["salary_month"],
+                "seq": combo["seq"]
+            })
+            combo["persons"] = [
+                {"id": str(r[0] or ""), "name": str(r[1] or ""), "income": float(r[2] or 0)}
+                for r in cursor.fetchall()
+            ]
+            combo["person_count"] = len(combo["persons"])
+            combo["total_income"] = sum(p["income"] for p in combo["persons"])
+
+    return combos
 
 
 def get_personnel_info(conn, month: int) -> List[PersonnelInfo]:

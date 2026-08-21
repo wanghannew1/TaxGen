@@ -7,8 +7,10 @@ class SalaryRecord:
     # 基础信息
     职工号: str = ""  # AAC001
     姓名: str = ""  # AAC003
-    身份证: str = ""  # AAC002 from AC01
+    身份证: str = ""  # AC002 from AC01
     工资所属年月: int = 0  # ATC931
+    结算单元: int = 0  # ATB930
+    当月批次: str = ""  # ATC937
 
     # 工资汇总
     应发工资: float = 0  # ATC933
@@ -28,6 +30,7 @@ class SalaryRecord:
     # 补缴/大病险 (confirmed via Oracle all_col_comments on TC93)
     补缴及退款保险金额个人: float = 0  # ATC93BE
     大病险个人: float = 0  # ATC93BD
+    补发3: float = 0  # ATC936 - 第三类补发扣款
 
     # 验证字段
     本期收入: float = 0  # 计算得出

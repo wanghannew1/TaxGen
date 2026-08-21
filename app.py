@@ -3,7 +3,7 @@ import atexit
 import os
 from flask import Flask, render_template, request, jsonify, send_file
 from db import init_db, get_connection, close_db
-from queries import get_available_months, get_salary_records, get_personnel_info
+from queries import get_available_months, get_salary_records, get_personnel_info, get_suggestions
 from templates_gen.normal_salary import generate_normal_salary
 from templates_gen.labor_service import generate_labor_service
 from templates_gen.annual_bonus import generate_annual_bonus
@@ -32,12 +32,48 @@ def api_months():
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
+@app.route("/api/suggestions/<int:month>")
+def api_suggestions(month):
+    try:
+        conn = get_connection()
+        combos = get_suggestions(conn, month)
+
+        # 按人汇总: 每个人出现在哪些组合中
+        person_map = {}
+        for combo in combos:
+            for p in combo["persons"]:
+                pid = p["id"]
+                if pid not in person_map:
+                    person_map[pid] = {"id": pid, "name": p["name"], "suggestions": []}
+                person_map[pid]["suggestions"].append({
+                    "unit": combo["unit"],
+                    "salary_month": combo["salary_month"],
+                    "seq": combo["seq"],
+                    "income": p["income"]
+                })
+
+        return jsonify({
+            "month": month,
+            "combos": [{
+                "unit": c["unit"],
+                "salary_month": c["salary_month"],
+                "seq": c["seq"],
+                "person_count": c["person_count"],
+                "total_income": round(c["total_income"], 2)
+            } for c in combos],
+            "persons": list(person_map.values()),
+            "total_persons": len(person_map)
+        })
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
 @app.route("/api/generate", methods=["POST"])
 def api_generate():
     try:
         data = request.get_json()
         month = data.get("month")
         templates = data.get("templates", [])
+        confirmed_combos = data.get("confirmed_combos")
         
         if not month:
             return jsonify({"error": "请选择月份"}), 400
@@ -50,6 +86,10 @@ def api_generate():
         
         if not records:
             return jsonify({"error": f"月份 {month} 无工资数据"}), 400
+
+        if confirmed_combos is not None:
+            combo_set = {(c["unit"], c["salary_month"], c["seq"]) for c in confirmed_combos}
+            records = [r for r in records if (r.结算单元, r.工资所属年月, r.当月批次) in combo_set]
         
         results = []
         for tpl in templates:
