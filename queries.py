@@ -272,11 +272,12 @@ def search_tc8m(conn, unit_name: str = "", salary_month: int = 0,
             m.ATC937,
             m.ATC8G7,
             m.ATC8M3,
+            m.AAE019,
             SUM(m.ATC8M1),
             SUM(m.ATC8M2)
         FROM TC8M m
         WHERE {where}
-        GROUP BY m.ATB930, m.ATB931, m.ATC931, m.ATC937, m.ATC8G7, m.ATC8M3
+        GROUP BY m.ATB930, m.ATB931, m.ATC931, m.ATC937, m.ATC8G7, m.ATC8M3, m.AAE019
         ORDER BY m.ATB931, m.ATC931, m.ATC937
     """
     with conn.cursor() as cursor:
@@ -288,8 +289,9 @@ def search_tc8m(conn, unit_name: str = "", salary_month: int = 0,
             "seq": str(r[3] or ""),
             "pay_month": int(r[4] or 0),
             "status": int(r[5] or 0),
-            "person_count": int(r[6] or 0),
-            "total_income": float(r[7] or 0),
+            "handler": str(r[6] or ""),
+            "person_count": int(r[7] or 0),
+            "total_income": float(r[8] or 0),
         } for r in cursor.fetchall()]
 
 

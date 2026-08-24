@@ -374,6 +374,7 @@
                                     <th>所属月份</th>
                                     <th>批次</th>
                                     <th>状态</th>
+                                    <th>经办人</th>
                                     <th>人数</th>
                                     <th>合计收入</th>
                                 </tr>
@@ -435,6 +436,7 @@
                                     <th>所属月份</th>
                                     <th>批次</th>
                                     <th>状态</th>
+                                    <th>经办人</th>
                                     <th>人数</th>
                                     <th>合计收入</th>
                                     <th style="width:60px">操作</th>
@@ -792,6 +794,7 @@
                         <td>${c.salary_month}</td>
                         <td>${c.seq}</td>
                         <td class="${statusClass[s] || ''}">${statusMap[s] || s}</td>
+                        <td>${c.handler || ''}</td>
                         <td>${c.person_count}</td>
                         <td>${formatNum(c.total_income)}</td>
                     </tr>`;
@@ -874,6 +877,7 @@
                         <td>${c.salary_month}</td>
                         <td>${c.seq}</td>
                         <td class="${statusClass[s] || ''}">${statusMap[s] || s}</td>
+                        <td>${c.handler || ''}</td>
                         <td>${c.person_count}</td>
                         <td>${formatNum(c.total_income)}</td>
                         <td><button class="btn btn-sm btn-outline-danger btn-remove" data-idx="${i}">删除</button></td>
@@ -952,9 +956,9 @@
 
         function exportList() {
             if (tempList.length === 0) return;
-            const header = '结算单元名称,结算单元ID,所属月份,发放月份,批次,人数,合计收入';
+            const header = '结算单元名称,结算单元ID,所属月份,发放月份,批次,状态,经办人,人数,合计收入';
             const rows = tempList.map(c =>
-                `${(c.unit_name || '').replace(/,/g, '，')},${c.unit},${c.salary_month},${c.pay_month || ''},${c.seq},${c.person_count},${c.total_income}`
+                `${(c.unit_name || '').replace(/,/g, '，')},${c.unit},${c.salary_month},${c.pay_month || ''},${c.seq},${c.status || ''},${(c.handler || '').replace(/,/g, '，')},${c.person_count},${c.total_income}`
             );
             const bom = '\uFEFF';
             const csv = bom + header + '\n' + rows.join('\n');
