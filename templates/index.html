@@ -697,34 +697,35 @@
             searchContent.style.display = 'none';
             btnSearch.disabled = true;
 
-            const params = new URLSearchParams();
-            if (searchUnitName.value.trim()) params.set('unit_name', searchUnitName.value.trim());
-            if (searchSalaryMonth.value) params.set('salary_month', searchSalaryMonth.value);
-            if (monthSelect.value && !searchSalaryMonth.value) params.set('pay_month', monthSelect.value);
-            if (searchSeq.value.trim()) params.set('seq', searchSeq.value.trim());
-            if (searchConfirmedOnly.checked) params.set('status', '2');
-
             try {
-                const resp = await fetch(`/api/tc8m/search?${params}`);
-                if (!resp.ok) throw new Error('搜索失败');
-                const data = await resp.json();
-                searchResults = data.results || [];
+                if (importedNames.length > 0) {
+                    await doImportedSearch();
+                } else {
+                    const params = new URLSearchParams();
+                    if (searchUnitName.value.trim()) params.set('unit_name', searchUnitName.value.trim());
+                    if (searchSalaryMonth.value) params.set('salary_month', searchSalaryMonth.value);
+                    if (monthSelect.value && !searchSalaryMonth.value) params.set('pay_month', monthSelect.value);
+                    if (searchSeq.value.trim()) params.set('seq', searchSeq.value.trim());
+                    if (searchConfirmedOnly.checked) params.set('status', '2');
 
-                if (searchResults.length === 0) {
-                    searchLoading.style.display = 'none';
-                    searchEmpty.textContent = '无匹配结果';
-                    searchEmpty.style.display = 'block';
-                    return;
+                    const resp = await fetch(`/api/tc8m/search?${params}`);
+                    if (!resp.ok) throw new Error('搜索失败');
+                    const data = await resp.json();
+                    searchResults = data.results || [];
+
+                    if (searchResults.length === 0) {
+                        searchEmpty.textContent = '无匹配结果';
+                        searchEmpty.style.display = 'block';
+                    } else {
+                        renderSearchTable();
+                        searchContent.style.display = 'block';
+                    }
                 }
-
-                renderSearchTable();
-                searchLoading.style.display = 'none';
-                searchContent.style.display = 'block';
             } catch (e) {
-                searchLoading.style.display = 'none';
                 searchEmpty.textContent = `搜索失败: ${e.message}`;
                 searchEmpty.style.display = 'block';
             } finally {
+                searchLoading.style.display = 'none';
                 btnSearch.disabled = false;
             }
         }
