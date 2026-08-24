@@ -349,6 +349,13 @@
                     </div>
                     <p class="mt-2">正在查询 TC8M 批次数据...</p>
                 </div>
+                <div id="importedNamesBar" class="mb-2" style="display: none;">
+                    <div class="d-flex flex-wrap gap-1 align-items-center">
+                        <small class="text-muted me-1">导入名称:</small>
+                        <span id="importedNamesTags"></span>
+                        <button id="btnClearImportedNames" class="btn btn-sm btn-outline-danger py-0 px-1 ms-1" title="清空导入名称">全部清除</button>
+                    </div>
+                </div>
                 <div id="searchEmpty" class="empty-state">
                     输入搜索条件后点击搜索
                 </div>
@@ -559,6 +566,9 @@
         const btnImportNames = document.getElementById('btnImportNames');
         const importNamesFile = document.getElementById('importNamesFile');
         const btnDownloadTemplate = document.getElementById('btnDownloadTemplate');
+        const importedNamesBar = document.getElementById('importedNamesBar');
+        const importedNamesTags = document.getElementById('importedNamesTags');
+        const btnClearImportedNames = document.getElementById('btnClearImportedNames');
         const btnClearList = document.getElementById('btnClearList');
         const btnExportList = document.getElementById('btnExportList');
         const selectAllSearch = document.getElementById('selectAllSearch');
@@ -572,6 +582,7 @@
 
         let searchResults = [];
         let tempList = [];
+        let importedNames = [];
 
         document.addEventListener('DOMContentLoaded', function() {
             suggestionsCard.style.display = 'block';
@@ -600,6 +611,7 @@
         btnImportNames.addEventListener('click', () => importNamesFile.click());
         importNamesFile.addEventListener('change', importNames);
         btnDownloadTemplate.addEventListener('click', downloadTemplate);
+        btnClearImportedNames.addEventListener('click', clearImportedNames);
         selectAllSearch.addEventListener('change', function() { setSearchCheckboxes(this.checked); });
         selectAllList.addEventListener('change', function() { setListCheckboxes(this.checked); });
         btnListFilterSelect.addEventListener('click', () => setFilteredCheckboxes(true));
@@ -627,6 +639,41 @@
 
         function comboKey(c) {
             return `${c.unit}_${c.salary_month}_${c.seq}`;
+        }
+
+        function renderImportedTags() {
+            if (importedNames.length === 0) {
+                importedNamesBar.style.display = 'none';
+                return;
+            }
+            importedNamesBar.style.display = 'block';
+            importedNamesTags.innerHTML = importedNames.map((name, i) =>
+                `<span class="badge bg-secondary me-1 mb-1" style="font-size:0.8em; cursor:pointer;" onclick="removeImportedName(${i})">${name} &times;</span>`
+            ).join('');
+        }
+
+        function removeImportedName(idx) {
+            importedNames.splice(idx, 1);
+            renderImportedTags();
+            if (importedNames.length === 0) {
+                searchResults = [];
+                renderSearchTable();
+                searchContent.style.display = 'none';
+                searchEmpty.textContent = '输入搜索条件后点击搜索';
+                searchEmpty.style.display = 'block';
+            } else {
+                doImportedSearch();
+            }
+        }
+
+        function clearImportedNames() {
+            importedNames = [];
+            renderImportedTags();
+            searchResults = [];
+            renderSearchTable();
+            searchContent.style.display = 'none';
+            searchEmpty.textContent = '输入搜索条件后点击搜索';
+            searchEmpty.style.display = 'block';
         }
 
         async function loadMonths() {
@@ -679,6 +726,44 @@
                 searchEmpty.style.display = 'block';
             } finally {
                 btnSearch.disabled = false;
+            }
+        }
+
+        async function doImportedSearch() {
+            hideError();
+            searchLoading.style.display = 'block';
+            searchEmpty.style.display = 'none';
+            searchContent.style.display = 'none';
+
+            const importParams = new URLSearchParams();
+            if (monthSelect.value && !searchSalaryMonth.value) importParams.set('pay_month', monthSelect.value);
+            if (searchSalaryMonth.value) importParams.set('salary_month', searchSalaryMonth.value);
+            if (searchSeq.value.trim()) importParams.set('seq', searchSeq.value.trim());
+            if (searchConfirmedOnly.checked) importParams.set('status', '2');
+
+            searchResults = [];
+            for (const name of importedNames) {
+                try {
+                    const params = new URLSearchParams(importParams);
+                    params.set('unit_name', name);
+                    const resp = await fetch(`/api/tc8m/search?${params}`);
+                    if (!resp.ok) continue;
+                    const data = await resp.json();
+                    for (const c of (data.results || [])) {
+                        if (!searchResults.find(t => comboKey(t) === comboKey(c))) {
+                            searchResults.push(c);
+                        }
+                    }
+                } catch (e) { /* skip */ }
+            }
+
+            searchLoading.style.display = 'none';
+            if (searchResults.length === 0) {
+                searchEmpty.textContent = `导入的 ${importedNames.length} 个名称无匹配结果`;
+                searchEmpty.style.display = 'block';
+            } else {
+                renderSearchTable();
+                searchContent.style.display = 'block';
             }
         }
 
@@ -898,6 +983,7 @@
             if (searchConfirmedOnly.checked) importParams.set('status', '2');
 
             for (const name of names) {
+                if (!importedNames.includes(name)) importedNames.push(name);
                 try {
                     const params = new URLSearchParams(importParams);
                     params.set('unit_name', name);
@@ -915,6 +1001,7 @@
             searchLoading.style.display = 'none';
             importNamesFile.value = '';
             btnImportNames.disabled = false;
+            renderImportedTags();
 
             if (searchResults.length === 0) {
                 searchEmpty.textContent = `导入 ${names.length} 个名称，未找到匹配结果`;
