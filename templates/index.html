@@ -891,10 +891,16 @@
             btnImportNames.disabled = true;
 
             searchResults = [];
+            const importParams = new URLSearchParams();
+            if (monthSelect.value && !searchSalaryMonth.value) importParams.set('pay_month', monthSelect.value);
+            if (searchSalaryMonth.value) importParams.set('salary_month', searchSalaryMonth.value);
+            if (searchSeq.value.trim()) importParams.set('seq', searchSeq.value.trim());
+            if (searchConfirmedOnly.checked) importParams.set('status', '2');
+
             for (const name of names) {
                 try {
-                    const params = new URLSearchParams({ unit_name: name });
-                    if (searchConfirmedOnly.checked) params.set('status', '2');
+                    const params = new URLSearchParams(importParams);
+                    params.set('unit_name', name);
                     const resp = await fetch(`/api/tc8m/search?${params}`);
                     if (!resp.ok) continue;
                     const data = await resp.json();
