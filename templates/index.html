@@ -684,7 +684,7 @@
 
         function renderSearchTable() {
             searchTbody.innerHTML = '';
-            const statusMap = {0: '未确认', 1: '确认中', 2: '已确认'};
+            const statusMap = {0: '待确认', 1: '确认可发放', 2: '已发放'};
             const statusClass = {0: 'text-danger', 1: 'text-warning', 2: 'text-success'};
             searchResults.forEach((c, i) => {
                 const s = c.status || 0;
@@ -758,7 +758,7 @@
             listFilterSeq.innerHTML = '<option value="">全部批次</option>' + seqs.map(s => `<option value="${s}">${s}</option>`).join('');
 
             listTbody.innerHTML = '';
-            const statusMap = {0: '未确认', 1: '确认中', 2: '已确认'};
+            const statusMap = {0: '待确认', 1: '确认可发放', 2: '已发放'};
             const statusClass = {0: 'text-danger', 1: 'text-warning', 2: 'text-success'};
             tempList.forEach((c, i) => {
                 const s = c.status || 0;
