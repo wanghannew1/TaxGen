@@ -360,12 +360,9 @@
                     输入搜索条件后点击搜索
                 </div>
                 <div id="searchContent" style="display: none;">
-                    <div class="d-flex justify-content-between align-items-center mb-2">
-                        <div>
-                            <strong>搜索结果（勾选后添加到待报列表）</strong>
-                            <span id="searchResultCount" class="text-muted ms-2"></span>
-                        </div>
-                        <button id="btnAddToList" class="btn btn-sm btn-success" disabled>添加到待报列表</button>
+                    <div class="mb-2">
+                        <strong>搜索结果</strong>
+                        <span id="searchResultCount" class="text-muted ms-2"></span>
                     </div>
                     <div class="table-responsive" style="max-height: 300px; overflow-y: auto;">
                         <table class="table table-sm table-striped table-hover mb-0" id="searchTable">
@@ -383,6 +380,13 @@
                             </thead>
                             <tbody></tbody>
                         </table>
+                    </div>
+                    <div class="d-flex align-items-center gap-2 mt-2">
+                        <button id="btnSearchSelectAll" class="btn btn-sm btn-outline-primary">全选</button>
+                        <button id="btnSearchDeselectAll" class="btn btn-sm btn-outline-secondary">取消全选</button>
+                        <button id="btnSearchDeleteSelected" class="btn btn-sm btn-outline-danger" disabled>删除选中</button>
+                        <div class="flex-grow-1"></div>
+                        <button id="btnAddToList" class="btn btn-sm btn-success" disabled>添加到待报列表</button>
                     </div>
                 </div>
 
@@ -563,6 +567,9 @@
         const searchSeq = document.getElementById('searchSeq');
         const btnSearch = document.getElementById('btnSearch');
         const btnAddToList = document.getElementById('btnAddToList');
+        const btnSearchSelectAll = document.getElementById('btnSearchSelectAll');
+        const btnSearchDeselectAll = document.getElementById('btnSearchDeselectAll');
+        const btnSearchDeleteSelected = document.getElementById('btnSearchDeleteSelected');
         const btnImportNames = document.getElementById('btnImportNames');
         const importNamesFile = document.getElementById('importNamesFile');
         const btnDownloadTemplate = document.getElementById('btnDownloadTemplate');
@@ -606,6 +613,9 @@
         btnValidate.addEventListener('click', validateData);
         btnSearch.addEventListener('click', doSearch);
         btnAddToList.addEventListener('click', addToList);
+        btnSearchSelectAll.addEventListener('click', () => { setSearchCheckboxes(true); });
+        btnSearchDeselectAll.addEventListener('click', () => { setSearchCheckboxes(false); });
+        btnSearchDeleteSelected.addEventListener('click', deleteSearchSelected);
         btnClearList.addEventListener('click', clearList);
         btnExportList.addEventListener('click', exportList);
         btnImportNames.addEventListener('click', () => importNamesFile.click());
@@ -796,6 +806,14 @@
         function updateAddButton() {
             const checked = document.querySelectorAll('.search-cb:checked').length;
             btnAddToList.disabled = checked === 0;
+            btnSearchDeleteSelected.disabled = checked === 0;
+        }
+
+        function deleteSearchSelected() {
+            const checked = document.querySelectorAll('.search-cb:checked');
+            const indices = Array.from(checked).map(cb => parseInt(cb.dataset.idx)).sort((a,b) => b - a);
+            indices.forEach(i => searchResults.splice(i, 1));
+            renderSearchTable();
         }
 
         function addToList() {
