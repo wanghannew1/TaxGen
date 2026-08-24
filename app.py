@@ -3,7 +3,7 @@ import atexit
 import os
 from flask import Flask, render_template, request, jsonify, send_file
 from db import init_db, get_connection, close_db
-from queries import get_available_months, get_salary_records, get_personnel_info, get_suggestions
+from queries import get_available_months, get_salary_records, get_personnel_info, get_suggestions, search_tc8m
 from templates_gen.normal_salary import generate_normal_salary
 from templates_gen.labor_service import generate_labor_service
 from templates_gen.annual_bonus import generate_annual_bonus
@@ -38,32 +38,31 @@ def api_suggestions(month):
         conn = get_connection()
         combos = get_suggestions(conn, month)
 
-        # 按人汇总: 每个人出现在哪些组合中
-        person_map = {}
-        for combo in combos:
-            for p in combo["persons"]:
-                pid = p["id"]
-                if pid not in person_map:
-                    person_map[pid] = {"id": pid, "name": p["name"], "suggestions": []}
-                person_map[pid]["suggestions"].append({
-                    "unit": combo["unit"],
-                    "salary_month": combo["salary_month"],
-                    "seq": combo["seq"],
-                    "income": p["income"]
-                })
-
         return jsonify({
             "month": month,
             "combos": [{
                 "unit": c["unit"],
+                "unit_name": c["unit_name"],
                 "salary_month": c["salary_month"],
                 "seq": c["seq"],
                 "person_count": c["person_count"],
                 "total_income": round(c["total_income"], 2)
             } for c in combos],
-            "persons": list(person_map.values()),
-            "total_persons": len(person_map)
         })
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+@app.route("/api/tc8m/search")
+def api_tc8m_search():
+    try:
+        conn = get_connection()
+        unit_name = request.args.get("unit_name", "").strip()
+        salary_month = int(request.args.get("salary_month", 0) or 0)
+        pay_month = int(request.args.get("pay_month", 0) or 0)
+        seq = request.args.get("seq", "").strip()
+        status = int(request.args.get("status", -1) or -1)
+        results = search_tc8m(conn, unit_name, salary_month, pay_month, seq, status)
+        return jsonify({"results": results})
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 

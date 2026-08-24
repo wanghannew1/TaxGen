@@ -1,4 +1,5 @@
 from dataclasses import dataclass
+from decimal import Decimal
 from typing import Optional
 
 @dataclass
@@ -13,28 +14,28 @@ class SalaryRecord:
     当月批次: str = ""  # ATC937 - 工资发放次数
 
     # 工资汇总
-    应发工资: float = 0  # ATC933 - 本次应发工资
-    实发工资: float = 0  # ATC93C - 本次实发金额(合计)
-    个人所得税: float = 0  # ATC93D - 本次个人所得税
-    工资总额: float = 0  # ATC93AA - 本次工资总额
-    独生子女费: float = 0  # ATC93W4 - 独生子女费
-    采暖费: float = 0  # ATC93W21 - 采暖费
-    奖金: float = 0  # ATC93W1 - 奖金
+    应发工资: Decimal = Decimal("0")  # ATC933 - 本次应发工资
+    实发工资: Decimal = Decimal("0")  # ATC93C - 本次实发金额(合计)
+    个人所得税: Decimal = Decimal("0")  # ATC93D - 本次个人所得税
+    工资总额: Decimal = Decimal("0")  # ATC93AA - 本次工资总额
+    独生子女费: Decimal = Decimal("0")  # ATC93W4 - 独生子女费
+    采暖费: Decimal = Decimal("0")  # ATC93W21 - 采暖费
+    奖金: Decimal = Decimal("0")  # ATC93W1 - 奖金
 
     # 五险一金个人部分
-    养老个人: float = 0  # BAA001 - 当月养老个人缴 (8%)
-    医疗个人: float = 0  # BAA002 - 当月医疗个人缴 (2%)
-    失业个人: float = 0  # BAA003 - 当月失业个人缴 (0.3%)
-    公积金个人: float = 0  # CAA002 - 个人公积金月缴存额 (7%)
+    养老个人: Decimal = Decimal("0")  # BAA001 - 当月养老个人缴 (8%)
+    医疗个人: Decimal = Decimal("0")  # BAA002 - 当月医疗个人缴 (2%)
+    失业个人: Decimal = Decimal("0")  # BAA003 - 当月失业个人缴 (0.3%)
+    公积金个人: Decimal = Decimal("0")  # CAA002 - 个人公积金月缴存额 (7%)
 
     # 补缴/大病险/免税
-    补缴及退款保险金额个人: float = 0  # ATC93BE - 补缴及退款保险差额（个人）
-    大病险个人: float = 0  # ATC93BD - 大病险（个人承担）
-    补发3: float = 0  # ATC936 - 本次免税 (= 采暖费 + 独生子女费)
+    补缴及退款保险金额个人: Decimal = Decimal("0")  # ATC93BE - 补缴及退款保险差额（个人）
+    大病险个人: Decimal = Decimal("0")  # ATC93BD - 大病险（个人承担）
+    补发3: Decimal = Decimal("0")  # ATC936 - 本次免税 (= 采暖费 + 独生子女费)
 
     # 验证字段
-    本期收入: float = 0  # 计算得出
-    免税: float = 0  # 计算得出
+    本期收入: Decimal = Decimal("0")  # 计算得出
+    免税: Decimal = Decimal("0")  # 计算得出
 
 @dataclass
 class PersonnelInfo:

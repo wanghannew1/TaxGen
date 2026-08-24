@@ -42,6 +42,7 @@
 """
 
 from dataclasses import dataclass
+from decimal import Decimal
 from typing import Dict, List
 
 from models import MonthOption, PersonnelInfo, SalaryRecord
@@ -152,20 +153,20 @@ def get_salary_records(conn, month: int) -> List[SalaryRecord]:
                 工资所属年月=int(row[3] or 0),
                 结算单元=int(row[12] or 0),
                 当月批次=str(row[13] or ""),
-                应发工资=float(row[5] or 0),
-                实发工资=float(row[6] or 0),
-                个人所得税=float(row[7] or 0),
-                工资总额=float(row[8] or 0),
-                独生子女费=float(row[9] or 0),
-                采暖费=float(row[10] or 0),
-                奖金=float(row[11] or 0),
-                养老个人=float(row[18] or 0),
-                医疗个人=float(row[19] or 0),
-                失业个人=float(row[20] or 0),
-                公积金个人=float(row[21] or 0),
-                补缴及退款保险金额个人=float(row[22] or 0),
-                大病险个人=float(row[23] or 0),
-                补发3=float(row[24] or 0),
+                应发工资=Decimal(str(row[5] or 0)),
+                实发工资=Decimal(str(row[6] or 0)),
+                个人所得税=Decimal(str(row[7] or 0)),
+                工资总额=Decimal(str(row[8] or 0)),
+                独生子女费=Decimal(str(row[9] or 0)),
+                采暖费=Decimal(str(row[10] or 0)),
+                奖金=Decimal(str(row[11] or 0)),
+                养老个人=Decimal(str(row[18] or 0)),
+                医疗个人=Decimal(str(row[19] or 0)),
+                失业个人=Decimal(str(row[20] or 0)),
+                公积金个人=Decimal(str(row[21] or 0)),
+                补缴及退款保险金额个人=Decimal(str(row[22] or 0)),
+                大病险个人=Decimal(str(row[23] or 0)),
+                补发3=Decimal(str(row[24] or 0)),
             ))
     return records
 
@@ -210,55 +211,86 @@ def get_deduction_details(conn, atc930_list: List[int]) -> Dict[int, DeductionIn
 
 
 def get_suggestions(conn, pay_month: int) -> List[dict]:
-    """查询TC8M建议的(结算单元+工资所属月份+当月批次)组合。
-
-    基于TC8M.ATC8G7=发放月份, 返回该批次涉及的所有(结算单元, 工资所属月, 批次号)组合,
-    以及每个组合关联到的人员列表和建议本期收入。
-
-    返回: [{unit, salary_month, seq, persons: [{id, name, income}]}]
-    """
     sql = """
-        SELECT DISTINCT
+        SELECT
             m.ATB930 AS 结算单元,
+            m.ATB931 AS 结算单元名称,
             m.ATC931 AS 工资所属月,
-            m.ATC937 AS 当月批次
+            m.ATC937 AS 当月批次,
+            SUM(m.ATC8M1) AS 发放人数,
+            SUM(m.ATC8M2) AS 发放总额
         FROM TC8M m
         WHERE m.ATC8G7 = :pay_month
+        AND m.ATC8M3 = 2
+        GROUP BY m.ATB930, m.ATB931, m.ATC931, m.ATC937
         ORDER BY m.ATB930, m.ATC931, m.ATC937
     """
     combos = []
     with conn.cursor() as cursor:
         cursor.execute(sql, {"pay_month": pay_month})
-        combos = [{"unit": int(r[0] or 0), "salary_month": int(r[1] or 0),
-                    "seq": str(r[2] or ""), "persons": []} for r in cursor.fetchall()]
-
-    if not combos:
-        return []
-
-    # 为每个组合查关联人员和建议收入
-    person_sql = """
-        SELECT s.AAC002 AS 身份证, s.AAC003 AS 姓名,
-               NVL(s.ATC93AA,0) - NVL(s.ATC936,0) - NVL(s.ATC93BD,0) AS 建议收入
-        FROM TC93 s
-        WHERE s.ATB930 = :unit AND s.ATC931 = :salary_month AND s.ATC937 = :seq
-        AND NVL(s.ATC93AA,0) > 0
-        ORDER BY s.AAC003
-    """
-    with conn.cursor() as cursor:
-        for combo in combos:
-            cursor.execute(person_sql, {
-                "unit": combo["unit"],
-                "salary_month": combo["salary_month"],
-                "seq": combo["seq"]
-            })
-            combo["persons"] = [
-                {"id": str(r[0] or ""), "name": str(r[1] or ""), "income": float(r[2] or 0)}
-                for r in cursor.fetchall()
-            ]
-            combo["person_count"] = len(combo["persons"])
-            combo["total_income"] = sum(p["income"] for p in combo["persons"])
+        combos = [{
+            "unit": int(r[0] or 0),
+            "unit_name": str(r[1] or ""),
+            "salary_month": int(r[2] or 0),
+            "seq": str(r[3] or ""),
+            "person_count": int(r[4] or 0),
+            "total_income": float(r[5] or 0),
+        } for r in cursor.fetchall()]
 
     return combos
+
+
+def search_tc8m(conn, unit_name: str = "", salary_month: int = 0,
+                pay_month: int = 0, seq: str = "", status: int = -1) -> List[dict]:
+    """查询 TC8M 批次数据。status=-1 表示不限状态，默认只返回已确认(status=2)。"""
+    conditions = []
+    binds = {}
+
+    if status >= 0:
+        conditions.append("m.ATC8M3 = :status")
+        binds["status"] = status
+
+    if unit_name:
+        conditions.append("m.ATB931 LIKE :unit_name")
+        binds["unit_name"] = f"%{unit_name}%"
+    if salary_month:
+        conditions.append("m.ATC931 = :salary_month")
+        binds["salary_month"] = salary_month
+    if pay_month:
+        conditions.append("m.ATC8G7 = :pay_month")
+        binds["pay_month"] = pay_month
+    if seq:
+        conditions.append("m.ATC937 = :seq")
+        binds["seq"] = seq
+
+    where = " AND ".join(conditions)
+    sql = f"""
+        SELECT
+            m.ATB930,
+            m.ATB931,
+            m.ATC931,
+            m.ATC937,
+            m.ATC8G7,
+            m.ATC8M3,
+            SUM(m.ATC8M1),
+            SUM(m.ATC8M2)
+        FROM TC8M m
+        WHERE {where}
+        GROUP BY m.ATB930, m.ATB931, m.ATC931, m.ATC937, m.ATC8G7, m.ATC8M3
+        ORDER BY m.ATB931, m.ATC931, m.ATC937
+    """
+    with conn.cursor() as cursor:
+        cursor.execute(sql, binds)
+        return [{
+            "unit": int(r[0] or 0),
+            "unit_name": str(r[1] or ""),
+            "salary_month": int(r[2] or 0),
+            "seq": str(r[3] or ""),
+            "pay_month": int(r[4] or 0),
+            "status": int(r[5] or 0),
+            "person_count": int(r[6] or 0),
+            "total_income": float(r[7] or 0),
+        } for r in cursor.fetchall()]
 
 
 def get_personnel_info(conn, month: int) -> List[PersonnelInfo]:

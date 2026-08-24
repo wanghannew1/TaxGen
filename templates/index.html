@@ -23,7 +23,7 @@
         }
 
         .container {
-            max-width: 900px;
+            max-width: 1400px;
             margin: 0 auto;
         }
 
@@ -266,43 +266,9 @@
             <p>根据工资数据自动生成各类个税模板 Excel 文件</p>
         </div>
 
-        <!-- Step Indicator -->
-        <div class="step-indicator">
-            <div class="step active">
-                <div class="step-number">1</div>
-                <div>选择月份</div>
-            </div>
-            <div class="step">
-                <div class="step-number">2</div>
-                <div>选择模板</div>
-            </div>
-            <div class="step">
-                <div class="step-number">3</div>
-                <div>确认批次</div>
-            </div>
-            <div class="step">
-                <div class="step-number">4</div>
-                <div>生成文件</div>
-            </div>
-            <div class="step">
-                <div class="step-number">5</div>
-                <div>验证报告</div>
-            </div>
-        </div>
-
-        <!-- Step 1: Month Selection -->
+        <!-- Step 1: Template Selection -->
         <div class="card">
-            <div class="card-header">步骤 1：选择工资所属月份</div>
-            <div class="card-body">
-                <select id="monthSelect" class="form-select form-select-lg">
-                    <option value="">加载中...</option>
-                </select>
-            </div>
-        </div>
-
-        <!-- Step 2: Template Selection -->
-        <div class="card">
-            <div class="card-header">步骤 2：选择要生成的模板</div>
+            <div class="card-header">选择要生成的模板</div>
             <div class="card-body template-checkboxes">
                 <div class="form-check mb-3">
                     <input class="form-check-input" type="checkbox" id="selectAll">
@@ -328,32 +294,82 @@
             </div>
         </div>
 
-        <!-- Step 3: Confirm Batches -->
+        <!-- Step 2: Select Batches -->
         <div id="suggestionsCard" class="card" style="display: none;">
-            <div class="card-header">步骤 3：确认报税批次（系统建议）</div>
+            <div class="card-header">选择报税批次</div>
             <div class="card-body">
-                <div id="suggestionsLoading" class="text-center py-3">
+                <div class="row g-2 mb-3 align-items-end">
+                    <div class="col-md-2">
+                        <label class="form-label form-label-sm"><strong>发放月份</strong></label>
+                        <select id="monthSelect" class="form-select form-select-sm">
+                            <option value="">请选择月份</option>
+                        </select>
+                    </div>
+                    <div class="col-md-2">
+                        <label class="form-label form-label-sm">结算单元名称</label>
+                        <input type="text" id="searchUnitName" class="form-control form-control-sm" placeholder="搜索结算单元名称...">
+                    </div>
+                    <div class="col-md-2">
+                        <label class="form-label form-label-sm">所属月份</label>
+                        <input type="number" id="searchSalaryMonth" class="form-control form-control-sm" placeholder="YYYYMM">
+                    </div>
+                    <div class="col-md-2">
+                        <label class="form-label form-label-sm">批次号</label>
+                        <input type="text" id="searchSeq" class="form-control form-control-sm" placeholder="批次号">
+                    </div>
+                    <div class="col-md-2">
+                        <label class="form-label form-label-sm">&nbsp;</label>
+                        <div>
+                            <div class="form-check form-check-inline mt-1">
+                                <input class="form-check-input" type="checkbox" id="searchConfirmedOnly" checked>
+                                <label class="form-check-label form-label-sm" for="searchConfirmedOnly">仅已发放</label>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+                <div class="row g-2 mb-3">
+                    <div class="col-md-2">
+                        <button id="btnSearch" class="btn btn-sm btn-primary w-100">搜索</button>
+                    </div>
+                </div>
+                <div class="row g-2 mb-3">
+                    <div class="col-md-8">
+                        <div class="form-text">
+                            <button id="btnImportNames" class="btn btn-sm btn-outline-secondary me-1">导入名称列表搜索</button>
+                            <input type="file" id="importNamesFile" accept=".csv,.txt" style="display:none">
+                            <button id="btnDownloadTemplate" class="btn btn-sm btn-outline-link p-0 me-2">下载示例模板</button>
+                            支持CSV/TXT，每行一个结算单元名称，导入后自动搜索
+                        </div>
+                    </div>
+                </div>
+
+                <div id="searchLoading" class="text-center py-3" style="display: none;">
                     <div class="spinner-border text-primary" role="status">
                         <span class="visually-hidden">加载中...</span>
                     </div>
-                    <p class="mt-2">正在查询 TC8M 建议批次...</p>
+                    <p class="mt-2">正在查询 TC8M 批次数据...</p>
                 </div>
-                <div id="suggestionsEmpty" class="empty-state" style="display: none;">
-                    该月份无 TC8M 批次数据，将使用全部记录生成
+                <div id="searchEmpty" class="empty-state">
+                    输入搜索条件后点击搜索
                 </div>
-                <div id="suggestionsContent" style="display: none;">
-                    <div class="form-check mb-2">
-                        <input class="form-check-input" type="checkbox" id="selectComboAll" checked>
-                        <label class="form-check-label" for="selectComboAll"><strong>全选 / 取消全选</strong></label>
+                <div id="searchContent" style="display: none;">
+                    <div class="d-flex justify-content-between align-items-center mb-2">
+                        <div>
+                            <strong>搜索结果（勾选后添加到待报列表）</strong>
+                            <span id="searchResultCount" class="text-muted ms-2"></span>
+                        </div>
+                        <button id="btnAddToList" class="btn btn-sm btn-success" disabled>添加到待报列表</button>
                     </div>
-                    <div class="table-responsive">
-                        <table class="table table-striped table-hover" id="suggestionsTable">
-                            <thead>
+                    <div class="table-responsive" style="max-height: 300px; overflow-y: auto;">
+                        <table class="table table-sm table-striped table-hover mb-0" id="searchTable">
+                            <thead class="sticky-top" style="background: #fff;">
                                 <tr>
-                                    <th style="width:40px">选择</th>
+                                    <th style="width:40px"><input class="form-check-input" type="checkbox" id="selectAllSearch"></th>
                                     <th>结算单元</th>
-                                    <th>工资所属月份</th>
-                                    <th>当月批次</th>
+                                    <th>发放月份</th>
+                                    <th>所属月份</th>
+                                    <th>批次</th>
+                                    <th>状态</th>
                                     <th>人数</th>
                                     <th>合计收入</th>
                                 </tr>
@@ -361,12 +377,67 @@
                             <tbody></tbody>
                         </table>
                     </div>
-                    <div id="comboSummary" class="alert alert-info mb-0 mt-2"></div>
+                </div>
+
+                <hr>
+
+                <div class="d-flex justify-content-between align-items-center mb-2">
+                    <strong>待报列表</strong>
+                    <div>
+                        <button id="btnExportList" class="btn btn-sm btn-outline-success me-1" disabled title="待报列表为空时不可导出">导出</button>
+                        <button id="btnListFilterSelect" class="btn btn-sm btn-outline-primary me-1" disabled>筛选全选</button>
+                        <button id="btnListFilterDeselect" class="btn btn-sm btn-outline-secondary me-1" disabled>筛选取消</button>
+                        <button id="btnClearList" class="btn btn-sm btn-outline-danger" disabled>清空列表</button>
+                    </div>
+                </div>
+                <div class="row g-2 mb-2">
+                    <div class="col-md-3">
+                        <label class="form-label form-label-sm">所属月份</label>
+                        <select id="listFilterMonth" class="form-select form-select-sm" disabled>
+                            <option value="">全部月份</option>
+                        </select>
+                    </div>
+                    <div class="col-md-4">
+                        <label class="form-label form-label-sm">结算单元</label>
+                        <select id="listFilterUnit" class="form-select form-select-sm" disabled>
+                            <option value="">全部结算单元</option>
+                        </select>
+                    </div>
+                    <div class="col-md-2">
+                        <label class="form-label form-label-sm">批次号</label>
+                        <select id="listFilterSeq" class="form-select form-select-sm" disabled>
+                            <option value="">全部批次</option>
+                        </select>
+                    </div>
+                </div>
+                <div id="listEmpty" class="empty-state">
+                    请从搜索结果中添加条目
+                </div>
+                <div id="listContent" style="display: none;">
+                    <div class="table-responsive" style="max-height: 300px; overflow-y: auto;">
+                        <table class="table table-sm table-striped table-hover mb-0" id="listTable">
+                            <thead class="sticky-top" style="background: #fff;">
+                                <tr>
+                                    <th style="width:40px"><input class="form-check-input" type="checkbox" id="selectAllList"></th>
+                                    <th>结算单元</th>
+                                    <th>发放月份</th>
+                                    <th>所属月份</th>
+                                    <th>批次</th>
+                                    <th>状态</th>
+                                    <th>人数</th>
+                                    <th>合计收入</th>
+                                    <th style="width:60px">操作</th>
+                                </tr>
+                            </thead>
+                            <tbody></tbody>
+                        </table>
+                    </div>
+                    <div id="listSummary" class="alert alert-info mb-0 mt-2"></div>
                 </div>
             </div>
         </div>
 
-        <!-- Step 4: Generate -->
+        <!-- Step 3: Generate -->
         <div class="card">
             <div class="card-body">
                 <button id="btnGenerate" class="btn btn-primary btn-generate">
@@ -384,9 +455,9 @@
         <!-- Error Message -->
         <div id="errorBox" class="error-alert alert alert-danger" style="display: none;"></div>
 
-        <!-- Step 4: Results -->
+        <!-- Step 3: Results -->
         <div id="results" class="card results">
-            <div class="card-header">步骤 4：生成结果</div>
+            <div class="card-header">生成结果</div>
             <div class="card-body">
                 <table class="table table-striped" id="resultsTable">
                     <thead>
@@ -404,10 +475,10 @@
             </div>
         </div>
 
-        <!-- Step 5: Validation Report -->
+        <!-- Step 4: Validation Report -->
         <div id="validationReport" class="card" style="display: none;">
             <div class="card-header">
-                验证报告
+                步骤 4：验证报告
                 <button id="btnValidate" class="btn btn-sm btn-validate text-white">
                     刷新验证
                 </button>
@@ -472,16 +543,40 @@
         const emptyValidation = document.getElementById('emptyValidation');
 
         const suggestionsCard = document.getElementById('suggestionsCard');
-        const suggestionsLoading = document.getElementById('suggestionsLoading');
-        const suggestionsEmpty = document.getElementById('suggestionsEmpty');
-        const suggestionsContent = document.getElementById('suggestionsContent');
-        const suggestionsTbody = document.querySelector('#suggestionsTable tbody');
-        const selectComboAll = document.getElementById('selectComboAll');
-        const comboSummary = document.getElementById('comboSummary');
+        const searchLoading = document.getElementById('searchLoading');
+        const searchEmpty = document.getElementById('searchEmpty');
+        const searchContent = document.getElementById('searchContent');
+        const searchTbody = document.querySelector('#searchTable tbody');
+        const listEmpty = document.getElementById('listEmpty');
+        const listContent = document.getElementById('listContent');
+        const listTbody = document.querySelector('#listTable tbody');
+        const listSummary = document.getElementById('listSummary');
+        const searchUnitName = document.getElementById('searchUnitName');
+        const searchSalaryMonth = document.getElementById('searchSalaryMonth');
+        const searchSeq = document.getElementById('searchSeq');
+        const btnSearch = document.getElementById('btnSearch');
+        const btnAddToList = document.getElementById('btnAddToList');
+        const btnImportNames = document.getElementById('btnImportNames');
+        const importNamesFile = document.getElementById('importNamesFile');
+        const btnDownloadTemplate = document.getElementById('btnDownloadTemplate');
+        const btnClearList = document.getElementById('btnClearList');
+        const btnExportList = document.getElementById('btnExportList');
+        const selectAllSearch = document.getElementById('selectAllSearch');
+        const selectAllList = document.getElementById('selectAllList');
+        const listFilterMonth = document.getElementById('listFilterMonth');
+        const listFilterUnit = document.getElementById('listFilterUnit');
+        const listFilterSeq = document.getElementById('listFilterSeq');
+        const btnListFilterSelect = document.getElementById('btnListFilterSelect');
+        const btnListFilterDeselect = document.getElementById('btnListFilterDeselect');
+        const searchConfirmedOnly = document.getElementById('searchConfirmedOnly');
 
-        let currentSuggestions = [];
+        let searchResults = [];
+        let tempList = [];
 
-        document.addEventListener('DOMContentLoaded', loadMonths);
+        document.addEventListener('DOMContentLoaded', function() {
+            suggestionsCard.style.display = 'block';
+            loadMonths();
+        });
 
         selectAllCb.addEventListener('change', function() {
             templateCbs.forEach(cb => { cb.checked = this.checked; });
@@ -498,9 +593,22 @@
 
         btnGenerate.addEventListener('click', generate);
         btnValidate.addEventListener('click', validateData);
-        selectComboAll.addEventListener('change', function() {
-            document.querySelectorAll('.combo-cb').forEach(cb => { cb.checked = this.checked; });
-            updateComboSummary();
+        btnSearch.addEventListener('click', doSearch);
+        btnAddToList.addEventListener('click', addToList);
+        btnClearList.addEventListener('click', clearList);
+        btnExportList.addEventListener('click', exportList);
+        btnImportNames.addEventListener('click', () => importNamesFile.click());
+        importNamesFile.addEventListener('change', importNames);
+        btnDownloadTemplate.addEventListener('click', downloadTemplate);
+        selectAllSearch.addEventListener('change', function() { setSearchCheckboxes(this.checked); });
+        selectAllList.addEventListener('change', function() { setListCheckboxes(this.checked); });
+        btnListFilterSelect.addEventListener('click', () => setFilteredCheckboxes(true));
+        btnListFilterDeselect.addEventListener('click', () => setFilteredCheckboxes(false));
+        listFilterMonth.addEventListener('change', updateListSummary);
+        listFilterUnit.addEventListener('change', updateListSummary);
+        listFilterSeq.addEventListener('change', updateListSummary);
+
+        monthSelect.addEventListener('change', function() {
         });
 
         function showError(message) {
@@ -517,6 +625,10 @@
             return n.toLocaleString('zh-CN', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
         }
 
+        function comboKey(c) {
+            return `${c.unit}_${c.salary_month}_${c.seq}`;
+        }
+
         async function loadMonths() {
             try {
                 const resp = await fetch('/api/months');
@@ -531,83 +643,283 @@
             }
         }
 
-        monthSelect.addEventListener('change', function() {
-            if (this.value) {
-                loadSuggestions(this.value);
-            } else {
-                suggestionsCard.style.display = 'none';
-            }
-        });
+        async function doSearch() {
+            hideError();
+            searchLoading.style.display = 'block';
+            searchEmpty.style.display = 'none';
+            searchContent.style.display = 'none';
+            btnSearch.disabled = true;
 
-        async function loadSuggestions(month) {
-            suggestionsCard.style.display = 'block';
-            suggestionsLoading.style.display = 'block';
-            suggestionsEmpty.style.display = 'none';
-            suggestionsContent.style.display = 'none';
+            const params = new URLSearchParams();
+            if (searchUnitName.value.trim()) params.set('unit_name', searchUnitName.value.trim());
+            if (searchSalaryMonth.value) params.set('salary_month', searchSalaryMonth.value);
+            if (monthSelect.value && !searchSalaryMonth.value) params.set('pay_month', monthSelect.value);
+            if (searchSeq.value.trim()) params.set('seq', searchSeq.value.trim());
+            if (searchConfirmedOnly.checked) params.set('status', '2');
 
             try {
-                const resp = await fetch(`/api/suggestions/${month}`);
-                if (!resp.ok) throw new Error('查询建议失败');
+                const resp = await fetch(`/api/tc8m/search?${params}`);
+                if (!resp.ok) throw new Error('搜索失败');
                 const data = await resp.json();
+                searchResults = data.results || [];
 
-                currentSuggestions = data.combos || [];
-
-                if (currentSuggestions.length === 0) {
-                    suggestionsLoading.style.display = 'none';
-                    suggestionsEmpty.style.display = 'block';
+                if (searchResults.length === 0) {
+                    searchLoading.style.display = 'none';
+                    searchEmpty.textContent = '无匹配结果';
+                    searchEmpty.style.display = 'block';
                     return;
                 }
 
-                suggestionsTbody.innerHTML = '';
-                currentSuggestions.forEach((c, i) => {
-                    suggestionsTbody.innerHTML += `
-                        <tr>
-                            <td><input class="form-check-input combo-cb" type="checkbox" checked data-idx="${i}"></td>
-                            <td>${c.unit}</td>
-                            <td>${c.salary_month}</td>
-                            <td>${c.seq}</td>
-                            <td>${c.person_count}</td>
-                            <td>${formatNum(c.total_income)}</td>
-                        </tr>`;
-                });
-
-                document.querySelectorAll('.combo-cb').forEach(cb => {
-                    cb.addEventListener('change', updateComboSummary);
-                });
-
-                suggestionsLoading.style.display = 'none';
-                suggestionsContent.style.display = 'block';
-                selectComboAll.checked = true;
-                updateComboSummary();
+                renderSearchTable();
+                searchLoading.style.display = 'none';
+                searchContent.style.display = 'block';
             } catch (e) {
-                suggestionsLoading.style.display = 'none';
-                suggestionsEmpty.style.display = 'block';
+                searchLoading.style.display = 'none';
+                searchEmpty.textContent = `搜索失败: ${e.message}`;
+                searchEmpty.style.display = 'block';
+            } finally {
+                btnSearch.disabled = false;
             }
         }
 
-        function getSelectedCombos() {
-            const checked = document.querySelectorAll('.combo-cb:checked');
+        function renderSearchTable() {
+            searchTbody.innerHTML = '';
+            const statusMap = {0: '未确认', 1: '确认中', 2: '已确认'};
+            const statusClass = {0: 'text-danger', 1: 'text-warning', 2: 'text-success'};
+            searchResults.forEach((c, i) => {
+                const s = c.status || 0;
+                searchTbody.innerHTML += `
+                    <tr>
+                        <td><input class="form-check-input search-cb" type="checkbox" data-idx="${i}"></td>
+                        <td title="${c.unit}">${c.unit_name || c.unit}</td>
+                        <td>${c.pay_month || ''}</td>
+                        <td>${c.salary_month}</td>
+                        <td>${c.seq}</td>
+                        <td class="${statusClass[s] || ''}">${statusMap[s] || s}</td>
+                        <td>${c.person_count}</td>
+                        <td>${formatNum(c.total_income)}</td>
+                    </tr>`;
+            });
+            document.getElementById('searchResultCount').textContent = `共 ${searchResults.length} 条`;
+            updateAddButton();
+            document.querySelectorAll('.search-cb').forEach(cb => {
+                cb.addEventListener('change', updateAddButton);
+            });
+        }
+
+        function updateAddButton() {
+            const checked = document.querySelectorAll('.search-cb:checked').length;
+            btnAddToList.disabled = checked === 0;
+        }
+
+        function addToList() {
+            const checked = document.querySelectorAll('.search-cb:checked');
+            checked.forEach(cb => {
+                const idx = parseInt(cb.dataset.idx);
+                const c = searchResults[idx];
+                if (c && !tempList.find(t => comboKey(t) === comboKey(c))) {
+                    tempList.push(c);
+                }
+            });
+            renderListTable();
+            document.querySelectorAll('.search-cb').forEach(cb => { cb.checked = false; });
+            selectAllSearch.checked = false;
+            updateAddButton();
+        }
+
+        function renderListTable() {
+            if (tempList.length === 0) {
+                listEmpty.style.display = 'block';
+                listContent.style.display = 'none';
+                listFilterMonth.disabled = true;
+                listFilterUnit.disabled = true;
+                listFilterSeq.disabled = true;
+                btnListFilterSelect.disabled = true;
+                btnListFilterDeselect.disabled = true;
+                btnClearList.disabled = true;
+                return;
+            }
+
+            btnClearList.disabled = false;
+            btnListFilterSelect.disabled = false;
+            btnListFilterDeselect.disabled = false;
+
+            const months = [...new Set(tempList.map(c => c.salary_month))].sort();
+            const unitMap = {};
+            tempList.forEach(c => { if (c.unit_name) unitMap[c.unit] = c.unit_name; });
+            const units = [...new Set(tempList.map(c => c.unit))].sort((a,b) => (unitMap[a]||'').localeCompare(unitMap[b]||''));
+            const seqs = [...new Set(tempList.map(c => c.seq))].sort();
+
+            listFilterMonth.disabled = false;
+            listFilterMonth.innerHTML = '<option value="">全部月份</option>' + months.map(m => `<option value="${m}">${m}</option>`).join('');
+            listFilterUnit.disabled = false;
+            listFilterUnit.innerHTML = '<option value="">全部结算单元</option>' + units.map(u => `<option value="${u}">${unitMap[u] || u} (${u})</option>`).join('');
+            listFilterSeq.disabled = false;
+            listFilterSeq.innerHTML = '<option value="">全部批次</option>' + seqs.map(s => `<option value="${s}">${s}</option>`).join('');
+
+            listTbody.innerHTML = '';
+            const statusMap = {0: '未确认', 1: '确认中', 2: '已确认'};
+            const statusClass = {0: 'text-danger', 1: 'text-warning', 2: 'text-success'};
+            tempList.forEach((c, i) => {
+                const s = c.status || 0;
+                listTbody.innerHTML += `
+                    <tr data-unit="${c.unit}" data-month="${c.salary_month}" data-seq="${c.seq}">
+                        <td><input class="form-check-input list-cb" type="checkbox" data-idx="${i}"></td>
+                        <td title="${c.unit}">${c.unit_name || c.unit}</td>
+                        <td>${c.pay_month || ''}</td>
+                        <td>${c.salary_month}</td>
+                        <td>${c.seq}</td>
+                        <td class="${statusClass[s] || ''}">${statusMap[s] || s}</td>
+                        <td>${c.person_count}</td>
+                        <td>${formatNum(c.total_income)}</td>
+                        <td><button class="btn btn-sm btn-outline-danger btn-remove" data-idx="${i}">删除</button></td>
+                    </tr>`;
+            });
+
+            document.querySelectorAll('.btn-remove').forEach(btn => {
+                btn.addEventListener('click', function() {
+                    tempList.splice(parseInt(this.dataset.idx), 1);
+                    renderListTable();
+                });
+            });
+            document.querySelectorAll('.list-cb').forEach(cb => {
+                cb.addEventListener('change', updateListSummary);
+            });
+            listEmpty.style.display = 'none';
+            listContent.style.display = 'block';
+            updateListSummary();
+        }
+
+        function getListVisibleRows() {
+            return Array.from(listTbody.querySelectorAll('tr')).filter(tr => {
+                if (listFilterMonth.value && tr.dataset.month !== listFilterMonth.value) return false;
+                if (listFilterUnit.value && tr.dataset.unit !== listFilterUnit.value) return false;
+                if (listFilterSeq.value && tr.dataset.seq !== listFilterSeq.value) return false;
+                return true;
+            });
+        }
+
+        function setFilteredCheckboxes(checked) {
+            getListVisibleRows().forEach(tr => { tr.querySelector('.list-cb').checked = checked; });
+            updateListSummary();
+        }
+
+        function setSearchCheckboxes(checked) {
+            document.querySelectorAll('.search-cb').forEach(cb => { cb.checked = checked; });
+            updateAddButton();
+        }
+
+        function setListCheckboxes(checked) {
+            document.querySelectorAll('.list-cb').forEach(cb => { cb.checked = checked; });
+            updateListSummary();
+        }
+
+        function getSelectedListCombos() {
+            const checked = document.querySelectorAll('.list-cb:checked');
             const selected = [];
             checked.forEach(cb => {
                 const idx = parseInt(cb.dataset.idx);
-                const c = currentSuggestions[idx];
+                const c = tempList[idx];
                 if (c) selected.push({ unit: c.unit, salary_month: c.salary_month, seq: c.seq });
             });
             return selected;
         }
 
-        function updateComboSummary() {
-            const checked = document.querySelectorAll('.combo-cb:checked');
-            const allCbs = document.querySelectorAll('.combo-cb');
-            selectComboAll.checked = allCbs.length > 0 && checked.length === allCbs.length;
-            selectComboAll.indeterminate = checked.length > 0 && checked.length < allCbs.length;
+        function updateListSummary() {
+            const visibleCbs = getListVisibleRows().map(tr => tr.querySelector('.list-cb'));
+            const checkedVisible = visibleCbs.filter(cb => cb.checked);
+            const totalChecked = document.querySelectorAll('.list-cb:checked');
 
             let persons = 0, income = 0;
-            checked.forEach(cb => {
-                const c = currentSuggestions[parseInt(cb.dataset.idx)];
+            totalChecked.forEach(cb => {
+                const c = tempList[parseInt(cb.dataset.idx)];
                 if (c) { persons += c.person_count; income += c.total_income; }
             });
-            comboSummary.textContent = `已选择 ${checked.length} 个批次，共 ${persons} 人，合计收入 ${formatNum(income)} 元`;
+
+            const isFiltering = listFilterMonth.value || listFilterUnit.value || listFilterSeq.value;
+            const filterInfo = isFiltering ? `（筛选后 ${checkedVisible.length}/${visibleCbs.length} 行被选中）` : '';
+            listSummary.textContent = `已选择 ${totalChecked.length} 个批次，共 ${persons} 人，合计收入 ${formatNum(income)} 元 ${filterInfo}`;
+        }
+
+        function clearList() {
+            tempList = [];
+            renderListTable();
+        }
+
+        function exportList() {
+            if (tempList.length === 0) return;
+            const header = '结算单元名称,结算单元ID,所属月份,发放月份,批次,人数,合计收入';
+            const rows = tempList.map(c =>
+                `${(c.unit_name || '').replace(/,/g, '，')},${c.unit},${c.salary_month},${c.pay_month || ''},${c.seq},${c.person_count},${c.total_income}`
+            );
+            const bom = '\uFEFF';
+            const csv = bom + header + '\n' + rows.join('\n');
+            const blob = new Blob([csv], { type: 'text/csv;charset=utf-8' });
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = `待报列表_${new Date().toISOString().slice(0,10)}.csv`;
+            a.click();
+            URL.revokeObjectURL(url);
+        }
+
+        async function importNames() {
+            const file = importNamesFile.files[0];
+            if (!file) return;
+            const text = await file.text();
+            const lines = text.split(/\r?\n/).filter(l => l.trim());
+            const names = [];
+            for (const line of lines) {
+                const parts = line.split(/[,\t]/);
+                const name = (parts[0] || '').trim().replace(/"/g, '');
+                if (name && name !== '结算单元名称' && name !== '结算单元') names.push(name);
+            }
+            if (names.length === 0) { showError('文件中未找到结算单元名称'); return; }
+
+            hideError();
+            searchLoading.style.display = 'block';
+            searchEmpty.style.display = 'none';
+            searchContent.style.display = 'none';
+            btnImportNames.disabled = true;
+
+            searchResults = [];
+            for (const name of names) {
+                try {
+                    const params = new URLSearchParams({ unit_name: name });
+                    if (searchConfirmedOnly.checked) params.set('status', '2');
+                    const resp = await fetch(`/api/tc8m/search?${params}`);
+                    if (!resp.ok) continue;
+                    const data = await resp.json();
+                    for (const c of (data.results || [])) {
+                        if (!searchResults.find(t => comboKey(t) === comboKey(c))) {
+                            searchResults.push(c);
+                        }
+                    }
+                } catch (e) { /* skip */ }
+            }
+
+            searchLoading.style.display = 'none';
+            importNamesFile.value = '';
+            btnImportNames.disabled = false;
+
+            if (searchResults.length === 0) {
+                searchEmpty.textContent = `导入 ${names.length} 个名称，未找到匹配结果`;
+                searchEmpty.style.display = 'block';
+            } else {
+                renderSearchTable();
+                searchContent.style.display = 'block';
+            }
+        }
+
+        function downloadTemplate() {
+            const csv = '\uFEFF结算单元名称\n吉林大学A\n吉林大学B\n供应粮油吉林有限公司\n';
+            const blob = new Blob([csv], { type: 'text/csv;charset=utf-8' });
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = '结算单元名称导入模板.csv';
+            a.click();
+            URL.revokeObjectURL(url);
         }
 
         async function generate() {
@@ -616,8 +928,10 @@
             if (!month) { showError('请选择月份'); return; }
             const templates = getSelectedTemplates();
             if (templates.length === 0) { showError('请选择至少一个模板'); return; }
+            if (tempList.length === 0) { showError('请先搜索并添加报税批次到待报列表'); return; }
 
-            const confirmedCombos = currentSuggestions.length > 0 ? getSelectedCombos() : null;
+            const confirmedCombos = getSelectedListCombos();
+            if (confirmedCombos.length === 0) { showError('请在待报列表中勾选要报送的批次'); return; }
 
             btnGenerate.disabled = true;
             loadingDiv.style.display = 'block';
@@ -625,10 +939,7 @@
             validationReport.style.display = 'none';
 
             try {
-                const body = { month: parseInt(month), templates };
-                if (confirmedCombos !== null && confirmedCombos.length > 0) {
-                    body.confirmed_combos = confirmedCombos;
-                }
+                const body = { month: parseInt(month), templates, confirmed_combos: confirmedCombos };
                 const resp = await fetch('/api/generate', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
