@@ -866,7 +866,15 @@
         async function importNames() {
             const file = importNamesFile.files[0];
             if (!file) return;
-            const text = await file.text();
+            const buf = await file.arrayBuffer();
+            let text;
+            try {
+                const decoder = new TextDecoder('utf-8');
+                text = decoder.decode(buf);
+                if (text.includes('\uFFFD')) throw new Error('not utf-8');
+            } catch {
+                text = new TextDecoder('gbk').decode(buf);
+            }
             const lines = text.split(/\r?\n/).filter(l => l.trim());
             const names = [];
             for (const line of lines) {
