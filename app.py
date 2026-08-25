@@ -3,8 +3,8 @@ import atexit
 import os
 from flask import Flask, render_template, request, jsonify, send_file
 from db import init_db, get_connection, close_db
-from queries import get_available_months, get_salary_records, get_personnel_info, get_suggestions, search_tc8m
-from templates_gen.normal_salary import generate_normal_salary
+from queries import get_available_months, get_salary_records, get_personnel_info, get_suggestions, search_tc8m, get_abnormal_records, get_tc93_all_fields
+from templates_gen.normal_salary import generate_normal_salary, generate_tc93_full_sheet, generate_abnormal_sheet
 from templates_gen.labor_service import generate_labor_service
 from templates_gen.annual_bonus import generate_annual_bonus
 from templates_gen.personnel_info import generate_personnel_info
@@ -82,18 +82,23 @@ def api_generate():
         conn = get_connection()
         records = get_salary_records(conn, month)
         personnel = get_personnel_info(conn, month)
+        tc93_all = get_tc93_all_fields(conn, month)
+        abnormal = get_abnormal_records(conn, month)
+        abnormal_reasons = {r.get("ATC930"): f"ATC93G={r.get('ATC93G', 'NULL')}(未结算)" for r in abnormal}
         
-        if not records:
+        if not records and not abnormal:
             return jsonify({"error": f"月份 {month} 无工资数据"}), 400
 
         if confirmed_combos is not None:
             combo_set = {(c["unit"], c["salary_month"], c["seq"]) for c in confirmed_combos}
             records = [r for r in records if (r.结算单元, r.工资所属年月, r.当月批次) in combo_set]
+            abnormal = [r for r in abnormal if (r.get("ATB930"), r.get("ATC931"), r.get("ATC937")) in combo_set]
         
         results = []
         for tpl in templates:
             if tpl == "normalSalary":
-                r = generate_normal_salary(records, f"劳务派遣人员工资发放表{month}", OUTPUT_DIR)
+                r = generate_normal_salary(records, f"劳务派遣人员工资发放表{month}", OUTPUT_DIR,
+                                           tc93_all=tc93_all, abnormal=abnormal, abnormal_reasons=abnormal_reasons)
             elif tpl == "laborService":
                 r = generate_labor_service(records, f"劳务派遣人员工资发放表{month}", OUTPUT_DIR)
             elif tpl == "annualBonus":
@@ -111,7 +116,11 @@ def api_generate():
                 "download_url": f"/api/download/{os.path.basename(r.file_path)}"
             })
         
-        return jsonify({"files": results})
+        return jsonify({
+            "files": results,
+            "abnormal_count": len(abnormal),
+            "tc93_total_count": len(tc93_all)
+        })
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 

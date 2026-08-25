@@ -1,8 +1,9 @@
 """正常工资薪金所得模板生成器 - 精确复制 demo TemplateFiller.cs 算法"""
 from datetime import datetime
-from typing import List
+from typing import List, Optional
 import os
 from openpyxl import Workbook
+from openpyxl.utils import get_column_letter
 from models import SalaryRecord, GenerateResult
 from templates_gen.formulas import calc_本期收入, calc_免税
 
@@ -19,8 +20,14 @@ def extract_remark(title: str) -> str:
     return t if t else title
 
 
-def generate_normal_salary(records: List[SalaryRecord], title: str, output_dir: str) -> GenerateResult:
-    """生成正常工资薪金所得 Excel 模板"""
+def generate_normal_salary(records: List[SalaryRecord], title: str, output_dir: str,
+                           tc93_all: Optional[List[dict]] = None,
+                           abnormal: Optional[List[dict]] = None,
+                           abnormal_reasons: Optional[dict] = None) -> GenerateResult:
+    """生成正常工资薪金所得 Excel 模板
+
+    新增 tc93_all: TC93总表(全字段), abnormal: 异常记录, abnormal_reasons: 过滤原因
+    """
     os.makedirs(output_dir, exist_ok=True)
     timestamp = datetime.now().strftime("%Y%m%d%H%M%S")
     output_path = os.path.join(output_dir, f"正常工资薪金所得_{timestamp}.xlsx")
@@ -86,6 +93,11 @@ def generate_normal_salary(records: List[SalaryRecord], title: str, output_dir: 
         vs.cell(row=idx+1, column=5, value=v["差值"])
         vs.cell(row=idx+1, column=6, value="通过" if v["通过"] else "失败")
     
+    if tc93_all:
+        generate_tc93_full_sheet(wb, tc93_all)
+    if abnormal:
+        generate_abnormal_sheet(wb, abnormal, abnormal_reasons or {})
+    
     wb.save(output_path)
     
     pass_count = sum(1 for v in validations if v["通过"])
@@ -98,3 +110,38 @@ def generate_normal_salary(records: List[SalaryRecord], title: str, output_dir: 
         validation_pass=pass_count,
         validation_fail=fail_count
     )
+
+
+def generate_tc93_full_sheet(wb: Workbook, tc93_all: List[dict]):
+    """在工作簿中新增 TC93总表 sheet，包含所有字段。"""
+    if not tc93_all:
+        return
+    ws = wb.create_sheet("TC93总表")
+    cols = list(tc93_all[0].keys())
+    for col_idx, col_name in enumerate(cols, 1):
+        ws.cell(row=1, column=col_idx, value=col_name)
+    for row_idx, rec in enumerate(tc93_all, 2):
+        for col_idx, col_name in enumerate(cols, 1):
+            ws.cell(row=row_idx, column=col_idx, value=rec.get(col_name))
+    # 自动列宽
+    for col_idx, col_name in enumerate(cols, 1):
+        ws.column_dimensions[get_column_letter(col_idx)].width = max(10, min(25, len(str(col_name)) * 1.5))
+
+
+def generate_abnormal_sheet(wb: Workbook, abnormal: List[dict], reasons: dict):
+    """异常记录sheet，列出被状态过滤的条目及原因。"""
+    if not abnormal:
+        return
+    ws = wb.create_sheet("异常记录(已过滤)")
+    base_cols = ["AAC001", "AAC003", "ATC931", "ATC937", "ATC930", "ATB930", "ATC93AA", "ATC93C", "ATC93D", "ATC93G", "ATC93N", "ATC93U", "ATC93V", "ATC93W", "ATC93AE"]
+    headers = ["职工号", "姓名", "所属年月", "批次", "流水号", "结算单元", "工资总额", "实发金额", "个税", "结算状态", "上月工资", "可发情况", "费用状态", "个人欠费", "偿还", "过滤原因"]
+    for col_idx, h in enumerate(headers, 1):
+        ws.cell(row=1, column=col_idx, value=h)
+    for row_idx, rec in enumerate(abnormal, 2):
+        tc930 = rec.get("ATC930")
+        for col_idx, col_name in enumerate(base_cols, 1):
+            ws.cell(row=row_idx, column=col_idx, value=rec.get(col_name))
+        ws.cell(row=row_idx, column=len(base_cols) + 1, value=reasons.get(tc930, "状态异常"))
+    # 自动列宽
+    for col_idx, h in enumerate(headers, 1):
+        ws.column_dimensions[get_column_letter(col_idx)].width = max(10, min(25, len(str(h)) * 1.5))

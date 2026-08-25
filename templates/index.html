@@ -1073,6 +1073,14 @@
                 if (!resp.ok || data.error) { showError(data.error || '生成失败，请稍后重试'); return; }
 
                 resultsTbody.innerHTML = '';
+                if (data.abnormal_count > 0) {
+                    resultsTbody.innerHTML += `
+                        <tr>
+                            <td colspan="6" class="text-warning">
+                                ⚠ 异常过滤: ${data.tc93_total_count} 条总数据中，${data.abnormal_count} 条因状态异常被过滤，${data.tc93_total_count - data.abnormal_count} 条正常报税
+                            </td>
+                        </tr>`;
+                }
                 if (data.files && data.files.length > 0) {
                     data.files.forEach(f => {
                         const passClass = f.validation_fail > 0 ? 'validation-fail' : 'validation-pass';

@@ -104,10 +104,10 @@ def get_available_months(conn) -> List[MonthOption]:
 
 
 def get_salary_records(conn, month: int) -> List[SalaryRecord]:
-    """按工资所属年月查询工资记录 (TC93 + AC01 左连接)。
+    """按工资所属年月查询正常工资记录 (TC93 + AC01 左连接)。
 
-    SQL 按规范选择全字段; 其中 基本工资/加班费/餐补/岗位工资/绩效奖金/
-    tc930_id 在 models.SalaryRecord 中暂无对应字段, 仅作预留不映射。
+    仅返回 ATC93G='1'(已结算) 的正常记录。
+    异常记录(ATC93G≠1 或 NULL)需通过 get_abnormal_records 单独查询。
     """
     sql = """
         SELECT
@@ -140,6 +140,7 @@ def get_salary_records(conn, month: int) -> List[SalaryRecord]:
         FROM TC93 t93
         LEFT JOIN AC01 ac01 ON t93.AAC001 = ac01.AAC001
         WHERE t93.ATC931 = :month
+          AND t93.ATC93G = '1'
         ORDER BY t93.AAC003
     """
     records = []
@@ -169,6 +170,37 @@ def get_salary_records(conn, month: int) -> List[SalaryRecord]:
                 补发3=Decimal(str(row[24] or 0)),
             ))
     return records
+
+
+def get_abnormal_records(conn, month: int) -> List[dict]:
+    """查询因状态字段异常被过滤的TC93记录 (ATC93G≠1 或 NULL)。"""
+    sql = """
+        SELECT t93.*, ac01.AAC002 AS 身份证
+        FROM TC93 t93
+        LEFT JOIN AC01 ac01 ON t93.AAC001 = ac01.AAC001
+        WHERE t93.ATC931 = :month
+          AND (t93.ATC93G != '1' OR t93.ATC93G IS NULL)
+        ORDER BY t93.AAC003
+    """
+    with conn.cursor() as cursor:
+        cursor.execute(sql, {"month": month})
+        cols = [d[0] for d in cursor.description]
+        return [dict(zip(cols, row)) for row in cursor.fetchall()]
+
+
+def get_tc93_all_fields(conn, month: int) -> List[dict]:
+    """查询指定月份TC93全部字段，供导出总表使用。"""
+    sql = """
+        SELECT t93.*, ac01.AAC002 AS 身份证
+        FROM TC93 t93
+        LEFT JOIN AC01 ac01 ON t93.AAC001 = ac01.AAC001
+        WHERE t93.ATC931 = :month
+        ORDER BY t93.AAC003
+    """
+    with conn.cursor() as cursor:
+        cursor.execute(sql, {"month": month})
+        cols = [d[0] for d in cursor.description]
+        return [dict(zip(cols, row)) for row in cursor.fetchall()]
 
 
 def get_deduction_details(conn, atc930_list: List[int]) -> Dict[int, DeductionInfo]:
