@@ -84,9 +84,18 @@
     </div>
 
     <div id="combosCard" class="card" style="display:none;">
-        <div class="card-header d-flex justify-content-between align-items-center">
+        <div class="card-header d-flex justify-content-between align-items-center flex-wrap gap-2">
             <strong>按结算单元·所属月份·批次报送情况</strong>
-            <span class="text-muted" id="combosPageInfo"></span>
+            <div class="d-flex gap-2">
+                <select id="comboStatusFilter" class="form-select form-select-sm" style="width:auto;">
+                    <option value="">全部状态</option>
+                    <option value="all">全部报送</option>
+                    <option value="partial">部分报送</option>
+                    <option value="none">全部未报送</option>
+                </select>
+                <input type="text" id="comboSearch" class="form-control form-control-sm" placeholder="名称/ID模糊搜索" style="width:200px;">
+                <button id="comboFilterBtn" class="btn btn-sm btn-outline-primary">筛选</button>
+            </div>
         </div>
         <div class="card-body">
             <div class="table-responsive">
@@ -221,6 +230,7 @@
     document.getElementById('btnFilter').addEventListener('click', queryDetails);
 
     let combosData = [];
+    let combosFiltered = [];
     let detailsData = [];
     let combosPage = 1;
     let detailsPage = 1;
@@ -255,8 +265,28 @@
     document.getElementById('detailsNext').addEventListener('click', () => { if (detailsPage * pageSize('details') < detailsData.length) { detailsPage++; renderDetails(); } });
     document.getElementById('combosJumpBtn').addEventListener('click', () => jumpPage('combos'));
     document.getElementById('detailsJumpBtn').addEventListener('click', () => jumpPage('details'));
+    document.getElementById('comboFilterBtn').addEventListener('click', filterCombos);
+    document.getElementById('comboSearch').addEventListener('keydown', e => { if (e.key === 'Enter') filterCombos(); });
     bindPageSize('combos', p => { combosPage = p; renderCombos(); });
     bindPageSize('details', p => { detailsPage = p; renderDetails(); });
+
+    function filterCombos() {
+        const st = document.getElementById('comboStatusFilter').value;
+        const kw = document.getElementById('comboSearch').value.trim().toLowerCase();
+        combosFiltered = combosData.filter(c => {
+            if (st === 'all' && c.unreported !== 0) return false;
+            if (st === 'partial' && !(c.reported > 0 && c.unreported > 0)) return false;
+            if (st === 'none' && c.reported !== 0) return false;
+            if (kw) {
+                const name = (c.unit_name || '').toLowerCase();
+                const id = String(c.unit);
+                if (!name.includes(kw) && !id.includes(kw)) return false;
+            }
+            return true;
+        });
+        combosPage = 1;
+        renderCombos();
+    }
 
     function jumpPage(prefix) {
         const totalPages = Math.max(1, Math.ceil((prefix === 'combos' ? combosData : detailsData).length / pageSize(prefix)));
@@ -281,6 +311,7 @@
         document.getElementById('statsCard').style.display = 'block';
 
         combosData = data.combos;
+        combosFiltered = data.combos;
         combosPage = 1;
         renderCombos();
         document.getElementById('combosCard').style.display = 'block';
@@ -291,20 +322,20 @@
         const comboStatus = c => c.unreported === 0 ? '<span class="status-ok">全部报送</span>' :
             c.reported === 0 ? '<span class="status-no">全部未报送</span>' : '<span class="status-diff">部分报送</span>';
         const ps = pageSize('combos');
-        const totalPages = Math.max(1, Math.ceil(combosData.length / ps));
+        const totalPages = Math.max(1, Math.ceil(combosFiltered.length / ps));
         if (combosPage > totalPages) combosPage = totalPages;
         const start = (combosPage - 1) * ps;
-        const page = combosData.slice(start, start + ps);
+        const page = combosFiltered.slice(start, start + ps);
         document.getElementById('combosTbody').innerHTML = page.map((c, i) => `
             <tr>
                 <td>${start + i + 1}</td><td>${c.unit_name || c.unit}</td><td>${c.unit}</td><td>${c.month}</td><td>${c.seq}</td>
                 <td>${c.count}</td><td class="status-ok">${c.reported}</td><td class="status-no">${c.unreported}</td>
                 <td>${comboStatus(c)}</td>
             </tr>`).join('');
-        document.getElementById('combosCount').textContent = `共 ${combosData.length} 条`;
+        document.getElementById('combosCount').textContent = `共 ${combosFiltered.length} 条`;
         document.getElementById('combosPageInfo').textContent = `第 ${combosPage}/${totalPages} 页`;
         document.getElementById('combosPrev').disabled = combosPage <= 1;
-        document.getElementById('combosNext').disabled = combosPage * ps >= combosData.length;
+        document.getElementById('combosNext').disabled = combosPage * ps >= combosFiltered.length;
     }
 
     async function queryDetails() {
