@@ -182,6 +182,8 @@ def get_system_aggregate(conn, pay_month):
                     "tax": rec.个人所得税,
                     "unit": rec.结算单元,
                     "unit_keys": {combo},
+                    "entries": [{"unit": rec.结算单元, "month": rec.工资所属年月,
+                                 "seq": rec.当月批次, "income": float(income), "tax": float(rec.个人所得税)}],
                     "month": rec.工资所属年月,
                     "seq": rec.当月批次,
                 }
@@ -191,6 +193,8 @@ def get_system_aggregate(conn, pay_month):
                 cur["insurance"] += rec.养老个人 + rec.医疗个人 + rec.失业个人 + rec.公积金个人
                 cur["tax"] += rec.个人所得税
                 cur["unit_keys"].add(combo)
+                cur["entries"].append({"unit": rec.结算单元, "month": rec.工资所属年月,
+                                       "seq": rec.当月批次, "income": float(income), "tax": float(rec.个人所得税)})
     return agg, combos
 
 
@@ -213,10 +217,20 @@ def compare_month(conn, month):
             periods_list.append("、".join(f"{m}-批{s}" for m, s, _ in sorted(items, key=lambda x: (x[0], str(x[1])))))
         uname = "、".join(unit_names_list)
         uperiods = " | ".join(periods_list)
+        entries = []
+        for e in s.get("entries", []):
+            ekey = (e["unit"], e["month"], e["seq"])
+            entries.append({
+                "unit_name": unit_names.get(ekey, "") or str(e["unit"]),
+                "month": e["month"], "seq": e["seq"],
+                "income": round(e["income"], 2), "tax": round(e["tax"], 2),
+            })
+        entries.sort(key=lambda x: (x["month"], str(x["seq"])))
         r = returns.get(cert)
         if r is None:
             details.append({
                 "cert_no": cert, "name": s["name"], "month": month, "unit_name": uname, "unit_periods": uperiods,
+                "entries": entries,
                 "sys_income": round(float(s["income"]), 2), "sys_tax": round(float(s["tax"]), 2),
                 "ret_tax": None, "diff": None, "status": "未报送",
             })
@@ -225,6 +239,7 @@ def compare_month(conn, month):
             income_diff = round(abs(float(s["income"]) - float(r["income"])), 2)
             details.append({
                 "cert_no": cert, "name": s["name"], "month": month, "unit_name": uname, "unit_periods": uperiods,
+                "entries": entries,
                 "sys_income": round(float(s["income"]), 2), "ret_income": r["income"], "income_diff": income_diff,
                 "sys_tax": round(float(s["tax"]), 2), "ret_tax": r["tax_due"], "diff": diff,
                 "status": "已报送" if diff <= 0.01 else "有差异",
