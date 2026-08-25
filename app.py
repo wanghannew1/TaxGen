@@ -61,7 +61,8 @@ def api_tc8m_search():
         pay_month = int(request.args.get("pay_month", 0) or 0)
         seq = request.args.get("seq", "").strip()
         status = int(request.args.get("status", -1) or -1)
-        results = search_tc8m(conn, unit_name, salary_month, pay_month, seq, status)
+        handler = request.args.get("handler", "").strip()
+        results = search_tc8m(conn, unit_name, salary_month, pay_month, seq, status, handler)
         return jsonify({"results": results})
     except Exception as e:
         return jsonify({"error": str(e)}), 500

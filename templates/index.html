@@ -335,6 +335,10 @@
                         <input type="text" id="searchSeq" class="form-control form-control-sm" placeholder="批次号">
                     </div>
                     <div class="col-md-2">
+                        <label class="form-label form-label-sm">经办人</label>
+                        <input type="text" id="searchHandler" class="form-control form-control-sm" placeholder="经办人">
+                    </div>
+                    <div class="col-md-1">
                         <label class="form-label form-label-sm">&nbsp;</label>
                         <div>
                             <div class="form-check form-check-inline mt-1">
@@ -556,6 +560,7 @@
         const searchUnitName = document.getElementById('searchUnitName');
         const searchSalaryMonth = document.getElementById('searchSalaryMonth');
         const searchSeq = document.getElementById('searchSeq');
+        const searchHandler = document.getElementById('searchHandler');
         const btnSearch = document.getElementById('btnSearch');
         const btnAddToList = document.getElementById('btnAddToList');
         const btnSearchSelectAll = document.getElementById('btnSearchSelectAll');
@@ -704,6 +709,7 @@
                     if (searchSalaryMonth.value) params.set('salary_month', searchSalaryMonth.value);
                     if (monthSelect.value && !searchSalaryMonth.value) params.set('pay_month', monthSelect.value);
                     if (searchSeq.value.trim()) params.set('seq', searchSeq.value.trim());
+                    if (searchHandler.value.trim()) params.set('handler', searchHandler.value.trim());
                     if (searchConfirmedOnly.checked) params.set('status', '2');
 
                     const resp = await fetch(`/api/tc8m/search?${params}`);
@@ -738,6 +744,7 @@
             if (monthSelect.value && !searchSalaryMonth.value) importParams.set('pay_month', monthSelect.value);
             if (searchSalaryMonth.value) importParams.set('salary_month', searchSalaryMonth.value);
             if (searchSeq.value.trim()) importParams.set('seq', searchSeq.value.trim());
+            if (searchHandler.value.trim()) importParams.set('handler', searchHandler.value.trim());
             if (searchConfirmedOnly.checked) importParams.set('status', '2');
 
             searchResults = [];
@@ -987,6 +994,7 @@
             if (monthSelect.value && !searchSalaryMonth.value) importParams.set('pay_month', monthSelect.value);
             if (searchSalaryMonth.value) importParams.set('salary_month', searchSalaryMonth.value);
             if (searchSeq.value.trim()) importParams.set('seq', searchSeq.value.trim());
+            if (searchHandler.value.trim()) importParams.set('handler', searchHandler.value.trim());
             if (searchConfirmedOnly.checked) importParams.set('status', '2');
 
             for (const name of names) {

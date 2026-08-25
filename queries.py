@@ -298,7 +298,8 @@ def get_suggestions(conn, pay_month: int) -> List[dict]:
 
 
 def search_tc8m(conn, unit_name: str = "", salary_month: int = 0,
-                pay_month: int = 0, seq: str = "", status: int = -1) -> List[dict]:
+                pay_month: int = 0, seq: str = "", status: int = -1,
+                handler: str = "") -> List[dict]:
     """查询 TC8M 批次数据。status=-1 表示不限状态，默认只返回已确认(status=2)。"""
     conditions = []
     binds = {}
@@ -319,6 +320,9 @@ def search_tc8m(conn, unit_name: str = "", salary_month: int = 0,
     if seq:
         conditions.append("m.ATC937 = :seq")
         binds["seq"] = seq
+    if handler:
+        conditions.append("m.AAE019 LIKE :handler")
+        binds["handler"] = f"%{handler}%"
 
     where = " AND ".join(conditions)
     sql = f"""
