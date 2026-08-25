@@ -3,7 +3,7 @@ import atexit
 import os
 from flask import Flask, render_template, request, jsonify, send_file
 from db import init_db, get_connection, close_db
-from queries import get_available_months, get_salary_records, get_personnel_info, get_suggestions, search_tc8m, get_abnormal_records, get_tc93_all_fields
+from queries import get_available_months, get_salary_records, get_personnel_info, get_suggestions, search_tc8m, get_abnormal_records, get_tc93_all_fields, get_tc93_field_comments
 from templates_gen.normal_salary import generate_normal_salary, generate_tc93_full_sheet, generate_abnormal_sheet
 from templates_gen.labor_service import generate_labor_service
 from templates_gen.annual_bonus import generate_annual_bonus
@@ -117,7 +117,8 @@ def api_generate():
                 r = generate_normal_salary(records, file_title, OUTPUT_DIR,
                                            tc93_all=tc93_all, abnormal=abnormal,
                                            abnormal_reasons=abnormal_reasons,
-                                           combos=confirmed_combos)
+                                           combos=confirmed_combos,
+                                           tc93_comments=get_tc93_field_comments(conn))
             elif tpl == "laborService":
                 r = generate_labor_service(records, f"劳务派遣人员工资发放表{month}", OUTPUT_DIR)
             elif tpl == "annualBonus":

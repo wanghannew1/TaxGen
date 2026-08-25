@@ -24,7 +24,8 @@ def generate_normal_salary(records: List[SalaryRecord], title: str, output_dir: 
                            tc93_all: Optional[List[dict]] = None,
                            abnormal: Optional[List[dict]] = None,
                            abnormal_reasons: Optional[dict] = None,
-                           combos: Optional[List[dict]] = None) -> GenerateResult:
+                           combos: Optional[List[dict]] = None,
+                           tc93_comments: Optional[dict] = None) -> GenerateResult:
     """生成正常工资薪金所得 Excel 模板
 
     新增 tc93_all: TC93总表(全字段), abnormal: 异常记录, abnormal_reasons: 过滤原因
@@ -101,7 +102,7 @@ def generate_normal_salary(records: List[SalaryRecord], title: str, output_dir: 
         vs.cell(row=idx+1, column=7, value="通过" if v["通过"] else "失败")
     
     if tc93_all:
-        generate_tc93_full_sheet(wb, tc93_all)
+        generate_tc93_full_sheet(wb, tc93_all, tc93_comments)
     if abnormal:
         generate_abnormal_sheet(wb, abnormal, abnormal_reasons or {})
     if combos:
@@ -122,18 +123,19 @@ def generate_normal_salary(records: List[SalaryRecord], title: str, output_dir: 
     )
 
 
-def generate_tc93_full_sheet(wb: Workbook, tc93_all: List[dict]):
-    """TC93总表 sheet，包含所有字段。"""
+def generate_tc93_full_sheet(wb: Workbook, tc93_all: List[dict], comments: Optional[dict] = None):
+    """TC93总表 sheet：第1行字段注释，第2行字段名，数据从第3行。"""
     if not tc93_all:
         return
     ws = wb.create_sheet("TC93总表")
     cols = list(tc93_all[0].keys())
     for col_idx, col_name in enumerate(cols, 1):
-        ws.cell(row=1, column=col_idx, value=col_name)
-    for row_idx, rec in enumerate(tc93_all, 2):
+        comment = (comments or {}).get(col_name, "")
+        ws.cell(row=1, column=col_idx, value=comment if comment else col_name)
+        ws.cell(row=2, column=col_idx, value=col_name)
+    for row_idx, rec in enumerate(tc93_all, 3):
         for col_idx, col_name in enumerate(cols, 1):
             ws.cell(row=row_idx, column=col_idx, value=rec.get(col_name))
-    # 自动列宽
     for col_idx, col_name in enumerate(cols, 1):
         ws.column_dimensions[get_column_letter(col_idx)].width = max(10, min(25, len(str(col_name)) * 1.5))
 

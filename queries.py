@@ -199,6 +199,20 @@ def get_abnormal_records(conn, month: int) -> List[dict]:
         return [dict(zip(cols, row)) for row in cursor.fetchall()]
 
 
+def get_tc93_field_comments(conn) -> Dict[str, str]:
+    """查询 TC93 全部字段的 Oracle 注释，供总表导出列头说明使用。"""
+    comments = {}
+    with conn.cursor() as cursor:
+        cursor.execute("""
+            SELECT column_name, comments FROM all_col_comments
+            WHERE table_name = 'TC93'
+        """)
+        for row in cursor.fetchall():
+            comments[str(row[0])] = str(row[1] or "")
+    comments["身份证"] = "公民身份号码"
+    return comments
+
+
 def get_tc93_all_fields(conn, month: int) -> List[dict]:
     """查询指定月份TC93全部字段，供导出总表使用。"""
     sql = """

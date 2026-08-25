@@ -316,4 +316,4 @@ class TestGenerateEndToEnd:
         wb = load_workbook(result.file_path)
         if "TC93总表" in wb.sheetnames:
             ws = wb["TC93总表"]
-            assert ws.max_row <= len(tc93_all) + 1
+            assert ws.max_row <= len(tc93_all) + 2
