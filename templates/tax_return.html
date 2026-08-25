@@ -1,0 +1,229 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>报税状态统计 - 个税模板填表工具</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+    <style>
+        body { background: #f5f6fa; }
+        .container { max-width: 1400px; }
+        .card { margin-bottom: 1rem; box-shadow: 0 1px 3px rgba(0,0,0,.1); }
+        .stat-card { text-align: center; padding: 1rem; }
+        .stat-card .num { font-size: 1.8rem; font-weight: 700; }
+        .stat-ok { color: #198754; }
+        .stat-warn { color: #fd7e14; }
+        .stat-danger { color: #dc3545; }
+        .stat-info { color: #0d6efd; }
+        .status-ok { color: #198754; font-weight: 600; }
+        .status-diff { color: #fd7e14; font-weight: 600; }
+        .status-no { color: #dc3545; font-weight: 600; }
+        .status-other { color: #6c757d; font-weight: 600; }
+        .table-responsive { max-height: 500px; overflow-y: auto; }
+        .sticky-top { background: #fff; }
+        .nav-link.active { font-weight: 600; }
+        .badge-warn { background: #fff3cd; color: #856404; border: 1px solid #ffeeba; border-radius: 4px; padding: 4px 8px; }
+    </style>
+</head>
+<body>
+<nav class="navbar navbar-dark bg-primary">
+    <div class="container">
+        <span class="navbar-brand">个税模板填表工具</span>
+        <div class="d-flex">
+            <a href="/" class="nav-link text-white">报税数据生成</a>
+            <a href="/tax-return" class="nav-link text-white active fw-bold">报税状态统计</a>
+        </div>
+    </div>
+</nav>
+
+<div class="container py-3">
+    <div class="card">
+        <div class="card-header"><strong>回盘数据导入</strong></div>
+        <div class="card-body">
+            <div class="row g-2 align-items-end">
+                <div class="col-md-3">
+                    <label class="form-label">回盘文件（税务局个税端导出 xls/xlsx/csv）</label>
+                    <input type="file" id="returnFile" class="form-control" accept=".xls,.xlsx,.csv">
+                </div>
+                <div class="col-md-2">
+                    <button id="btnImport" class="btn btn-primary w-100">导入回盘数据</button>
+                </div>
+                <div class="col-md-4">
+                    <span id="importMsg" class="badge-warn"></span>
+                </div>
+            </div>
+            <div class="mt-3 row g-2 align-items-end">
+                <div class="col-md-3">
+                    <label class="form-label">统计月份</label>
+                    <select id="monthSelect" class="form-select">
+                        <option value="">请选择月份</option>
+                    </select>
+                </div>
+                <div class="col-md-2">
+                    <button id="btnQuery" class="btn btn-outline-primary w-100">查询统计</button>
+                </div>
+                <div class="col-md-2">
+                    <button id="btnExport" class="btn btn-outline-success w-100">导出统计Excel</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <div id="statsCard" class="card" style="display:none;">
+        <div class="card-header"><strong>报税状态概览（<span id="statMonth"></span>）</strong></div>
+        <div class="card-body">
+            <div class="row">
+                <div class="col-md-2 col-sm-4 stat-card"><div class="stat-info num" id="statTotal">0</div><div class="text-muted">系统应报人数</div></div>
+                <div class="col-md-2 col-sm-4 stat-card"><div class="stat-ok num" id="statReported">0</div><div class="text-muted">已报送</div></div>
+                <div class="col-md-2 col-sm-4 stat-card"><div class="stat-warn num" id="statDiff">0</div><div class="text-muted">个税有差异</div></div>
+                <div class="col-md-2 col-sm-4 stat-card"><div class="stat-danger num" id="statUnreported">0</div><div class="text-muted">未报送</div></div>
+                <div class="col-md-2 col-sm-4 stat-card"><div class="stat-info num" id="statNoSys">0</div><div class="text-muted">系统无记录(回盘)</div></div>
+            </div>
+        </div>
+    </div>
+
+    <div id="combosCard" class="card" style="display:none;">
+        <div class="card-header"><strong>按结算单元·所属月份·批次报送情况</strong></div>
+        <div class="card-body">
+            <div class="table-responsive">
+                <table class="table table-sm table-striped table-hover mb-0">
+                    <thead class="sticky-top">
+                        <tr>
+                            <th>结算单元</th><th>所属月份</th><th>批次</th>
+                            <th>人数</th><th>已报送</th><th>未报送</th><th>状态</th>
+                        </tr>
+                    </thead>
+                    <tbody id="combosTbody"></tbody>
+                </table>
+            </div>
+        </div>
+    </div>
+
+    <div id="detailsCard" class="card" style="display:none;">
+        <div class="card-header d-flex justify-content-between align-items-center">
+            <strong>按个人·月份报送明细</strong>
+            <div class="d-flex gap-2">
+                <select id="statusFilter" class="form-select form-select-sm" style="width:auto;">
+                    <option value="">全部状态</option>
+                    <option value="已报送">已报送</option>
+                    <option value="有差异">有差异</option>
+                    <option value="未报送">未报送</option>
+                    <option value="系统无记录">系统无记录</option>
+                </select>
+                <input type="text" id="nameFilter" class="form-control form-control-sm" placeholder="姓名/证件号" style="width:auto;">
+                <button id="btnFilter" class="btn btn-sm btn-outline-primary">筛选</button>
+            </div>
+        </div>
+        <div class="card-body">
+            <div class="table-responsive">
+                <table class="table table-sm table-striped table-hover mb-0">
+                    <thead class="sticky-top">
+                        <tr>
+                            <th>姓名</th><th>证件号码</th><th>月份</th>
+                            <th>系统本期收入</th><th>系统预算个税</th>
+                            <th>回盘本期收入</th><th>回盘个税(应补退)</th>
+                            <th>差值</th><th>状态</th>
+                        </tr>
+                    </thead>
+                    <tbody id="detailsTbody"></tbody>
+                </table>
+            </div>
+        </div>
+    </div>
+</div>
+
+<script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
+<script>
+    const monthSelect = document.getElementById('monthSelect');
+    const returnFile = document.getElementById('returnFile');
+    const importMsg = document.getElementById('importMsg');
+    let currentMonth = 0;
+
+    document.addEventListener('DOMContentLoaded', loadMonths);
+
+    async function loadMonths() {
+        try {
+            const resp = await fetch('/api/months');
+            const months = await resp.json();
+            monthSelect.innerHTML = '<option value="">请选择月份</option>' +
+                months.map(m => `<option value="${m.value}">${m.label}</option>`).join('');
+        } catch (e) {
+            console.error(e);
+        }
+    }
+
+    document.getElementById('btnImport').addEventListener('click', async () => {
+        if (!returnFile.files[0]) { importMsg.textContent = '请先选择回盘文件'; return; }
+        const fd = new FormData();
+        fd.append('file', returnFile.files[0]);
+        importMsg.textContent = '导入中...';
+        try {
+            const resp = await fetch('/api/tax-return/import', { method: 'POST', body: fd });
+            const data = await resp.json();
+            if (data.error) { importMsg.textContent = '导入失败: ' + data.error; return; }
+            importMsg.textContent = `导入成功 ${data.count} 条，月份: ${data.months.join(', ')}`;
+            returnFile.value = '';
+        } catch (e) {
+            importMsg.textContent = '导入失败: ' + e.message;
+        }
+    });
+
+    document.getElementById('btnQuery').addEventListener('click', queryStats);
+    document.getElementById('btnExport').addEventListener('click', async () => {
+        if (!currentMonth) return;
+        const resp = await fetch(`/api/tax-return/export?month=${currentMonth}`);
+        const data = await resp.json();
+        if (data.download_url) window.location.href = data.download_url;
+        else alert(data.error || '导出失败');
+    });
+    document.getElementById('btnFilter').addEventListener('click', queryDetails);
+
+    async function queryStats() {
+        currentMonth = parseInt(monthSelect.value);
+        if (!currentMonth) { alert('请选择月份'); return; }
+        const resp = await fetch(`/api/tax-return/status?month=${currentMonth}`);
+        const data = await resp.json();
+        if (data.error) { alert(data.error); return; }
+        document.getElementById('statMonth').textContent = currentMonth;
+        document.getElementById('statTotal').textContent = data.total;
+        document.getElementById('statReported').textContent = data.reported;
+        document.getElementById('statDiff').textContent = data.diff;
+        document.getElementById('statUnreported').textContent = data.unreported;
+        document.getElementById('statNoSys').textContent = data.no_sys;
+        document.getElementById('statsCard').style.display = 'block';
+
+        const comboStatus = c => c.unreported === 0 ? '<span class="status-ok">全部报送</span>' :
+            c.reported === 0 ? '<span class="status-no">全部未报送</span>' : '<span class="status-diff">部分报送</span>';
+        document.getElementById('combosTbody').innerHTML = data.combos.map(c => `
+            <tr>
+                <td>${c.unit}</td><td>${c.month}</td><td>${c.seq}</td>
+                <td>${c.count}</td><td class="status-ok">${c.reported}</td><td class="status-no">${c.unreported}</td>
+                <td>${comboStatus(c)}</td>
+            </tr>`).join('');
+        document.getElementById('combosCard').style.display = 'block';
+        queryDetails();
+    }
+
+    async function queryDetails() {
+        if (!currentMonth) return;
+        const status = document.getElementById('statusFilter').value;
+        const name = document.getElementById('nameFilter').value.trim();
+        const resp = await fetch(`/api/tax-return/details?month=${currentMonth}${status ? '&status=' + encodeURIComponent(status) : ''}`);
+        const data = await resp.json();
+        if (data.error) return;
+        let list = data.details;
+        if (name) list = list.filter(d => d.name.includes(name) || d.cert_no.includes(name));
+        const cls = { '已报送': 'status-ok', '有差异': 'status-diff', '未报送': 'status-no', '系统无记录': 'status-other' };
+        document.getElementById('detailsTbody').innerHTML = list.map(d => `
+            <tr>
+                <td>${d.name}</td><td>${d.cert_no}</td><td>${d.month}</td>
+                <td>${d.sys_income ?? ''}</td><td>${d.sys_tax ?? ''}</td>
+                <td>${d.ret_income ?? ''}</td><td>${d.ret_tax ?? ''}</td>
+                <td>${d.diff ?? ''}</td>
+                <td class="${cls[d.status] || ''}">${d.status}</td>
+            </tr>`).join('');
+        document.getElementById('detailsCard').style.display = 'block';
+    }
+</script>
+</body>
+</html>

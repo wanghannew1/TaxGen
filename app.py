@@ -1,6 +1,7 @@
 """Flask 主应用 - 个税模板填表工具"""
 import atexit
 import os
+from datetime import datetime
 from flask import Flask, render_template, request, jsonify, send_file
 from db import init_db, get_connection, close_db
 from queries import get_available_months, get_salary_records, get_personnel_info, get_suggestions, search_tc8m, get_abnormal_records, get_tc93_all_fields, get_tc93_field_comments, get_merge_warnings
@@ -220,6 +221,91 @@ def api_validate(month):
             "pass_rate": f"{report.pass_count/report.total_count*100:.1f}%" if report.total_count > 0 else "0%",
             "details": report.details[:50]  # 只返回前50条失败记录
         })
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+@app.route("/tax-return")
+def page_tax_return():
+    return render_template("tax_return.html")
+
+@app.route("/api/tax-return/import", methods=["POST"])
+def api_tax_return_import():
+    try:
+        from tax_return import init_db as init_return_db, parse_return_file, import_records
+        init_return_db()
+        file = request.files.get("file")
+        if not file:
+            return jsonify({"error": "请选择回盘文件"}), 400
+        tmp_path = os.path.join(OUTPUT_DIR, "_return_tmp" + os.path.splitext(file.filename)[1])
+        file.save(tmp_path)
+        try:
+            records = parse_return_file(tmp_path)
+        finally:
+            if os.path.exists(tmp_path):
+                os.remove(tmp_path)
+        if not records:
+            return jsonify({"error": "未解析到有效记录，请检查文件格式"}), 400
+        months = sorted({r["month"] for r in records})
+        import_records(records)
+        return jsonify({"ok": True, "count": len(records), "months": months})
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+@app.route("/api/tax-return/status")
+def api_tax_return_status():
+    try:
+        from tax_return import summarize
+        month = int(request.args.get("month", 0) or 0)
+        if not month:
+            return jsonify({"error": "请选择月份"}), 400
+        conn = get_connection()
+        result = summarize(conn, month)
+        result.pop("details", None)
+        return jsonify(result)
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+@app.route("/api/tax-return/details")
+def api_tax_return_details():
+    try:
+        from tax_return import compare_month
+        month = int(request.args.get("month", 0) or 0)
+        status = request.args.get("status", "")
+        if not month:
+            return jsonify({"error": "请选择月份"}), 400
+        conn = get_connection()
+        details, combo_stats = compare_month(conn, month)
+        if status:
+            details = [d for d in details if d["status"] == status]
+        return jsonify({"details": details[:500]})
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+@app.route("/api/tax-return/export")
+def api_tax_return_export():
+    try:
+        from openpyxl import Workbook
+        from tax_return import compare_month
+        month = int(request.args.get("month", 0) or 0)
+        if not month:
+            return jsonify({"error": "请选择月份"}), 400
+        conn = get_connection()
+        details, combo_stats = compare_month(conn, month)
+        wb = Workbook()
+        ws = wb.active
+        ws.title = "报税状态统计"
+        ws.append(["月份", "姓名", "证件号码", "系统本期收入", "系统预算个税", "回盘本期收入", "回盘个税(应补退)", "差值", "状态"])
+        for d in details:
+            ws.append([month, d["name"], d["cert_no"], d["sys_income"], d["sys_tax"],
+                       d.get("ret_income"), d.get("ret_tax"), d["diff"], d["status"]])
+        ws2 = wb.create_sheet("按结算单元批次")
+        ws2.append(["结算单元", "所属月份", "批次", "人数", "已报送", "未报送"])
+        for c in combo_stats:
+            ws2.append([c["unit"], c["month"], c["seq"], c["count"], c["reported"], c["unreported"]])
+        timestamp = datetime.now().strftime("%Y%m%d%H%M%S")
+        filename = f"报税状态统计_{month}_{timestamp}.xlsx"
+        wb.save(os.path.join(OUTPUT_DIR, filename))
+        return jsonify({"download_url": f"/api/download/{filename}"})
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
