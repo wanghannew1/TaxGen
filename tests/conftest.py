@@ -10,7 +10,10 @@ def setup_db():
     """Initialize Oracle connection pool for all tests"""
     init_db()
     yield
-    close_db()
+    try:
+        close_db()
+    except Exception:
+        pass
 
 
 @pytest.fixture

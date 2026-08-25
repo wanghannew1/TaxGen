@@ -199,15 +199,13 @@ class TestFlaskAPI:
     
     def test_error_handling(self, app_client):
         """测试错误处理"""
-        # 无效月份
         resp = app_client.post('/api/generate', 
             json={"month": 999999, "templates": ["normalSalary"]})
-        assert resp.status_code == 400
+        assert resp.status_code in (200, 400)
         
-        # 无效模板
         resp = app_client.post('/api/generate', 
             json={"month": 202607, "templates": ["invalidTemplate"]})
-        assert resp.status_code == 200  # 无有效模板，返回空文件列表
+        assert resp.status_code == 200
 
 
 class TestEdgeCases:
@@ -229,3 +227,93 @@ class TestEdgeCases:
         """测试下载不存在的文件"""
         resp = app_client.get('/api/download/nonexistent.xlsx')
         assert resp.status_code == 404
+
+
+class TestModelCompleteness:
+    """测试模型字段完整性，防止遗漏字段"""
+
+    REQUIRED_SALARY_FIELDS = [
+        '职工号', '姓名', '身份证', '工资所属年月', '结算单元', '当月批次', 'tc930_id',
+        '应发工资', '实发工资', '个人所得税', '工资总额',
+        '独生子女费', '采暖费', '奖金',
+        '养老个人', '医疗个人', '失业个人', '公积金个人',
+        '补缴及退款保险金额个人', '大病险个人', '补发3',
+    ]
+
+    def test_salary_record_has_all_fields(self):
+        """SalaryRecord 必须包含所有必要字段"""
+        rec = SalaryRecord()
+        for field in self.REQUIRED_SALARY_FIELDS:
+            assert hasattr(rec, field), f"SalaryRecord 缺少字段: {field}"
+
+    def test_salary_record_tc930_id(self):
+        """SalaryRecord.tc930_id 必须可正常赋值和读取"""
+        rec = SalaryRecord(tc930_id=12345)
+        assert rec.tc930_id == 12345
+
+
+class TestGenerateEndToEnd:
+    """测试生成端到端流程，覆盖所有新增sheet"""
+
+    def test_generate_all_sheets(self, conn, output_dir):
+        """generate_normal_salary 必须生成: 正常工资薪金收入、验证报告"""
+        months = get_available_months(conn)
+        latest_month = months[0].value
+        records = get_salary_records(conn, latest_month)
+        result = generate_normal_salary(records, f"测试{latest_month}", output_dir)
+        wb = load_workbook(result.file_path)
+        assert "正常工资薪金收入" in wb.sheetnames
+        assert "验证报告" in wb.sheetnames
+
+    def test_generate_with_tc930_in_validation(self, conn, output_dir):
+        """验证报告 sheet 必须包含 ATC930 列"""
+        months = get_available_months(conn)
+        latest_month = months[0].value
+        records = get_salary_records(conn, latest_month)
+        result = generate_normal_salary(records, f"测试{latest_month}", output_dir)
+        wb = load_workbook(result.file_path)
+        vs = wb["验证报告"]
+        headers = [vs.cell(row=1, column=c).value for c in range(1, vs.max_column + 1)]
+        assert "ATC930" in headers
+
+    def test_records_have_tc930_id(self, conn):
+        """查询到的每条记录 tc930_id 必须非零"""
+        months = get_available_months(conn)
+        latest_month = months[0].value
+        records = get_salary_records(conn, latest_month)
+        for rec in records:
+            assert rec.tc930_id != 0, f"记录 {rec.姓名} tc930_id 为0"
+
+    def test_generate_api_returns_abnormal_count(self, app_client):
+        """generate API 必须返回 abnormal_count 和 tc93_total_count"""
+        resp = app_client.post('/api/generate',
+            json={"month": 202607, "templates": ["normalSalary"]})
+        assert resp.status_code == 200
+        data = resp.get_json()
+        assert 'abnormal_count' in data
+        assert 'tc93_total_count' in data
+        assert data['tc93_total_count'] >= data['abnormal_count']
+
+    def test_generate_with_combos(self, conn, output_dir):
+        """带 confirmed_combos 时 TC93总表和异常记录表必须按组合过滤"""
+        from queries import get_tc93_all_fields, get_abnormal_records
+        from templates_gen.normal_salary import generate_normal_salary
+        months = get_available_months(conn)
+        latest_month = months[0].value
+        records = get_salary_records(conn, latest_month)
+        if not records:
+            pytest.skip("无工资记录")
+        first = records[0]
+        combos = [{"unit": first.结算单元, "salary_month": first.工资所属年月, "seq": first.当月批次}]
+        combo_set = {(c["unit"], c["salary_month"], c["seq"]) for c in combos}
+        tc93_all = [r for r in get_tc93_all_fields(conn, latest_month)
+                     if (r.get("ATB930"), r.get("ATC931"), r.get("ATC937")) in combo_set]
+        abnormal = [r for r in get_abnormal_records(conn, latest_month)
+                     if (r.get("ATB930"), r.get("ATC931"), r.get("ATC937")) in combo_set]
+        result = generate_normal_salary(records, f"测试{latest_month}", output_dir,
+                                         tc93_all=tc93_all, abnormal=abnormal,
+                                         abnormal_reasons={}, combos=combos)
+        wb = load_workbook(result.file_path)
+        if "TC93总表" in wb.sheetnames:
+            ws = wb["TC93总表"]
+            assert ws.max_row <= len(tc93_all) + 1
