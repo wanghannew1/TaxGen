@@ -84,18 +84,28 @@
     </div>
 
     <div id="combosCard" class="card" style="display:none;">
-        <div class="card-header"><strong>按结算单元·所属月份·批次报送情况</strong></div>
+        <div class="card-header d-flex justify-content-between align-items-center">
+            <strong>按结算单元·所属月份·批次报送情况</strong>
+            <span class="text-muted" id="combosPageInfo"></span>
+        </div>
         <div class="card-body">
             <div class="table-responsive">
                 <table class="table table-sm table-striped table-hover mb-0">
                     <thead class="sticky-top">
                         <tr>
-                            <th>结算单元名称</th><th>结算单元ID</th><th>所属月份</th><th>批次</th>
+                            <th style="width:50px">序号</th><th>结算单元名称</th><th>结算单元ID</th><th>所属月份</th><th>批次</th>
                             <th>人数</th><th>已报送</th><th>未报送</th><th>状态</th>
                         </tr>
                     </thead>
                     <tbody id="combosTbody"></tbody>
                 </table>
+            </div>
+            <div class="d-flex justify-content-between align-items-center mt-2">
+                <span id="combosCount" class="text-muted"></span>
+                <div class="d-flex gap-2">
+                    <button id="combosPrev" class="btn btn-sm btn-outline-secondary">上一页</button>
+                    <button id="combosNext" class="btn btn-sm btn-outline-secondary">下一页</button>
+                </div>
             </div>
         </div>
     </div>
@@ -120,7 +130,7 @@
                 <table class="table table-sm table-striped table-hover mb-0">
                     <thead class="sticky-top">
                         <tr>
-                            <th>姓名</th><th>证件号码</th><th>月份</th>
+                            <th style="width:50px">序号</th><th>姓名</th><th>证件号码</th><th>月份</th>
                             <th>系统本期收入</th><th>回盘本期收入</th><th>收入差异</th>
                             <th>系统预算个税</th><th>回盘个税(应补退)</th>
                             <th>个税差值</th><th>状态</th>
@@ -128,6 +138,13 @@
                     </thead>
                     <tbody id="detailsTbody"></tbody>
                 </table>
+            </div>
+            <div class="d-flex justify-content-between align-items-center mt-2">
+                <span id="detailsCount" class="text-muted"></span>
+                <div class="d-flex gap-2">
+                    <button id="detailsPrev" class="btn btn-sm btn-outline-secondary">上一页</button>
+                    <button id="detailsNext" class="btn btn-sm btn-outline-secondary">下一页</button>
+                </div>
             </div>
         </div>
     </div>
@@ -179,6 +196,17 @@
     });
     document.getElementById('btnFilter').addEventListener('click', queryDetails);
 
+    const PAGE_SIZE = 50;
+    let combosData = [];
+    let detailsData = [];
+    let combosPage = 1;
+    let detailsPage = 1;
+
+    document.getElementById('combosPrev').addEventListener('click', () => { if (combosPage > 1) { combosPage--; renderCombos(); } });
+    document.getElementById('combosNext').addEventListener('click', () => { if (combosPage * PAGE_SIZE < combosData.length) { combosPage++; renderCombos(); } });
+    document.getElementById('detailsPrev').addEventListener('click', () => { if (detailsPage > 1) { detailsPage--; renderDetails(); } });
+    document.getElementById('detailsNext').addEventListener('click', () => { if (detailsPage * PAGE_SIZE < detailsData.length) { detailsPage++; renderDetails(); } });
+
     async function queryStats() {
         currentMonth = parseInt(monthSelect.value);
         if (!currentMonth) { alert('请选择月份'); return; }
@@ -193,16 +221,28 @@
         document.getElementById('statNoSys').textContent = data.no_sys;
         document.getElementById('statsCard').style.display = 'block';
 
+        combosData = data.combos;
+        combosPage = 1;
+        renderCombos();
+        document.getElementById('combosCard').style.display = 'block';
+        queryDetails();
+    }
+
+    function renderCombos() {
         const comboStatus = c => c.unreported === 0 ? '<span class="status-ok">全部报送</span>' :
             c.reported === 0 ? '<span class="status-no">全部未报送</span>' : '<span class="status-diff">部分报送</span>';
-        document.getElementById('combosTbody').innerHTML = data.combos.map(c => `
+        const start = (combosPage - 1) * PAGE_SIZE;
+        const page = combosData.slice(start, start + PAGE_SIZE);
+        document.getElementById('combosTbody').innerHTML = page.map((c, i) => `
             <tr>
-                <td>${c.unit_name || c.unit}</td><td>${c.unit}</td><td>${c.month}</td><td>${c.seq}</td>
+                <td>${start + i + 1}</td><td>${c.unit_name || c.unit}</td><td>${c.unit}</td><td>${c.month}</td><td>${c.seq}</td>
                 <td>${c.count}</td><td class="status-ok">${c.reported}</td><td class="status-no">${c.unreported}</td>
                 <td>${comboStatus(c)}</td>
             </tr>`).join('');
-        document.getElementById('combosCard').style.display = 'block';
-        queryDetails();
+        document.getElementById('combosCount').textContent = `共 ${combosData.length} 条`;
+        document.getElementById('combosPageInfo').textContent = `第 ${combosPage}/${Math.max(1, Math.ceil(combosData.length / PAGE_SIZE))} 页`;
+        document.getElementById('combosPrev').disabled = combosPage <= 1;
+        document.getElementById('combosNext').disabled = combosPage * PAGE_SIZE >= combosData.length;
     }
 
     async function queryDetails() {
@@ -212,18 +252,28 @@
         const resp = await fetch(`/api/tax-return/details?month=${currentMonth}${status ? '&status=' + encodeURIComponent(status) : ''}`);
         const data = await resp.json();
         if (data.error) return;
-        let list = data.details;
-        if (name) list = list.filter(d => d.name.includes(name) || d.cert_no.includes(name));
+        detailsData = data.details;
+        if (name) detailsData = detailsData.filter(d => d.name.includes(name) || d.cert_no.includes(name));
+        detailsPage = 1;
+        renderDetails();
+        document.getElementById('detailsCard').style.display = 'block';
+    }
+
+    function renderDetails() {
         const cls = { '已报送': 'status-ok', '有差异': 'status-diff', '未报送': 'status-no', '系统无记录': 'status-other' };
-        document.getElementById('detailsTbody').innerHTML = list.map(d => `
+        const start = (detailsPage - 1) * PAGE_SIZE;
+        const page = detailsData.slice(start, start + PAGE_SIZE);
+        document.getElementById('detailsTbody').innerHTML = page.map((d, i) => `
             <tr>
-                <td>${d.name}</td><td>${d.cert_no}</td><td>${d.month}</td>
+                <td>${start + i + 1}</td><td>${d.name}</td><td>${d.cert_no}</td><td>${d.month}</td>
                 <td>${d.sys_income ?? ''}</td><td>${d.ret_income ?? ''}</td><td>${d.income_diff ?? ''}</td>
                 <td>${d.sys_tax ?? ''}</td><td>${d.ret_tax ?? ''}</td>
                 <td>${d.diff ?? ''}</td>
                 <td class="${cls[d.status] || ''}">${d.status}</td>
             </tr>`).join('');
-        document.getElementById('detailsCard').style.display = 'block';
+        document.getElementById('detailsCount').textContent = `共 ${detailsData.length} 条`;
+        document.getElementById('detailsPrev').disabled = detailsPage <= 1;
+        document.getElementById('detailsNext').disabled = detailsPage * PAGE_SIZE >= detailsData.length;
     }
 </script>
 </body>
