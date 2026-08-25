@@ -80,17 +80,26 @@ def api_generate():
             return jsonify({"error": "请选择至少一个模板"}), 400
         
         conn = get_connection()
-        records = get_salary_records(conn, month)
-        personnel = get_personnel_info(conn, month)
-        
         if confirmed_combos is not None:
             combo_set = {(c["unit"], c["salary_month"], c["seq"]) for c in confirmed_combos}
+            salary_months = {c["salary_month"] for c in confirmed_combos}
+            records = []
+            for sm in salary_months:
+                records.extend(get_salary_records(conn, sm))
             records = [r for r in records if (r.结算单元, r.工资所属年月, r.当月批次) in combo_set]
-            tc93_all = [r for r in get_tc93_all_fields(conn, month)
-                        if (r.get("ATB930"), r.get("ATC931"), r.get("ATC937")) in combo_set]
-            abnormal = [r for r in get_abnormal_records(conn, month)
-                        if (r.get("ATB930"), r.get("ATC931"), r.get("ATC937")) in combo_set]
+            tc93_all = []
+            abnormal = []
+            for sm in salary_months:
+                tc93_all.extend(r for r in get_tc93_all_fields(conn, sm)
+                                if (r.get("ATB930"), r.get("ATC931"), r.get("ATC937")) in combo_set)
+                abnormal.extend(r for r in get_abnormal_records(conn, sm)
+                                if (r.get("ATB930"), r.get("ATC931"), r.get("ATC937")) in combo_set)
+            personnel = []
+            for sm in salary_months:
+                personnel.extend(get_personnel_info(conn, sm))
         else:
+            records = get_salary_records(conn, month)
+            personnel = get_personnel_info(conn, month)
             tc93_all = get_tc93_all_fields(conn, month)
             abnormal = get_abnormal_records(conn, month)
         abnormal_reasons = {r.get("ATC930"): f"ATC93G={r.get('ATC93G', 'NULL')}(未结算)" for r in abnormal}

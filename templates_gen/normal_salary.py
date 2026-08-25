@@ -32,7 +32,12 @@ def generate_normal_salary(records: List[SalaryRecord], title: str, output_dir: 
     os.makedirs(output_dir, exist_ok=True)
     timestamp = datetime.now().strftime("%Y%m%d%H%M%S")
     output_path = os.path.join(output_dir, f"正常工资薪金所得_{title}_{timestamp}.xlsx")
-    remark = title
+
+    combo_map = {}
+    if combos:
+        for c in combos:
+            key = (int(c.get("unit", 0) or 0), int(c.get("salary_month", 0) or 0), str(c.get("seq", "") or ""))
+            combo_map[key] = f"{c.get('unit_name', '')}-{c.get('salary_month', '')}-{c.get('seq', '')}"
     
     wb = Workbook()
     ws = wb.active
@@ -69,7 +74,8 @@ def generate_normal_salary(records: List[SalaryRecord], title: str, output_dir: 
         ws.cell(row=row, column=9, value=rec.失业个人)
         ws.cell(row=row, column=10, value=rec.公积金个人)
         ws.cell(row=row, column=18, value=0)  # 企业(职业)年金 = 0
-        ws.cell(row=row, column=29, value=remark)
+        rec_remark = combo_map.get((rec.结算单元, rec.工资所属年月, rec.当月批次), title)
+        ws.cell(row=row, column=29, value=rec_remark)
         
         # 验证: 左 = 本期收入 - 养老 - 失业 - 医疗 - 公积金 - 年金(0)
         #        右 = 实发 + 个税 - 免税
