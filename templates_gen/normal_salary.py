@@ -62,14 +62,13 @@ def generate_normal_salary(records: List[SalaryRecord], title: str, output_dir: 
         row = idx + 1
         income = calc_本期收入(rec)
         tax_exempt = calc_免税(rec)
-        
+        fill_income = income - tax_exempt
+
         ws.cell(row=row, column=1, value=rec.职工号)
         ws.cell(row=row, column=2, value=rec.姓名)
         ws.cell(row=row, column=3, value="居民身份证")
         ws.cell(row=row, column=4, value=rec.身份证)
-        ws.cell(row=row, column=5, value=income)
-        if tax_exempt > 0:
-            ws.cell(row=row, column=6, value=tax_exempt)
+        ws.cell(row=row, column=5, value=fill_income)
         ws.cell(row=row, column=7, value=rec.养老个人)
         ws.cell(row=row, column=8, value=rec.医疗个人)
         ws.cell(row=row, column=9, value=rec.失业个人)
@@ -86,7 +85,7 @@ def generate_normal_salary(records: List[SalaryRecord], title: str, output_dir: 
         validations.append({
             "tc930": rec.tc930_id, "姓名": rec.姓名,
             "工资总额": rec.工资总额, "本次免税": rec.补发3, "大病险个人": rec.大病险个人,
-            "补缴退款差额": rec.补缴及退款保险金额个人, "本期收入": income,
+            "补缴退款差额": rec.补缴及退款保险金额个人, "本期收入": income, "填报收入": fill_income,
             "养老": rec.养老个人, "失业": rec.失业个人, "医疗": rec.医疗个人, "公积金": rec.公积金个人,
             "其他调整": rec.个人其他调整, "个人欠款": rec.个人欠款, "扣款大病险": rec.扣款大病险,
             "左": left,
@@ -99,7 +98,7 @@ def generate_normal_salary(records: List[SalaryRecord], title: str, output_dir: 
     vs_headers = [
         "ATC930", "姓名",
         "本次工资总额(ATC93AA)", "本次免税(ATC936)", "大病险（个人承担）(ATC93BD)", "补缴及退款保险差额（个人）(ATC93BE)", "本期收入",
-        "当月养老个人缴(BAA001)", "当月失业个人缴(BAA003)", "当月医疗个人缴(BAA002)", "个人公积金月缴存额(CAA002)",
+        "最终填报本期收入", "当月养老个人缴(BAA001)", "当月失业个人缴(BAA003)", "当月医疗个人缴(BAA002)", "个人公积金月缴存额(CAA002)",
         "个人其他调整(ATC93AG)", "个人欠款(ATC93E)", "扣款-大病险(ATC93Y2)", "左",
         "本次实发金额(ATC93C)", "税后扣除工会会费(ATC93Z2)", "个人承担代理费(BAA300)", "本次个人所得税(ATC93D)", "免税(ATC936+ATC93BD)",
         "右", "差值", "状态"
@@ -109,7 +108,7 @@ def generate_normal_salary(records: List[SalaryRecord], title: str, output_dir: 
     for idx, v in enumerate(validations, 1):
         vals = [
             v["tc930"], v["姓名"],
-            v["工资总额"], v["本次免税"], v["大病险个人"], v["补缴退款差额"], v["本期收入"],
+            v["工资总额"], v["本次免税"], v["大病险个人"], v["补缴退款差额"], v["本期收入"], v["填报收入"],
             v["养老"], v["失业"], v["医疗"], v["公积金"],
             v["其他调整"], v["个人欠款"], v["扣款大病险"], v["左"],
             v["实发"], v["工会会费"], v["代理费"], v["个税"], v["免税"],
@@ -219,8 +218,9 @@ def generate_formula_explanation_sheet(wb: Workbook, records: List[SalaryRecord]
     w(2, 1, "验证报告 sheet 中每一行对一个人的工资数据进行左=右校验：左与右的差值绝对值小于 0.01 即为通过。")
 
     w(4, 1, "一、本期收入（报税口径）", bold=True)
-    w(5, 1, "本期收入 = 本次工资总额(ATC93AA) − 本次免税(ATC936) − 大病险个人(ATC93BD) − 补缴及退款保险差额个人(ATC93BE)")
+    w(5, 1, "验算本期收入 = 本次工资总额(ATC93AA) − 本次免税(ATC936) − 大病险个人(ATC93BD) − 补缴及退款保险差额个人(ATC93BE)")
     w(6, 1, "说明：本次免税(ATC936) = 采暖费(ATC93W21) + 独生子女费(ATC93W4)，经数据库验证 100% 吻合。")
+    w(7, 1, "最终填报本期收入 = 验算本期收入 − 本期免税收入(ATC936+ATC93BD)，本期免税收入列不填写（业务要求，避免税务核查）。")
 
     w(8, 1, "二、左(收入-五险一金)", bold=True)
     w(9, 1, "左 = 本期收入 − 当月养老个人缴(BAA001) − 当月失业个人缴(BAA003) − 当月医疗个人缴(BAA002)")
@@ -302,6 +302,8 @@ def generate_formula_explanation_sheet(wb: Workbook, records: List[SalaryRecord]
             ("大病险个人(ATC93BD)", rec.大病险个人, ""),
             ("补缴及退款保险差额个人(ATC93BE)", rec.补缴及退款保险金额个人, ""),
             ("本期收入", income, "工资总额 − 本次免税 − 大病险 − 补缴退款差额"),
+            ("本期免税收入", tax_exempt, "本次免税(ATC936) + 大病险个人(ATC93BD)"),
+            ("最终填报本期收入", income - tax_exempt, "本期收入 − 本期免税收入（免税列不填）"),
             ("五险一金(养老+失业+医疗+公积金)", rec.养老个人 + rec.失业个人 + rec.医疗个人 + rec.公积金个人, "BAA001+BAA003+BAA002+CAA002"),
             ("个人其他调整(ATC93AG)", rec.个人其他调整, ""),
             ("个人欠款(ATC93E)", rec.个人欠款, ""),
