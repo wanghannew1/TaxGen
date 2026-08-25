@@ -97,7 +97,14 @@ def api_generate():
         results = []
         for tpl in templates:
             if tpl == "normalSalary":
-                r = generate_normal_salary(records, f"劳务派遣人员工资发放表{month}", OUTPUT_DIR,
+                if confirmed_combos:
+                    unit_name = confirmed_combos[0].get("unit_name", "")
+                    salary_month = confirmed_combos[0].get("salary_month", month)
+                    seq = confirmed_combos[0].get("seq", "")
+                    file_title = f"{unit_name}-{salary_month}-{seq}"
+                else:
+                    file_title = f"劳务派遣人员工资发放表{month}"
+                r = generate_normal_salary(records, file_title, OUTPUT_DIR,
                                            tc93_all=tc93_all, abnormal=abnormal, abnormal_reasons=abnormal_reasons)
             elif tpl == "laborService":
                 r = generate_labor_service(records, f"劳务派遣人员工资发放表{month}", OUTPUT_DIR)
