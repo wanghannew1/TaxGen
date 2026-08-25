@@ -919,7 +919,17 @@
             checked.forEach(cb => {
                 const idx = parseInt(cb.dataset.idx);
                 const c = tempList[idx];
-                if (c) selected.push({ unit: c.unit, salary_month: c.salary_month, seq: c.seq });
+                if (c) selected.push({
+                    unit: c.unit,
+                    unit_name: c.unit_name || '',
+                    salary_month: c.salary_month,
+                    pay_month: c.pay_month || '',
+                    seq: c.seq,
+                    status: c.status || 0,
+                    handler: c.handler || '',
+                    person_count: c.person_count || 0,
+                    total_income: c.total_income || 0
+                });
             });
             return selected;
         }
