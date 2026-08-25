@@ -446,6 +446,12 @@
                         <button id="btnListDeselectAll" class="btn btn-sm btn-outline-secondary">取消全选</button>
                         <button id="btnDeleteSelected" class="btn btn-sm btn-outline-danger" disabled>删除选中</button>
                     </div>
+                    <div class="form-check mt-2 mb-1">
+                        <input class="form-check-input" type="checkbox" id="mergeByPerson" checked>
+                        <label class="form-check-label" for="mergeByPerson">
+                            按人+所属月份合并（同人同月多笔工资合并为一笔，按最后批次归属）
+                        </label>
+                    </div>
                     <button id="btnGenerate" class="btn btn-primary btn-lg w-100 mt-2">生成报税数据</button>
                     <div id="loading" class="loading text-center mt-3" style="display:none;">
                         <div class="spinner-border text-primary" role="status">
@@ -1055,7 +1061,7 @@
             validationReport.style.display = 'none';
 
             try {
-                const body = { month: parseInt(month), templates, confirmed_combos: confirmedCombos };
+                const body = { month: parseInt(month), templates, confirmed_combos: confirmedCombos, merge_by_person: document.getElementById('mergeByPerson').checked };
                 const resp = await fetch('/api/generate', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
@@ -1070,6 +1076,25 @@
                         <tr>
                             <td colspan="6" class="text-warning">
                                 ⚠ 异常过滤: ${data.tc93_total_count} 条总数据中，${data.abnormal_count} 条因状态异常被过滤，${data.tc93_total_count - data.abnormal_count} 条正常报税
+                            </td>
+                        </tr>`;
+                }
+                if (data.merge_warnings && data.merge_warnings.length > 0) {
+                    const warnMap = {};
+                    data.merge_warnings.forEach(w => {
+                        const key = `${w.name}-${w.salary_month}-${w.unit}-${w.seq}`;
+                        if (!warnMap[key]) warnMap[key] = { ...w, count: 1 };
+                        else warnMap[key].count += 1;
+                    });
+                    const warnText = Object.values(warnMap).slice(0, 5).map(w =>
+                        `${w.name} 在${w.salary_month}月份 ${w.unit_name || w.unit}结算单元 ${w.salary_month}年月 ${w.seq}批次工资单中，还有${w.count}笔工资(合计${w.income.toLocaleString()}元)`
+                    ).join('<br>');
+                    const more = data.merge_warnings.length > 5 ? `<br>...等共 ${data.merge_warnings.length} 条未合并记录` : '';
+                    resultsTbody.innerHTML += `
+                        <tr>
+                            <td colspan="6" class="text-danger">
+                                ⚠ 合并提示: 以下人员在未选中的结算单元/批次还有工资记录，本次报送数据暂未合并，请注意:
+                                <br>${warnText}${more}
                             </td>
                         </tr>`;
                 }

@@ -395,3 +395,54 @@ def get_personnel_info(conn, month: int) -> List[PersonnelInfo]:
                 出生日期=birthday,
             ))
     return people
+
+
+def get_merge_warnings(conn, salary_months, combo_set, persons) -> List[dict]:
+    """查询选中记录中的人在未选中组合(同所属月份其他结算单元/批次)的工资记录。
+
+    用于提示用户: 这些人还有工资未纳入本次合并报税。
+    persons 分批(每批900)查询避免 ORA-01795。
+    """
+    if not persons or not salary_months or not combo_set:
+        return []
+    warnings = []
+    combo_expr = "(" + ",".join(
+        f"(:u{i}, :m{i}, :s{i})" for i in range(len(combo_set))) + ")"
+    combo_binds = {}
+    for i, (u, m, s) in enumerate(combo_set):
+        combo_binds[f"u{i}"] = u
+        combo_binds[f"m{i}"] = m
+        combo_binds[f"s{i}"] = s
+    months_expr = ",".join(f":sm{i}" for i in range(len(salary_months)))
+    month_binds = {f"sm{i}": sm for i, sm in enumerate(salary_months)}
+    sql_tpl = f"""
+        SELECT t93.AAC003, ac01.AAC002, t93.ATB930, t93.ATC931, t93.ATC937, t93.ATC93AA,
+               (SELECT MAX(m.ATB931) FROM TC8M m
+                WHERE m.ATB930 = t93.ATB930 AND m.ATC931 = t93.ATC931 AND m.ATC937 = t93.ATC937)
+        FROM TC93 t93
+        LEFT JOIN AC01 ac01 ON t93.AAC001 = ac01.AAC001
+        WHERE t93.ATC93G = '1'
+          AND NVL(t93.ATC93AA, 0) > 0
+          AND t93.ATC931 IN ({months_expr})
+          AND t93.AAC001 IN ({{placeholders}})
+          AND (t93.ATB930, t93.ATC931, t93.ATC937) NOT IN {combo_expr}
+        ORDER BY t93.AAC003
+    """
+    with conn.cursor() as cursor:
+        for start in range(0, len(persons), _IN_BATCH_SIZE):
+            chunk = persons[start:start + _IN_BATCH_SIZE]
+            placeholders = ", ".join(f":p{i}" for i in range(len(chunk)))
+            binds = {**combo_binds, **month_binds}
+            binds.update({f"p{i}": p for i, p in enumerate(chunk)})
+            cursor.execute(sql_tpl.format(placeholders=placeholders), binds)
+            for row in cursor.fetchall():
+                warnings.append({
+                    "name": str(row[0] or ""),
+                    "cert_no": str(row[1] or ""),
+                    "unit": int(row[2] or 0),
+                    "unit_name": str(row[6] or ""),
+                    "salary_month": int(row[3] or 0),
+                    "seq": str(row[4] or ""),
+                    "income": float(row[5] or 0),
+                })
+    return warnings

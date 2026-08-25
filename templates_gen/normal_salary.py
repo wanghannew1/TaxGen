@@ -25,7 +25,8 @@ def generate_normal_salary(records: List[SalaryRecord], title: str, output_dir: 
                            abnormal: Optional[List[dict]] = None,
                            abnormal_reasons: Optional[dict] = None,
                            combos: Optional[List[dict]] = None,
-                           tc93_comments: Optional[dict] = None) -> GenerateResult:
+                           tc93_comments: Optional[dict] = None,
+                           raw_records: Optional[List[SalaryRecord]] = None) -> GenerateResult:
     """生成正常工资薪金所得 Excel 模板
 
     新增 tc93_all: TC93总表(全字段), abnormal: 异常记录, abnormal_reasons: 过滤原因
@@ -122,6 +123,9 @@ def generate_normal_salary(records: List[SalaryRecord], title: str, output_dir: 
         generate_abnormal_sheet(wb, abnormal, abnormal_reasons or {})
     if combos:
         generate_combo_list_sheet(wb, combos)
+    if raw_records:
+        generate_raw_detail_sheet(wb, raw_records, combo_map, title)
+        generate_merge_detail_sheet(wb, raw_records, records)
     generate_formula_explanation_sheet(wb, records)
     
     wb.save(output_path)
@@ -323,3 +327,80 @@ def generate_formula_explanation_sheet(wb: Workbook, records: List[SalaryRecord]
             w(i, 1, name)
             w(i, 2, val)
             w(i, 3, note)
+
+
+def generate_raw_detail_sheet(wb: Workbook, raw_records: List[SalaryRecord],
+                              combo_map: dict, title: str):
+    """原始明细(未合并)sheet：逐条列出未合并记录的报送数据与验算，保证可追溯。"""
+    ws = wb.create_sheet("原始明细(未合并)")
+    headers = [
+        "ATC930", "姓名", "证件号码", "结算单元", "所属月份", "批次",
+        "工资总额(AA)", "本次免税(936)", "大病险(BD)", "补缴退款差额(BE)", "本期收入",
+        "养老(BAA001)", "失业(BAA003)", "医疗(BAA002)", "公积金(CAA002)",
+        "其他调整(AG)", "个人欠款(E)", "扣款大病险(Y2)",
+        "实发(C)", "工会会费(Z2)", "代理费(BAA300)", "个税(D)", "免税",
+        "左", "右", "差值", "状态", "备注"
+    ]
+    for col, h in enumerate(headers, 1):
+        ws.cell(row=1, column=col, value=h)
+    for idx, rec in enumerate(raw_records, 2):
+        income = calc_本期收入(rec)
+        tax_exempt = calc_免税(rec)
+        left = (income - rec.养老个人 - rec.失业个人 - rec.医疗个人 - rec.公积金个人
+                - rec.个人其他调整 - rec.个人欠款 - rec.扣款大病险)
+        right = (rec.实发工资 + rec.税后工会会费 + rec.个人代理费 + rec.个人所得税 - tax_exempt)
+        diff = abs(left - right)
+        remark = combo_map.get((rec.结算单元, rec.工资所属年月, rec.当月批次), title)
+        vals = [
+            rec.tc930_id, rec.姓名, rec.身份证, rec.结算单元, rec.工资所属年月, rec.当月批次,
+            rec.工资总额, rec.补发3, rec.大病险个人, rec.补缴及退款保险金额个人, income,
+            rec.养老个人, rec.失业个人, rec.医疗个人, rec.公积金个人,
+            rec.个人其他调整, rec.个人欠款, rec.扣款大病险,
+            rec.实发工资, rec.税后工会会费, rec.个人代理费, rec.个人所得税, tax_exempt,
+            left, right, round(float(diff), 4), "通过" if diff < 0.01 else "失败", remark
+        ]
+        for col, val in enumerate(vals, 1):
+            ws.cell(row=idx, column=col, value=val)
+
+
+def generate_merge_detail_sheet(wb: Workbook, raw_records: List[SalaryRecord],
+                                merged_records: List[SalaryRecord]):
+    """合并明细sheet：按人+所属月份分组，展示原始条目与合并后汇总，合并过程可追溯。"""
+    ws = wb.create_sheet("合并明细")
+    groups = {}
+    for rec in raw_records:
+        groups.setdefault((rec.职工号, rec.工资所属年月), []).append(rec)
+
+    headers = [
+        "姓名", "证件号码", "所属月份", "原始条数",
+        "原始记录(ATC930/本期收入/个税)", "合并后结算单元", "合并后批次",
+        "合并本期收入", "合并五险", "合并个税", "合并实发", "合并免税",
+        "合并左", "合并右", "差值", "状态"
+    ]
+    for col, h in enumerate(headers, 1):
+        ws.cell(row=1, column=col, value=h)
+
+    merged_map = {(m.职工号, m.工资所属年月): m for m in merged_records}
+    row = 2
+    for (pid, month), recs in sorted(groups.items(), key=lambda kv: (kv[0][1], kv[0][0])):
+        m = merged_map.get((pid, month))
+        raw_desc = "; ".join(
+            f"{r.tc930_id}/{round(float(calc_本期收入(r)), 2)}/{r.个人所得税}" for r in recs)
+        if m is None:
+            continue
+        income = calc_本期收入(m)
+        tax_exempt = calc_免税(m)
+        left = (income - m.养老个人 - m.失业个人 - m.医疗个人 - m.公积金个人
+                - m.个人其他调整 - m.个人欠款 - m.扣款大病险)
+        right = (m.实发工资 + m.税后工会会费 + m.个人代理费 + m.个人所得税 - tax_exempt)
+        diff = abs(left - right)
+        vals = [
+            recs[0].姓名, recs[0].身份证, month, len(recs),
+            raw_desc, m.结算单元, m.当月批次,
+            income, m.养老个人 + m.失业个人 + m.医疗个人 + m.公积金个人, m.个人所得税,
+            m.实发工资, tax_exempt,
+            left, right, round(float(diff), 4), "通过" if diff < 0.01 else "失败"
+        ]
+        for col, val in enumerate(vals, 1):
+            ws.cell(row=row, column=col, value=val)
+        row += 1

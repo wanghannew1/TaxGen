@@ -3,7 +3,7 @@ import atexit
 import os
 from flask import Flask, render_template, request, jsonify, send_file
 from db import init_db, get_connection, close_db
-from queries import get_available_months, get_salary_records, get_personnel_info, get_suggestions, search_tc8m, get_abnormal_records, get_tc93_all_fields, get_tc93_field_comments
+from queries import get_available_months, get_salary_records, get_personnel_info, get_suggestions, search_tc8m, get_abnormal_records, get_tc93_all_fields, get_tc93_field_comments, get_merge_warnings
 from templates_gen.normal_salary import generate_normal_salary, generate_tc93_full_sheet, generate_abnormal_sheet
 from templates_gen.labor_service import generate_labor_service
 from templates_gen.annual_bonus import generate_annual_bonus
@@ -18,6 +18,43 @@ os.makedirs(OUTPUT_DIR, exist_ok=True)
 # 仅在进程退出时关闭。不能在 teardown_appcontext 中调用 close_db(),
 # 否则每个请求后池被关闭, 后续所有数据库请求都会失败。
 atexit.register(close_db)
+
+
+def merge_records_by_person(records):
+    """按人+所属月份合并多条工资记录为一笔，基准取时间上最后一个批次(批次号最大、流水号最大)。"""
+    from copy import deepcopy
+    groups = {}
+    for rec in records:
+        groups.setdefault((rec.职工号, rec.工资所属年月), []).append(rec)
+
+    merged = []
+    for key, recs in groups.items():
+        base = max(recs, key=lambda r: (int(r.当月批次 or 0), r.tc930_id))
+        m = deepcopy(base)
+        for rec in recs:
+            if rec is base:
+                continue
+            m.应发工资 += rec.应发工资
+            m.实发工资 += rec.实发工资
+            m.个人所得税 += rec.个人所得税
+            m.工资总额 += rec.工资总额
+            m.独生子女费 += rec.独生子女费
+            m.采暖费 += rec.采暖费
+            m.奖金 += rec.奖金
+            m.养老个人 += rec.养老个人
+            m.医疗个人 += rec.医疗个人
+            m.失业个人 += rec.失业个人
+            m.公积金个人 += rec.公积金个人
+            m.补缴及退款保险金额个人 += rec.补缴及退款保险金额个人
+            m.大病险个人 += rec.大病险个人
+            m.补发3 += rec.补发3
+            m.个人其他调整 += rec.个人其他调整
+            m.个人欠款 += rec.个人欠款
+            m.扣款大病险 += rec.扣款大病险
+            m.税后工会会费 += rec.税后工会会费
+            m.个人代理费 += rec.个人代理费
+        merged.append(m)
+    return merged
 
 @app.route("/")
 def index():
@@ -103,6 +140,15 @@ def api_generate():
             personnel = get_personnel_info(conn, month)
             tc93_all = get_tc93_all_fields(conn, month)
             abnormal = get_abnormal_records(conn, month)
+        merge_by_person = data.get("merge_by_person", True)
+        raw_records = records
+        if merge_by_person:
+            records = merge_records_by_person(records)
+        warnings = []
+        if confirmed_combos and merge_by_person:
+            persons = list({r.职工号 for r in raw_records})
+            warnings = get_merge_warnings(conn, list(salary_months) if confirmed_combos else [month],
+                                          combo_set if confirmed_combos else set(), persons)
         abnormal_reasons = {r.get("ATC930"): f"ATC93G={r.get('ATC93G', 'NULL')}(未结算)" for r in abnormal}
         
         results = []
@@ -123,7 +169,8 @@ def api_generate():
                                            tc93_all=tc93_all, abnormal=abnormal,
                                            abnormal_reasons=abnormal_reasons,
                                            combos=confirmed_combos,
-                                           tc93_comments=get_tc93_field_comments(conn))
+                                           tc93_comments=get_tc93_field_comments(conn),
+                                           raw_records=raw_records if merge_by_person else None)
             elif tpl == "laborService":
                 r = generate_labor_service(records, f"劳务派遣人员工资发放表{month}", OUTPUT_DIR)
             elif tpl == "annualBonus":
@@ -144,7 +191,8 @@ def api_generate():
         return jsonify({
             "files": results,
             "abnormal_count": len(abnormal),
-            "tc93_total_count": len(tc93_all)
+            "tc93_total_count": len(tc93_all),
+            "merge_warnings": warnings
         })
     except Exception as e:
         return jsonify({"error": str(e)}), 500
