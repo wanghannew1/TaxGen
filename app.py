@@ -108,10 +108,14 @@ def api_generate():
         for tpl in templates:
             if tpl == "normalSalary":
                 if confirmed_combos:
-                    unit_name = confirmed_combos[0].get("unit_name", "")
-                    salary_month = confirmed_combos[0].get("salary_month", month)
-                    seq = confirmed_combos[0].get("seq", "")
-                    file_title = f"{unit_name}-{salary_month}-{seq}"
+                    top = sorted(confirmed_combos, key=lambda c: c.get("person_count", 0), reverse=True)
+                    top_names = [c.get("unit_name", "") for c in top[:2] if c.get("unit_name")]
+                    months_in = sorted({c["salary_month"] for c in confirmed_combos})
+                    month_range = f"{months_in[0]}-{months_in[-1]}" if len(months_in) > 1 else str(months_in[0])
+                    if len(confirmed_combos) == 1:
+                        file_title = f"{top_names[0]}-{month_range}-{top[0].get('seq', '')}"
+                    else:
+                        file_title = f"{'、'.join(top_names)}等{len(confirmed_combos)}个单位{month_range}工资"
                 else:
                     file_title = f"劳务派遣人员工资发放表{month}"
                 r = generate_normal_salary(records, file_title, OUTPUT_DIR,
