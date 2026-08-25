@@ -152,7 +152,10 @@ def generate_tc93_full_sheet(wb: Workbook, tc93_all: List[dict], comments: Optio
         ws.cell(row=2, column=col_idx, value=col_name)
     for row_idx, rec in enumerate(tc93_all, 3):
         for col_idx, col_name in enumerate(cols, 1):
-            ws.cell(row=row_idx, column=col_idx, value=rec.get(col_name))
+            val = rec.get(col_name)
+            cell = ws.cell(row=row_idx, column=col_idx, value=val)
+            if isinstance(val, str) and val.startswith("="):
+                cell.data_type = "s"
     for col_idx, col_name in enumerate(cols, 1):
         ws.column_dimensions[get_column_letter(col_idx)].width = max(10, min(25, len(str(col_name)) * 1.5))
 
@@ -206,6 +209,8 @@ def generate_formula_explanation_sheet(wb: Workbook, records: List[SalaryRecord]
 
     def w(row, col, text, bold=False):
         cell = ws.cell(row=row, column=col, value=text)
+        if isinstance(text, str) and text.startswith("="):
+            cell.data_type = "s"
         if bold:
             cell.font = cell.font.copy(bold=True)
         return cell
