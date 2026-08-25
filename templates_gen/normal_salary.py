@@ -84,22 +84,39 @@ def generate_normal_salary(records: List[SalaryRecord], title: str, output_dir: 
         diff = abs(left - right)
         passed = diff < 0.01
         validations.append({
-            "tc930": rec.tc930_id, "姓名": rec.姓名, "本期收入": income,
-            "左": left, "右": right, "差值": diff, "通过": passed
+            "tc930": rec.tc930_id, "姓名": rec.姓名,
+            "工资总额": rec.工资总额, "本次免税": rec.补发3, "大病险个人": rec.大病险个人,
+            "补缴退款差额": rec.补缴及退款保险金额个人, "本期收入": income,
+            "养老": rec.养老个人, "失业": rec.失业个人, "医疗": rec.医疗个人, "公积金": rec.公积金个人,
+            "其他调整": rec.个人其他调整, "个人欠款": rec.个人欠款, "扣款大病险": rec.扣款大病险,
+            "左": left,
+            "实发": rec.实发工资, "工会会费": rec.税后工会会费, "代理费": rec.个人代理费,
+            "个税": rec.个人所得税, "免税": tax_exempt,
+            "右": right, "差值": diff, "通过": passed
         })
     
     vs = wb.create_sheet("验证报告")
-    vs_headers = ["ATC930", "姓名", "本期收入", "左(收入-五险一金)", "右(实发+个税-免税)", "差值", "状态"]
+    vs_headers = [
+        "ATC930", "姓名",
+        "工资总额(AA)", "本次免税(936)", "大病险(BD)", "补缴退款差额(BE)", "本期收入",
+        "养老(BAA001)", "失业(BAA003)", "医疗(BAA002)", "公积金(CAA002)",
+        "其他调整(AG)", "个人欠款(E)", "扣款大病险(Y2)", "左",
+        "实发(C)", "工会会费(Z2)", "代理费(BAA300)", "个税(D)", "免税",
+        "右", "差值", "状态"
+    ]
     for col, h in enumerate(vs_headers, 1):
         vs.cell(row=1, column=col, value=h)
     for idx, v in enumerate(validations, 1):
-        vs.cell(row=idx+1, column=1, value=v["tc930"])
-        vs.cell(row=idx+1, column=2, value=v["姓名"])
-        vs.cell(row=idx+1, column=3, value=v["本期收入"])
-        vs.cell(row=idx+1, column=4, value=v["左"])
-        vs.cell(row=idx+1, column=5, value=v["右"])
-        vs.cell(row=idx+1, column=6, value=v["差值"])
-        vs.cell(row=idx+1, column=7, value="通过" if v["通过"] else "失败")
+        vals = [
+            v["tc930"], v["姓名"],
+            v["工资总额"], v["本次免税"], v["大病险个人"], v["补缴退款差额"], v["本期收入"],
+            v["养老"], v["失业"], v["医疗"], v["公积金"],
+            v["其他调整"], v["个人欠款"], v["扣款大病险"], v["左"],
+            v["实发"], v["工会会费"], v["代理费"], v["个税"], v["免税"],
+            v["右"], v["差值"], "通过" if v["通过"] else "失败"
+        ]
+        for col, val in enumerate(vals, 1):
+            vs.cell(row=idx+1, column=col, value=val)
     
     if tc93_all:
         generate_tc93_full_sheet(wb, tc93_all, tc93_comments)

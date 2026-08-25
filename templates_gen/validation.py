@@ -37,6 +37,14 @@ def validate_salary_records(records: List[SalaryRecord]) -> ValidationReport:
                 "左": left,
                 "右": right,
                 "差值": diff,
+                "工资总额": rec.工资总额,
+                "本次免税": rec.补发3,
+                "大病险个人": rec.大病险个人,
+                "补缴退款差额": rec.补缴及退款保险金额个人,
+                "养老": rec.养老个人, "失业": rec.失业个人, "医疗": rec.医疗个人, "公积金": rec.公积金个人,
+                "其他调整": rec.个人其他调整, "个人欠款": rec.个人欠款, "扣款大病险": rec.扣款大病险,
+                "实发": rec.实发工资, "工会会费": rec.税后工会会费, "代理费": rec.个人代理费,
+                "个税": rec.个人所得税, "免税": tax_exempt,
             })
     
     return ValidationReport(
