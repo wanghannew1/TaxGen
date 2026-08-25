@@ -155,7 +155,7 @@ def generate_combo_list_sheet(wb: Workbook, combos: List[dict]):
     """待报列表 sheet，列出本次生成的结算单元组合。"""
     if not combos:
         return
-    ws = wb.create_sheet("报税单元")
+    ws = wb.create_sheet("报税项目")
     headers = ["结算单元ID", "结算单元名称", "所属月份", "发放月份", "批次", "人数", "合计收入", "经办人"]
     for col_idx, h in enumerate(headers, 1):
         ws.cell(row=1, column=col_idx, value=h)
