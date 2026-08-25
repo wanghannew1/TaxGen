@@ -106,6 +106,7 @@ def generate_normal_salary(records: List[SalaryRecord], title: str, output_dir: 
         generate_abnormal_sheet(wb, abnormal, abnormal_reasons or {})
     if combos:
         generate_combo_list_sheet(wb, combos)
+    generate_formula_explanation_sheet(wb, records)
     
     wb.save(output_path)
     
@@ -175,3 +176,97 @@ def generate_combo_list_sheet(wb: Workbook, combos: List[dict]):
         ws.cell(row=row_idx, column=8, value=c.get("handler", ""))
     for col_idx, h in enumerate(headers, 1):
         ws.column_dimensions[get_column_letter(col_idx)].width = max(10, min(25, len(str(h)) * 1.5))
+
+
+def generate_formula_explanation_sheet(wb: Workbook, records: List[SalaryRecord]):
+    """验算公式说明 sheet，逐项解释左=右校验。"""
+    ws = wb.create_sheet("验算公式说明")
+    ws.column_dimensions["A"].width = 55
+    ws.column_dimensions["B"].width = 22
+    ws.column_dimensions["C"].width = 55
+
+    def w(row, col, text, bold=False):
+        cell = ws.cell(row=row, column=col, value=text)
+        if bold:
+            cell.font = cell.font.copy(bold=True)
+        return cell
+
+    w(1, 1, "验证报告验算公式说明", bold=True)
+    w(2, 1, "验证报告 sheet 中每一行对一个人的工资数据进行左=右校验：左与右的差值绝对值小于 0.01 即为通过。")
+
+    w(4, 1, "一、本期收入（报税口径）", bold=True)
+    w(5, 1, "本期收入 = 本次工资总额(ATC93AA) − 本次免税(ATC936) − 大病险个人(ATC93BD) − 补缴及退款保险差额个人(ATC93BE)")
+    w(6, 1, "说明：本次免税(ATC936) = 采暖费(ATC93W21) + 独生子女费(ATC93W4)，经数据库验证 100% 吻合。")
+
+    w(8, 1, "二、左(收入-五险一金)", bold=True)
+    w(9, 1, "左 = 本期收入 − 当月养老个人缴(BAA001) − 当月失业个人缴(BAA003) − 当月医疗个人缴(BAA002)")
+    w(10, 1, "     − 个人公积金月缴存额(CAA002) − 个人其他调整(ATC93AG) − 个人欠款(ATC93E) − 扣款-大病险(ATC93Y2)")
+    w(11, 1, "含义：本期收入扣除个人承担的五险一金及其他个人扣减项后，理论上应等于个人实际到手的金额。")
+
+    w(13, 1, "三、右(实发+个税-免税)", bold=True)
+    w(14, 1, "右 = 本次实发金额合计(ATC93C) + 税后扣除工会会费(ATC93Z2) + 个人承担代理费(BAA300)")
+    w(15, 1, "     + 本次个人所得税(ATC93D) − 免税")
+    w(16, 1, "免税 = 本次免税(ATC936) + 大病险个人(ATC93BD)")
+    w(17, 1, "为什么右侧要减免税：本期收入(左侧起点)已经扣除了免税部分（采暖费、独生子女费、大病险），")
+    w(18, 1, "而实发工资里没有包含这笔免税金额。如果右侧不减免税，右侧会多出免税金额，两边就对不上。")
+    w(19, 1, "举例：某人工资总额 5000，其中采暖费 500（免税），五险 800，个税 0，实发 3700。")
+    w(20, 1, "  左 = 本期收入(5000−500=4500) − 800 = 3700")
+    w(21, 1, "  右 = 实发(3700) + 个税(0) − 免税(500) = 3200 ≠ 3700？——错！")
+    w(22, 1, "  实际实发 = 工资总额 − 免税 − 五险 = 5000 − 500 − 800 = 3700，此时：")
+    w(23, 1, "  左 = (5000−500) − 800 = 3700；右 = 3700 + 0 − 500 = 3200？")
+    w(24, 1, "  —— 这说明实发 3700 里并未扣除免税 500 对应的现金流（免税部分实际已发，但报税时不作为收入）。")
+    w(25, 1, "  因此右侧必须减免税：右 = 实发 + 个税 − 免税 = 3700 + 0 − 500 = 3200，与左一致的前提是实发按不含免税口径。")
+
+    w(27, 1, "四、正确理解（简洁版）", bold=True)
+    w(28, 1, "左 = 应计入报税的收入 − 个人五险一金等扣减")
+    w(29, 1, "右 = 实际发放的钱 + 代扣的个税 − 已从收入中剔除的免税部分")
+    w(30, 1, "两边从不同角度还原同一笔工资，应当相等；不相等则数据有疑点，需人工核对。")
+
+    w(32, 1, "五、验证报告列字段对照", bold=True)
+    headers = ["验证列", "公式", "涉及字段"]
+    for col, h in enumerate(headers, 1):
+        w(33, col, h, bold=True)
+    rows = [
+        ("本期收入", "工资总额 − 本次免税 − 大病险个人 − 补缴及退款保险差额个人", "ATC93AA, ATC936, ATC93BD, ATC93BE"),
+        ("左", "本期收入 − 养老 − 失业 − 医疗 − 公积金 − 个人其他调整 − 个人欠款 − 扣款大病险", "BAA001, BAA003, BAA002, CAA002, ATC93AG, ATC93E, ATC93Y2"),
+        ("右", "实发合计 + 税后工会会费 + 个人代理费 + 个税 − 免税", "ATC93C, ATC93Z2, BAA300, ATC93D, ATC936, ATC93BD"),
+        ("差值", "|左 − 右|", ""),
+        ("状态", "差值 < 0.01 为通过", ""),
+    ]
+    for i, (c1, c2, c3) in enumerate(rows, 34):
+        w(i, 1, c1)
+        w(i, 2, c2)
+        w(i, 3, c3)
+
+    w(40, 1, "六、验算示例（第一条记录实际数值）", bold=True)
+    if records:
+        rec = records[0]
+        income = calc_本期收入(rec)
+        tax_exempt = calc_免税(rec)
+        left = (income - rec.养老个人 - rec.失业个人 - rec.医疗个人 - rec.公积金个人
+                - rec.个人其他调整 - rec.个人欠款 - rec.扣款大病险)
+        right = (rec.实发工资 + rec.税后工会会费 + rec.个人代理费 + rec.个人所得税 - tax_exempt)
+        ex_rows = [
+            ("姓名", rec.姓名, ""),
+            ("工资总额(ATC93AA)", rec.工资总额, ""),
+            ("本次免税(ATC936)", rec.补发3, ""),
+            ("大病险个人(ATC93BD)", rec.大病险个人, ""),
+            ("补缴及退款保险差额个人(ATC93BE)", rec.补缴及退款保险金额个人, ""),
+            ("本期收入", income, "工资总额 − 本次免税 − 大病险 − 补缴退款差额"),
+            ("五险一金(养老+失业+医疗+公积金)", rec.养老个人 + rec.失业个人 + rec.医疗个人 + rec.公积金个人, "BAA001+BAA003+BAA002+CAA002"),
+            ("个人其他调整(ATC93AG)", rec.个人其他调整, ""),
+            ("个人欠款(ATC93E)", rec.个人欠款, ""),
+            ("扣款大病险(ATC93Y2)", rec.扣款大病险, ""),
+            ("左", left, "本期收入 − 五险一金 − AG − E − Y2"),
+            ("实发合计(ATC93C)", rec.实发工资, ""),
+            ("税后工会会费(ATC93Z2)", rec.税后工会会费, ""),
+            ("个人代理费(BAA300)", rec.个人代理费, ""),
+            ("个人所得税(ATC93D)", rec.个人所得税, ""),
+            ("免税", tax_exempt, "本次免税(ATC936) + 大病险个人(ATC93BD)"),
+            ("右", right, "实发 + 工会会费 + 代理费 + 个税 − 免税"),
+            ("差值", abs(left - right), "|左 − 右|，<0.01 通过"),
+        ]
+        for i, (name, val, note) in enumerate(ex_rows, 41):
+            w(i, 1, name)
+            w(i, 2, val)
+            w(i, 3, note)
