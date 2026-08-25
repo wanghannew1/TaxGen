@@ -12,6 +12,7 @@ class SalaryRecord:
     工资所属年月: int = 0  # ATC931 - 工资所属年月
     结算单元: int = 0  # ATB930 - 结算单元流水号
     当月批次: str = ""  # ATC937 - 工资发放次数
+    tc930_id: int = 0  # ATC930 - 流水号
 
     # 工资汇总
     应发工资: Decimal = Decimal("0")  # ATC933 - 本次应发工资

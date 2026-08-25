@@ -168,6 +168,7 @@ def get_salary_records(conn, month: int) -> List[SalaryRecord]:
                 补缴及退款保险金额个人=Decimal(str(row[22] or 0)),
                 大病险个人=Decimal(str(row[23] or 0)),
                 补发3=Decimal(str(row[24] or 0)),
+                tc930_id=int(row[25] or 0),
             ))
     return records
 
