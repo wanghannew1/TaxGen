@@ -31,7 +31,7 @@ def generate_normal_salary(records: List[SalaryRecord], title: str, output_dir: 
     os.makedirs(output_dir, exist_ok=True)
     timestamp = datetime.now().strftime("%Y%m%d%H%M%S")
     output_path = os.path.join(output_dir, f"正常工资薪金所得_{title}_{timestamp}.xlsx")
-    remark = extract_remark(title)
+    remark = title
     
     wb = Workbook()
     ws = wb.active
