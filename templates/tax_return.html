@@ -89,7 +89,7 @@
                 <table class="table table-sm table-striped table-hover mb-0">
                     <thead class="sticky-top">
                         <tr>
-                            <th>结算单元</th><th>所属月份</th><th>批次</th>
+                            <th>结算单元名称</th><th>结算单元ID</th><th>所属月份</th><th>批次</th>
                             <th>人数</th><th>已报送</th><th>未报送</th><th>状态</th>
                         </tr>
                     </thead>
@@ -196,7 +196,7 @@
             c.reported === 0 ? '<span class="status-no">全部未报送</span>' : '<span class="status-diff">部分报送</span>';
         document.getElementById('combosTbody').innerHTML = data.combos.map(c => `
             <tr>
-                <td>${c.unit_name || c.unit}${c.unit_name ? ` (${c.unit})` : ''}</td><td>${c.month}</td><td>${c.seq}</td>
+                <td>${c.unit_name || c.unit}</td><td>${c.unit}</td><td>${c.month}</td><td>${c.seq}</td>
                 <td>${c.count}</td><td class="status-ok">${c.reported}</td><td class="status-no">${c.unreported}</td>
                 <td>${comboStatus(c)}</td>
             </tr>`).join('');
