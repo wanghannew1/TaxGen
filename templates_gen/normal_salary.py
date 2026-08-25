@@ -78,21 +78,22 @@ def generate_normal_salary(records: List[SalaryRecord], title: str, output_dir: 
         diff = abs(left - right)
         passed = diff < 0.01
         validations.append({
-            "姓名": rec.姓名, "本期收入": income,
+            "tc930": rec.tc930_id, "姓名": rec.姓名, "本期收入": income,
             "左": left, "右": right, "差值": diff, "通过": passed
         })
     
     vs = wb.create_sheet("验证报告")
-    vs_headers = ["姓名", "本期收入", "左(收入-五险一金)", "右(实发+个税-免税)", "差值", "状态"]
+    vs_headers = ["ATC930", "姓名", "本期收入", "左(收入-五险一金)", "右(实发+个税-免税)", "差值", "状态"]
     for col, h in enumerate(vs_headers, 1):
         vs.cell(row=1, column=col, value=h)
     for idx, v in enumerate(validations, 1):
-        vs.cell(row=idx+1, column=1, value=v["姓名"])
-        vs.cell(row=idx+1, column=2, value=v["本期收入"])
-        vs.cell(row=idx+1, column=3, value=v["左"])
-        vs.cell(row=idx+1, column=4, value=v["右"])
-        vs.cell(row=idx+1, column=5, value=v["差值"])
-        vs.cell(row=idx+1, column=6, value="通过" if v["通过"] else "失败")
+        vs.cell(row=idx+1, column=1, value=v["tc930"])
+        vs.cell(row=idx+1, column=2, value=v["姓名"])
+        vs.cell(row=idx+1, column=3, value=v["本期收入"])
+        vs.cell(row=idx+1, column=4, value=v["左"])
+        vs.cell(row=idx+1, column=5, value=v["右"])
+        vs.cell(row=idx+1, column=6, value=v["差值"])
+        vs.cell(row=idx+1, column=7, value="通过" if v["通过"] else "失败")
     
     if tc93_all:
         generate_tc93_full_sheet(wb, tc93_all)
