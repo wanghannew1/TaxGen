@@ -279,13 +279,22 @@ def api_tax_return_details():
         from tax_return import compare_month
         month = int(request.args.get("month", 0) or 0)
         status = request.args.get("status", "")
+        search = request.args.get("search", "").strip()
+        page = max(1, int(request.args.get("page", 1) or 1))
+        page_size = min(500, max(1, int(request.args.get("page_size", 50) or 50)))
         if not month:
             return jsonify({"error": "请选择月份"}), 400
         conn = get_connection()
         details, combo_stats = compare_month(conn, month)
         if status:
             details = [d for d in details if d["status"] == status]
-        return jsonify({"details": details[:500]})
+        if search:
+            details = [d for d in details
+                       if search.lower() in d["name"].lower() or search in d["cert_no"]]
+        total = len(details)
+        start = (page - 1) * page_size
+        return jsonify({"total": total, "page": page, "page_size": page_size,
+                        "details": details[start:start + page_size]})
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
@@ -302,10 +311,11 @@ def api_tax_return_export():
         wb = Workbook()
         ws = wb.active
         ws.title = "报税状态统计"
-        ws.append(["月份", "姓名", "证件号码", "系统本期收入", "回盘本期收入", "收入差异", "系统预算个税", "回盘个税(应补退)", "个税差值", "状态"])
+        ws.append(["月份", "姓名", "证件号码", "结算单元名称", "系统本期收入", "回盘本期收入", "收入差异", "系统预算个税", "回盘个税(应补退)", "个税差值", "状态"])
         for d in details:
-            ws.append([month, d["name"], d["cert_no"], d["sys_income"], d.get("ret_income"),
-                       d.get("income_diff"), d["sys_tax"], d.get("ret_tax"), d["diff"], d["status"]])
+            ws.append([month, d["name"], d["cert_no"], d.get("unit_name", ""), d["sys_income"],
+                       d.get("ret_income"), d.get("income_diff"), d["sys_tax"],
+                       d.get("ret_tax"), d["diff"], d["status"]])
         ws2 = wb.create_sheet("按结算单元批次")
         ws2.append(["结算单元", "结算单元名称", "所属月份", "批次", "人数", "已报送", "未报送"])
         for c in combo_stats:

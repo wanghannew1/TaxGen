@@ -181,6 +181,7 @@ def get_system_aggregate(conn, pay_month):
                     "insurance": rec.养老个人 + rec.医疗个人 + rec.失业个人 + rec.公积金个人,
                     "tax": rec.个人所得税,
                     "unit": rec.结算单元,
+                    "unit_keys": {combo},
                     "month": rec.工资所属年月,
                     "seq": rec.当月批次,
                 }
@@ -189,6 +190,7 @@ def get_system_aggregate(conn, pay_month):
                 cur["tax_free"] += tax_exempt
                 cur["insurance"] += rec.养老个人 + rec.医疗个人 + rec.失业个人 + rec.公积金个人
                 cur["tax"] += rec.个人所得税
+                cur["unit_keys"].add(combo)
     return agg, combos
 
 
@@ -196,12 +198,17 @@ def compare_month(conn, month):
     """比对系统预算 vs 回盘，返回按人明细与按组合统计。"""
     system, combos = get_system_aggregate(conn, month)
     returns = get_returns(month)
+    all_unit_keys = {k for s in system.values() for k in s.get("unit_keys", {(s.get("unit", 0), month, "1")})}
+    unit_names = _get_unit_names(conn, list(all_unit_keys))
     details = []
     for cert, s in system.items():
+        keys = s.get("unit_keys", {(s.get("unit", 0), month, "1")})
+        uname = "、".join(dict.fromkeys(
+            unit_names.get(k, "") or str(k[0]) for k in sorted(keys)))
         r = returns.get(cert)
         if r is None:
             details.append({
-                "cert_no": cert, "name": s["name"], "month": month,
+                "cert_no": cert, "name": s["name"], "month": month, "unit_name": uname,
                 "sys_income": round(float(s["income"]), 2), "sys_tax": round(float(s["tax"]), 2),
                 "ret_tax": None, "diff": None, "status": "未报送",
             })
@@ -209,7 +216,7 @@ def compare_month(conn, month):
             diff = round(abs(float(s["tax"]) - float(r["tax_due"])), 2)
             income_diff = round(abs(float(s["income"]) - float(r["income"])), 2)
             details.append({
-                "cert_no": cert, "name": s["name"], "month": month,
+                "cert_no": cert, "name": s["name"], "month": month, "unit_name": uname,
                 "sys_income": round(float(s["income"]), 2), "ret_income": r["income"], "income_diff": income_diff,
                 "sys_tax": round(float(s["tax"]), 2), "ret_tax": r["tax_due"], "diff": diff,
                 "status": "已报送" if diff <= 0.01 else "有差异",
@@ -217,7 +224,7 @@ def compare_month(conn, month):
     for cert, r in returns.items():
         if cert not in system:
             details.append({
-                "cert_no": cert, "name": r["name"], "month": month,
+                "cert_no": cert, "name": r["name"], "month": month, "unit_name": r.get("remark", ""),
                 "sys_income": None, "sys_tax": None,
                 "ret_income": r["income"], "ret_tax": r["tax_due"], "diff": None,
                 "status": "系统无记录",

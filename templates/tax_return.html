@@ -151,7 +151,7 @@
                 <table class="table table-sm table-striped table-hover mb-0">
                     <thead class="sticky-top">
                         <tr>
-                            <th style="width:50px">序号</th><th>姓名</th><th>证件号码</th><th>月份</th>
+                            <th style="width:50px">序号</th><th>姓名</th><th>证件号码</th><th>结算单元名称</th><th>月份</th>
                             <th>系统本期收入</th><th>回盘本期收入</th><th>收入差异</th>
                             <th>系统预算个税</th><th>回盘个税(应补退)</th>
                             <th>个税差值</th><th>状态</th>
@@ -227,13 +227,14 @@
         if (data.download_url) window.location.href = data.download_url;
         else alert(data.error || '导出失败');
     });
-    document.getElementById('btnFilter').addEventListener('click', queryDetails);
+    document.getElementById('btnFilter').addEventListener('click', () => { detailsPage = 1; queryDetails(); });
 
     let combosData = [];
     let combosFiltered = [];
-    let detailsData = [];
+    let detailsTotal = 0;
     let combosPage = 1;
     let detailsPage = 1;
+    let detailsLoading = false;
 
     function pageSize(prefix) {
         const sel = document.getElementById(prefix + 'PageSize');
@@ -260,15 +261,15 @@
     }
 
     document.getElementById('combosPrev').addEventListener('click', () => { if (combosPage > 1) { combosPage--; renderCombos(); } });
-    document.getElementById('combosNext').addEventListener('click', () => { if (combosPage * pageSize('combos') < combosData.length) { combosPage++; renderCombos(); } });
-    document.getElementById('detailsPrev').addEventListener('click', () => { if (detailsPage > 1) { detailsPage--; renderDetails(); } });
-    document.getElementById('detailsNext').addEventListener('click', () => { if (detailsPage * pageSize('details') < detailsData.length) { detailsPage++; renderDetails(); } });
+    document.getElementById('combosNext').addEventListener('click', () => { if (combosPage * pageSize('combos') < combosFiltered.length) { combosPage++; renderCombos(); } });
+    document.getElementById('detailsPrev').addEventListener('click', () => { if (detailsPage > 1) { detailsPage--; queryDetails(); } });
+    document.getElementById('detailsNext').addEventListener('click', () => { if (detailsPage * pageSize('details') < detailsTotal) { detailsPage++; queryDetails(); } });
     document.getElementById('combosJumpBtn').addEventListener('click', () => jumpPage('combos'));
     document.getElementById('detailsJumpBtn').addEventListener('click', () => jumpPage('details'));
     document.getElementById('comboFilterBtn').addEventListener('click', filterCombos);
     document.getElementById('comboSearch').addEventListener('keydown', e => { if (e.key === 'Enter') filterCombos(); });
     bindPageSize('combos', p => { combosPage = p; renderCombos(); });
-    bindPageSize('details', p => { detailsPage = p; renderDetails(); });
+    bindPageSize('details', p => { detailsPage = p; queryDetails(); });
 
     function filterCombos() {
         const st = document.getElementById('comboStatusFilter').value;
@@ -289,33 +290,50 @@
     }
 
     function jumpPage(prefix) {
-        const totalPages = Math.max(1, Math.ceil((prefix === 'combos' ? combosData : detailsData).length / pageSize(prefix)));
-        const p = parseInt(document.getElementById(prefix + 'Jump').value);
-        if (!p || p < 1 || p > totalPages) { alert(`页码需在 1-${totalPages} 之间`); return; }
-        if (prefix === 'combos') { combosPage = p; renderCombos(); }
-        else { detailsPage = p; renderDetails(); }
+        if (prefix === 'combos') {
+            const totalPages = Math.max(1, Math.ceil(combosFiltered.length / pageSize('combos')));
+            const p = parseInt(document.getElementById('combosJump').value);
+            if (!p || p < 1 || p > totalPages) { alert(`页码需在 1-${totalPages} 之间`); return; }
+            combosPage = p;
+            renderCombos();
+        } else {
+            const totalPages = Math.max(1, Math.ceil(detailsTotal / pageSize('details')));
+            const p = parseInt(document.getElementById('detailsJump').value);
+            if (!p || p < 1 || p > totalPages) { alert(`页码需在 1-${totalPages} 之间`); return; }
+            detailsPage = p;
+            queryDetails();
+        }
     }
 
     async function queryStats() {
         currentMonth = parseInt(monthSelect.value);
         if (!currentMonth) { alert('请选择月份'); return; }
-        const resp = await fetch(`/api/tax-return/status?month=${currentMonth}`);
-        const data = await resp.json();
-        if (data.error) { alert(data.error); return; }
-        document.getElementById('statMonth').textContent = currentMonth;
-        document.getElementById('statTotal').textContent = data.total;
-        document.getElementById('statReported').textContent = data.reported;
-        document.getElementById('statDiff').textContent = data.diff;
-        document.getElementById('statUnreported').textContent = data.unreported;
-        document.getElementById('statNoSys').textContent = data.no_sys;
-        document.getElementById('statsCard').style.display = 'block';
+        const btn = document.getElementById('btnQuery');
+        btn.disabled = true;
+        btn.textContent = '查询中...';
+        try {
+            const resp = await fetch(`/api/tax-return/status?month=${currentMonth}`);
+            const data = await resp.json();
+            if (data.error) { alert(data.error); return; }
+            document.getElementById('statMonth').textContent = currentMonth;
+            document.getElementById('statTotal').textContent = data.total;
+            document.getElementById('statReported').textContent = data.reported;
+            document.getElementById('statDiff').textContent = data.diff;
+            document.getElementById('statUnreported').textContent = data.unreported;
+            document.getElementById('statNoSys').textContent = data.no_sys;
+            document.getElementById('statsCard').style.display = 'block';
 
-        combosData = data.combos;
-        combosFiltered = data.combos;
-        combosPage = 1;
-        renderCombos();
-        document.getElementById('combosCard').style.display = 'block';
-        queryDetails();
+            combosData = data.combos;
+            combosFiltered = data.combos;
+            combosPage = 1;
+            renderCombos();
+            document.getElementById('combosCard').style.display = 'block';
+            detailsPage = 1;
+            await queryDetails();
+        } finally {
+            btn.disabled = false;
+            btn.textContent = '查询统计';
+        }
     }
 
     function renderCombos() {
@@ -339,38 +357,45 @@
     }
 
     async function queryDetails() {
-        if (!currentMonth) return;
+        if (!currentMonth || detailsLoading) return;
+        detailsLoading = true;
         const status = document.getElementById('statusFilter').value;
         const name = document.getElementById('nameFilter').value.trim();
-        const resp = await fetch(`/api/tax-return/details?month=${currentMonth}${status ? '&status=' + encodeURIComponent(status) : ''}`);
-        const data = await resp.json();
-        if (data.error) return;
-        detailsData = data.details;
-        if (name) detailsData = detailsData.filter(d => d.name.includes(name) || d.cert_no.includes(name));
-        detailsPage = 1;
-        renderDetails();
+        const ps = pageSize('details');
+        const url = `/api/tax-return/details?month=${currentMonth}&page=${detailsPage}&page_size=${ps}` +
+            (status ? '&status=' + encodeURIComponent(status) : '') +
+            (name ? '&search=' + encodeURIComponent(name) : '');
+        const tbody = document.getElementById('detailsTbody');
+        tbody.innerHTML = '<tr><td colspan="12" class="text-center text-muted py-3">加载中...</td></tr>';
+        try {
+            const resp = await fetch(url);
+            const data = await resp.json();
+            if (data.error) return;
+            detailsTotal = data.total;
+            renderDetails(data.details);
+        } finally {
+            detailsLoading = false;
+        }
         document.getElementById('detailsCard').style.display = 'block';
     }
 
-    function renderDetails() {
+    function renderDetails(pageData) {
         const cls = { '已报送': 'status-ok', '有差异': 'status-diff', '未报送': 'status-no', '系统无记录': 'status-other' };
         const ps = pageSize('details');
-        const totalPages = Math.max(1, Math.ceil(detailsData.length / ps));
-        if (detailsPage > totalPages) detailsPage = totalPages;
+        const totalPages = Math.max(1, Math.ceil(detailsTotal / ps));
         const start = (detailsPage - 1) * ps;
-        const page = detailsData.slice(start, start + ps);
-        document.getElementById('detailsTbody').innerHTML = page.map((d, i) => `
+        document.getElementById('detailsTbody').innerHTML = pageData.map((d, i) => `
             <tr>
-                <td>${start + i + 1}</td><td>${d.name}</td><td>${d.cert_no}</td><td>${d.month}</td>
+                <td>${start + i + 1}</td><td>${d.name}</td><td>${d.cert_no}</td><td>${d.unit_name || ''}</td><td>${d.month}</td>
                 <td>${d.sys_income ?? ''}</td><td>${d.ret_income ?? ''}</td><td>${d.income_diff ?? ''}</td>
                 <td>${d.sys_tax ?? ''}</td><td>${d.ret_tax ?? ''}</td>
                 <td>${d.diff ?? ''}</td>
                 <td class="${cls[d.status] || ''}">${d.status}</td>
             </tr>`).join('');
-        document.getElementById('detailsCount').textContent = `共 ${detailsData.length} 条`;
+        document.getElementById('detailsCount').textContent = `共 ${detailsTotal} 条`;
         document.getElementById('detailsPageInfo').textContent = `第 ${detailsPage}/${totalPages} 页`;
         document.getElementById('detailsPrev').disabled = detailsPage <= 1;
-        document.getElementById('detailsNext').disabled = detailsPage * ps >= detailsData.length;
+        document.getElementById('detailsNext').disabled = detailsPage * ps >= detailsTotal;
     }
 </script>
 </body>
