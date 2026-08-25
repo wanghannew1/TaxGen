@@ -203,14 +203,20 @@ def compare_month(conn, month):
     details = []
     for cert, s in system.items():
         keys = s.get("unit_keys", {(s.get("unit", 0), month, "1")})
-        name_by_unit = {}
+        by_unit = {}
         for k in sorted(keys):
-            name_by_unit.setdefault(k[0], unit_names.get(k, "") or str(k[0]))
-        uname = "、".join(name_by_unit.values())
+            by_unit.setdefault(k[0], []).append((k[1], k[2], unit_names.get(k, "") or str(k[0])))
+        unit_names_list = []
+        periods_list = []
+        for u, items in by_unit.items():
+            unit_names_list.append(items[0][2])
+            periods_list.append("、".join(f"{m}-批{s}" for m, s, _ in sorted(items, key=lambda x: (x[0], str(x[1])))))
+        uname = "、".join(unit_names_list)
+        uperiods = " | ".join(periods_list)
         r = returns.get(cert)
         if r is None:
             details.append({
-                "cert_no": cert, "name": s["name"], "month": month, "unit_name": uname,
+                "cert_no": cert, "name": s["name"], "month": month, "unit_name": uname, "unit_periods": uperiods,
                 "sys_income": round(float(s["income"]), 2), "sys_tax": round(float(s["tax"]), 2),
                 "ret_tax": None, "diff": None, "status": "未报送",
             })
@@ -218,7 +224,7 @@ def compare_month(conn, month):
             diff = round(abs(float(s["tax"]) - float(r["tax_due"])), 2)
             income_diff = round(abs(float(s["income"]) - float(r["income"])), 2)
             details.append({
-                "cert_no": cert, "name": s["name"], "month": month, "unit_name": uname,
+                "cert_no": cert, "name": s["name"], "month": month, "unit_name": uname, "unit_periods": uperiods,
                 "sys_income": round(float(s["income"]), 2), "ret_income": r["income"], "income_diff": income_diff,
                 "sys_tax": round(float(s["tax"]), 2), "ret_tax": r["tax_due"], "diff": diff,
                 "status": "已报送" if diff <= 0.01 else "有差异",
@@ -226,7 +232,7 @@ def compare_month(conn, month):
     for cert, r in returns.items():
         if cert not in system:
             details.append({
-                "cert_no": cert, "name": r["name"], "month": month, "unit_name": r.get("remark", ""),
+                "cert_no": cert, "name": r["name"], "month": month, "unit_name": r.get("remark", ""), "unit_periods": "",
                 "sys_income": None, "sys_tax": None,
                 "ret_income": r["income"], "ret_tax": r["tax_due"], "diff": None,
                 "status": "系统无记录",

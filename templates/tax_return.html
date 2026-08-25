@@ -155,7 +155,7 @@
                 <table class="table table-sm table-striped table-hover mb-0 w-100" id="detailsTable">
                     <thead class="sticky-top">
                         <tr>
-                            <th style="width:50px">序号</th><th style="width:80px">姓名</th><th style="width:190px">证件号码</th><th>结算单元名称</th><th style="width:80px">月份</th>
+                            <th style="width:50px">序号</th><th style="width:80px">姓名</th><th style="width:190px">证件号码</th><th>结算单元</th><th>所属月份-批次</th><th style="width:80px">月份</th>
                             <th style="width:110px">系统本期收入</th><th style="width:110px">回盘本期收入</th><th style="width:90px">收入差异</th>
                             <th style="width:100px">系统预算个税</th><th style="width:110px">回盘个税(应补退)</th>
                             <th style="width:90px">个税差值</th><th style="width:80px">状态</th>
@@ -390,7 +390,7 @@
         const start = (detailsPage - 1) * ps;
         document.getElementById('detailsTbody').innerHTML = pageData.map((d, i) => `
             <tr>
-                <td>${start + i + 1}</td><td>${d.name}</td><td class="nowrap">${d.cert_no}</td><td class="ellipsis-cell" title="${(d.unit_name || '').replace(/"/g, '&quot;')}">${d.unit_name || ''}</td><td>${d.month}</td>
+                <td>${start + i + 1}</td><td>${d.name}</td><td class="nowrap">${d.cert_no}</td><td class="ellipsis-cell" title="${(d.unit_name || '').replace(/"/g, '&quot;')}">${d.unit_name || ''}</td><td class="ellipsis-cell" title="${(d.unit_periods || '').replace(/"/g, '&quot;')}">${d.unit_periods || ''}</td><td>${d.month}</td>
                 <td>${d.sys_income ?? ''}</td><td>${d.ret_income ?? ''}</td><td>${d.income_diff ?? ''}</td>
                 <td>${d.sys_tax ?? ''}</td><td>${d.ret_tax ?? ''}</td>
                 <td>${d.diff ?? ''}</td>

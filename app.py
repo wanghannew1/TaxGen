@@ -311,10 +311,10 @@ def api_tax_return_export():
         wb = Workbook()
         ws = wb.active
         ws.title = "报税状态统计"
-        ws.append(["月份", "姓名", "证件号码", "结算单元名称", "系统本期收入", "回盘本期收入", "收入差异", "系统预算个税", "回盘个税(应补退)", "个税差值", "状态"])
+        ws.append(["月份", "姓名", "证件号码", "结算单元", "所属月份-批次", "系统本期收入", "回盘本期收入", "收入差异", "系统预算个税", "回盘个税(应补退)", "个税差值", "状态"])
         for d in details:
-            ws.append([month, d["name"], d["cert_no"], d.get("unit_name", ""), d["sys_income"],
-                       d.get("ret_income"), d.get("income_diff"), d["sys_tax"],
+            ws.append([month, d["name"], d["cert_no"], d.get("unit_name", ""), d.get("unit_periods", ""),
+                       d["sys_income"], d.get("ret_income"), d.get("income_diff"), d["sys_tax"],
                        d.get("ret_tax"), d["diff"], d["status"]])
         ws2 = wb.create_sheet("按结算单元批次")
         ws2.append(["结算单元", "结算单元名称", "所属月份", "批次", "人数", "已报送", "未报送"])
