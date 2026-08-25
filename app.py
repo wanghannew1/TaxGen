@@ -106,7 +106,9 @@ def api_generate():
                 else:
                     file_title = f"劳务派遣人员工资发放表{month}"
                 r = generate_normal_salary(records, file_title, OUTPUT_DIR,
-                                           tc93_all=tc93_all, abnormal=abnormal, abnormal_reasons=abnormal_reasons)
+                                           tc93_all=tc93_all, abnormal=abnormal,
+                                           abnormal_reasons=abnormal_reasons,
+                                           combos=confirmed_combos)
             elif tpl == "laborService":
                 r = generate_labor_service(records, f"劳务派遣人员工资发放表{month}", OUTPUT_DIR)
             elif tpl == "annualBonus":

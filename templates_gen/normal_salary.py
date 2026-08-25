@@ -23,7 +23,8 @@ def extract_remark(title: str) -> str:
 def generate_normal_salary(records: List[SalaryRecord], title: str, output_dir: str,
                            tc93_all: Optional[List[dict]] = None,
                            abnormal: Optional[List[dict]] = None,
-                           abnormal_reasons: Optional[dict] = None) -> GenerateResult:
+                           abnormal_reasons: Optional[dict] = None,
+                           combos: Optional[List[dict]] = None) -> GenerateResult:
     """生成正常工资薪金所得 Excel 模板
 
     新增 tc93_all: TC93总表(全字段), abnormal: 异常记录, abnormal_reasons: 过滤原因
@@ -97,6 +98,8 @@ def generate_normal_salary(records: List[SalaryRecord], title: str, output_dir: 
         generate_tc93_full_sheet(wb, tc93_all)
     if abnormal:
         generate_abnormal_sheet(wb, abnormal, abnormal_reasons or {})
+    if combos:
+        generate_combo_list_sheet(wb, combos)
     
     wb.save(output_path)
     
@@ -113,7 +116,7 @@ def generate_normal_salary(records: List[SalaryRecord], title: str, output_dir: 
 
 
 def generate_tc93_full_sheet(wb: Workbook, tc93_all: List[dict]):
-    """在工作簿中新增 TC93总表 sheet，包含所有字段。"""
+    """TC93总表 sheet，包含所有字段。"""
     if not tc93_all:
         return
     ws = wb.create_sheet("TC93总表")
@@ -143,5 +146,26 @@ def generate_abnormal_sheet(wb: Workbook, abnormal: List[dict], reasons: dict):
             ws.cell(row=row_idx, column=col_idx, value=rec.get(col_name))
         ws.cell(row=row_idx, column=len(base_cols) + 1, value=reasons.get(tc930, "状态异常"))
     # 自动列宽
+    for col_idx, h in enumerate(headers, 1):
+        ws.column_dimensions[get_column_letter(col_idx)].width = max(10, min(25, len(str(h)) * 1.5))
+
+
+def generate_combo_list_sheet(wb: Workbook, combos: List[dict]):
+    """待报列表 sheet，列出本次生成的结算单元组合。"""
+    if not combos:
+        return
+    ws = wb.create_sheet("待报列表")
+    headers = ["结算单元ID", "结算单元名称", "所属月份", "发放月份", "批次", "人数", "合计收入", "经办人"]
+    for col_idx, h in enumerate(headers, 1):
+        ws.cell(row=1, column=col_idx, value=h)
+    for row_idx, c in enumerate(combos, 2):
+        ws.cell(row=row_idx, column=1, value=c.get("unit", ""))
+        ws.cell(row=row_idx, column=2, value=c.get("unit_name", ""))
+        ws.cell(row=row_idx, column=3, value=c.get("salary_month", ""))
+        ws.cell(row=row_idx, column=4, value=c.get("pay_month", ""))
+        ws.cell(row=row_idx, column=5, value=c.get("seq", ""))
+        ws.cell(row=row_idx, column=6, value=c.get("person_count", ""))
+        ws.cell(row=row_idx, column=7, value=c.get("total_income", ""))
+        ws.cell(row=row_idx, column=8, value=c.get("handler", ""))
     for col_idx, h in enumerate(headers, 1):
         ws.column_dimensions[get_column_letter(col_idx)].width = max(10, min(25, len(str(h)) * 1.5))
