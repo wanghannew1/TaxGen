@@ -102,9 +102,21 @@
             </div>
             <div class="d-flex justify-content-between align-items-center mt-2">
                 <span id="combosCount" class="text-muted"></span>
-                <div class="d-flex gap-2">
+                <div class="d-flex gap-2 align-items-center">
+                    <label class="form-label mb-0 small">每页</label>
+                    <select id="combosPageSize" class="form-select form-select-sm" style="width:auto;">
+                        <option value="50">50</option>
+                        <option value="100">100</option>
+                        <option value="200">200</option>
+                        <option value="500" selected>500</option>
+                        <option value="custom">自定义</option>
+                    </select>
+                    <input type="number" id="combosPageSizeCustom" class="form-control form-control-sm" style="width:80px; display:none;" min="1" placeholder="条数">
                     <button id="combosPrev" class="btn btn-sm btn-outline-secondary">上一页</button>
+                    <span class="small" id="combosPageInfo"></span>
                     <button id="combosNext" class="btn btn-sm btn-outline-secondary">下一页</button>
+                    <input type="number" id="combosJump" class="form-control form-control-sm" style="width:70px" min="1" placeholder="页码">
+                    <button id="combosJumpBtn" class="btn btn-sm btn-outline-primary">跳页</button>
                 </div>
             </div>
         </div>
@@ -141,9 +153,21 @@
             </div>
             <div class="d-flex justify-content-between align-items-center mt-2">
                 <span id="detailsCount" class="text-muted"></span>
-                <div class="d-flex gap-2">
+                <div class="d-flex gap-2 align-items-center">
+                    <label class="form-label mb-0 small">每页</label>
+                    <select id="detailsPageSize" class="form-select form-select-sm" style="width:auto;">
+                        <option value="50">50</option>
+                        <option value="100">100</option>
+                        <option value="200">200</option>
+                        <option value="500" selected>500</option>
+                        <option value="custom">自定义</option>
+                    </select>
+                    <input type="number" id="detailsPageSizeCustom" class="form-control form-control-sm" style="width:80px; display:none;" min="1" placeholder="条数">
                     <button id="detailsPrev" class="btn btn-sm btn-outline-secondary">上一页</button>
+                    <span class="small" id="detailsPageInfo"></span>
                     <button id="detailsNext" class="btn btn-sm btn-outline-secondary">下一页</button>
+                    <input type="number" id="detailsJump" class="form-control form-control-sm" style="width:70px" min="1" placeholder="页码">
+                    <button id="detailsJumpBtn" class="btn btn-sm btn-outline-primary">跳页</button>
                 </div>
             </div>
         </div>
@@ -196,16 +220,51 @@
     });
     document.getElementById('btnFilter').addEventListener('click', queryDetails);
 
-    const PAGE_SIZE = 50;
     let combosData = [];
     let detailsData = [];
     let combosPage = 1;
     let detailsPage = 1;
 
+    function pageSize(prefix) {
+        const sel = document.getElementById(prefix + 'PageSize');
+        if (sel.value === 'custom') {
+            const v = parseInt(document.getElementById(prefix + 'PageSizeCustom').value);
+            return v > 0 ? v : 50;
+        }
+        return parseInt(sel.value);
+    }
+
+    function toggleCustomInput(prefix) {
+        const sel = document.getElementById(prefix + 'PageSize');
+        document.getElementById(prefix + 'PageSizeCustom').style.display = sel.value === 'custom' ? 'inline-block' : 'none';
+    }
+
+    function bindPageSize(prefix, resetFn) {
+        document.getElementById(prefix + 'PageSize').addEventListener('change', function () {
+            toggleCustomInput(prefix);
+            resetFn(1);
+        });
+        document.getElementById(prefix + 'PageSizeCustom').addEventListener('change', function () {
+            resetFn(1);
+        });
+    }
+
     document.getElementById('combosPrev').addEventListener('click', () => { if (combosPage > 1) { combosPage--; renderCombos(); } });
-    document.getElementById('combosNext').addEventListener('click', () => { if (combosPage * PAGE_SIZE < combosData.length) { combosPage++; renderCombos(); } });
+    document.getElementById('combosNext').addEventListener('click', () => { if (combosPage * pageSize('combos') < combosData.length) { combosPage++; renderCombos(); } });
     document.getElementById('detailsPrev').addEventListener('click', () => { if (detailsPage > 1) { detailsPage--; renderDetails(); } });
-    document.getElementById('detailsNext').addEventListener('click', () => { if (detailsPage * PAGE_SIZE < detailsData.length) { detailsPage++; renderDetails(); } });
+    document.getElementById('detailsNext').addEventListener('click', () => { if (detailsPage * pageSize('details') < detailsData.length) { detailsPage++; renderDetails(); } });
+    document.getElementById('combosJumpBtn').addEventListener('click', () => jumpPage('combos'));
+    document.getElementById('detailsJumpBtn').addEventListener('click', () => jumpPage('details'));
+    bindPageSize('combos', p => { combosPage = p; renderCombos(); });
+    bindPageSize('details', p => { detailsPage = p; renderDetails(); });
+
+    function jumpPage(prefix) {
+        const totalPages = Math.max(1, Math.ceil((prefix === 'combos' ? combosData : detailsData).length / pageSize(prefix)));
+        const p = parseInt(document.getElementById(prefix + 'Jump').value);
+        if (!p || p < 1 || p > totalPages) { alert(`页码需在 1-${totalPages} 之间`); return; }
+        if (prefix === 'combos') { combosPage = p; renderCombos(); }
+        else { detailsPage = p; renderDetails(); }
+    }
 
     async function queryStats() {
         currentMonth = parseInt(monthSelect.value);
@@ -231,8 +290,11 @@
     function renderCombos() {
         const comboStatus = c => c.unreported === 0 ? '<span class="status-ok">全部报送</span>' :
             c.reported === 0 ? '<span class="status-no">全部未报送</span>' : '<span class="status-diff">部分报送</span>';
-        const start = (combosPage - 1) * PAGE_SIZE;
-        const page = combosData.slice(start, start + PAGE_SIZE);
+        const ps = pageSize('combos');
+        const totalPages = Math.max(1, Math.ceil(combosData.length / ps));
+        if (combosPage > totalPages) combosPage = totalPages;
+        const start = (combosPage - 1) * ps;
+        const page = combosData.slice(start, start + ps);
         document.getElementById('combosTbody').innerHTML = page.map((c, i) => `
             <tr>
                 <td>${start + i + 1}</td><td>${c.unit_name || c.unit}</td><td>${c.unit}</td><td>${c.month}</td><td>${c.seq}</td>
@@ -240,9 +302,9 @@
                 <td>${comboStatus(c)}</td>
             </tr>`).join('');
         document.getElementById('combosCount').textContent = `共 ${combosData.length} 条`;
-        document.getElementById('combosPageInfo').textContent = `第 ${combosPage}/${Math.max(1, Math.ceil(combosData.length / PAGE_SIZE))} 页`;
+        document.getElementById('combosPageInfo').textContent = `第 ${combosPage}/${totalPages} 页`;
         document.getElementById('combosPrev').disabled = combosPage <= 1;
-        document.getElementById('combosNext').disabled = combosPage * PAGE_SIZE >= combosData.length;
+        document.getElementById('combosNext').disabled = combosPage * ps >= combosData.length;
     }
 
     async function queryDetails() {
@@ -261,8 +323,11 @@
 
     function renderDetails() {
         const cls = { '已报送': 'status-ok', '有差异': 'status-diff', '未报送': 'status-no', '系统无记录': 'status-other' };
-        const start = (detailsPage - 1) * PAGE_SIZE;
-        const page = detailsData.slice(start, start + PAGE_SIZE);
+        const ps = pageSize('details');
+        const totalPages = Math.max(1, Math.ceil(detailsData.length / ps));
+        if (detailsPage > totalPages) detailsPage = totalPages;
+        const start = (detailsPage - 1) * ps;
+        const page = detailsData.slice(start, start + ps);
         document.getElementById('detailsTbody').innerHTML = page.map((d, i) => `
             <tr>
                 <td>${start + i + 1}</td><td>${d.name}</td><td>${d.cert_no}</td><td>${d.month}</td>
@@ -272,8 +337,9 @@
                 <td class="${cls[d.status] || ''}">${d.status}</td>
             </tr>`).join('');
         document.getElementById('detailsCount').textContent = `共 ${detailsData.length} 条`;
+        document.getElementById('detailsPageInfo').textContent = `第 ${detailsPage}/${totalPages} 页`;
         document.getElementById('detailsPrev').disabled = detailsPage <= 1;
-        document.getElementById('detailsNext').disabled = detailsPage * PAGE_SIZE >= detailsData.length;
+        document.getElementById('detailsNext').disabled = detailsPage * ps >= detailsData.length;
     }
 </script>
 </body>
