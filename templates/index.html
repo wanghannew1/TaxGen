@@ -393,14 +393,8 @@
 
                 <hr>
 
-                <div class="d-flex justify-content-between align-items-center mb-2">
+                <div class="mb-2">
                     <strong>待报列表</strong>
-                    <div>
-                        <button id="btnExportList" class="btn btn-sm btn-outline-success me-1" disabled title="待报列表为空时不可导出">导出</button>
-                        <button id="btnListFilterSelect" class="btn btn-sm btn-outline-primary me-1" disabled>筛选全选</button>
-                        <button id="btnListFilterDeselect" class="btn btn-sm btn-outline-secondary me-1" disabled>筛选取消</button>
-                        <button id="btnClearList" class="btn btn-sm btn-outline-danger" disabled>清空列表</button>
-                    </div>
                 </div>
                 <div class="row g-2 mb-2">
                     <div class="col-md-3">
@@ -444,6 +438,13 @@
                             </thead>
                             <tbody></tbody>
                         </table>
+                    </div>
+                    <div class="d-flex align-items-center gap-2 mt-2">
+                        <button id="btnListFilterSelect" class="btn btn-sm btn-outline-primary" disabled>筛选全选</button>
+                        <button id="btnListFilterDeselect" class="btn btn-sm btn-outline-secondary" disabled>筛选取消</button>
+                        <button id="btnClearList" class="btn btn-sm btn-outline-danger" disabled>清空列表</button>
+                        <div class="flex-grow-1"></div>
+                        <button id="btnExportList" class="btn btn-sm btn-success" disabled title="待报列表为空时不可导出">导出CSV</button>
                     </div>
                     <div id="listSummary" class="alert alert-info mb-0 mt-2"></div>
                 </div>
