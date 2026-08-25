@@ -7,7 +7,7 @@
     <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
     <style>
         body { background: #f5f6fa; }
-        .container { max-width: 1400px; }
+        .container { max-width: 1800px; }
         .card { margin-bottom: 1rem; box-shadow: 0 1px 3px rgba(0,0,0,.1); }
         .stat-card { text-align: center; padding: 1rem; }
         .stat-card .num { font-size: 1.8rem; font-weight: 700; }
@@ -24,7 +24,8 @@
         .nav-link.active { font-weight: 600; }
         .badge-warn { background: #fff3cd; color: #856404; border: 1px solid #ffeeba; border-radius: 4px; padding: 4px 8px; }
         table.w-100 td, table.w-100 th { overflow: hidden; }
-        .ellipsis-cell { max-width: 180px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; cursor: default; }
+        #detailsTable, #combosTable { table-layout: fixed; }
+        .ellipsis-cell { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; cursor: default; }
     </style>
 </head>
 <body>
@@ -104,8 +105,8 @@
                 <table class="table table-sm table-striped table-hover mb-0 w-100" id="combosTable">
                     <thead class="sticky-top">
                         <tr>
-                            <th style="width:50px">序号</th><th>结算单元名称</th><th>结算单元ID</th><th>所属月份</th><th>批次</th>
-                            <th>人数</th><th>已报送</th><th>未报送</th><th>状态</th>
+                            <th style="width:50px">序号</th><th>结算单元名称</th><th style="width:90px">结算单元ID</th><th style="width:80px">所属月份</th><th style="width:60px">批次</th>
+                            <th style="width:70px">人数</th><th style="width:70px">已报送</th><th style="width:70px">未报送</th><th style="width:90px">状态</th>
                         </tr>
                     </thead>
                     <tbody id="combosTbody"></tbody>
