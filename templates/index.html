@@ -298,6 +298,23 @@
         <div id="suggestionsCard" class="card" style="display: none;">
             <div class="card-header">选择报税批次</div>
             <div class="card-body">
+                <div class="row g-2 mb-3">
+                    <div class="col-md-8">
+                        <div class="form-text">
+                            <button id="btnImportNames" class="btn btn-sm btn-outline-secondary me-1">导入名称列表搜索</button>
+                            <input type="file" id="importNamesFile" accept=".csv,.txt" style="display:none">
+                            <button id="btnDownloadTemplate" class="btn btn-sm btn-outline-link p-0 me-2">下载示例模板</button>
+                            支持CSV/TXT，每行一个结算单元名称，导入后自动搜索
+                        </div>
+                    </div>
+                </div>
+                <div id="importedNamesBar" class="mb-3" style="display: none;">
+                    <div class="d-flex flex-wrap gap-1 align-items-center">
+                        <small class="text-muted me-1">导入名称:</small>
+                        <span id="importedNamesTags"></span>
+                        <button id="btnClearImportedNames" class="btn btn-sm btn-outline-danger py-0 px-1 ms-1" title="清空导入名称">全部清除</button>
+                    </div>
+                </div>
                 <div class="row g-2 mb-3 align-items-end">
                     <div class="col-md-2">
                         <label class="form-label form-label-sm"><strong>发放月份</strong></label>
@@ -332,29 +349,11 @@
                         <button id="btnSearch" class="btn btn-sm btn-primary w-100">搜索</button>
                     </div>
                 </div>
-                <div class="row g-2 mb-3">
-                    <div class="col-md-8">
-                        <div class="form-text">
-                            <button id="btnImportNames" class="btn btn-sm btn-outline-secondary me-1">导入名称列表搜索</button>
-                            <input type="file" id="importNamesFile" accept=".csv,.txt" style="display:none">
-                            <button id="btnDownloadTemplate" class="btn btn-sm btn-outline-link p-0 me-2">下载示例模板</button>
-                            支持CSV/TXT，每行一个结算单元名称，导入后自动搜索
-                        </div>
-                    </div>
-                </div>
-
                 <div id="searchLoading" class="text-center py-3" style="display: none;">
                     <div class="spinner-border text-primary" role="status">
                         <span class="visually-hidden">加载中...</span>
                     </div>
                     <p class="mt-2">正在查询 TC8M 批次数据...</p>
-                </div>
-                <div id="importedNamesBar" class="mb-2" style="display: none;">
-                    <div class="d-flex flex-wrap gap-1 align-items-center">
-                        <small class="text-muted me-1">导入名称:</small>
-                        <span id="importedNamesTags"></span>
-                        <button id="btnClearImportedNames" class="btn btn-sm btn-outline-danger py-0 px-1 ms-1" title="清空导入名称">全部清除</button>
-                    </div>
                 </div>
                 <div id="searchEmpty" class="empty-state">
                     输入搜索条件后点击搜索
