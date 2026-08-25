@@ -386,9 +386,8 @@
                         <button id="btnSearchSelectAll" class="btn btn-sm btn-outline-primary">全选</button>
                         <button id="btnSearchDeselectAll" class="btn btn-sm btn-outline-secondary">取消全选</button>
                         <button id="btnSearchDeleteSelected" class="btn btn-sm btn-outline-danger" disabled>删除选中</button>
-                        <div class="flex-grow-1"></div>
-                        <button id="btnAddToList" class="btn btn-sm btn-success" disabled>添加到待报列表</button>
                     </div>
+                    <button id="btnAddToList" class="btn btn-success btn-lg w-100 mt-2" disabled>添加到待报列表</button>
                 </div>
 
                 <hr>
@@ -440,28 +439,18 @@
                         </table>
                     </div>
                     <div class="d-flex align-items-center gap-2 mt-2">
-                        <button id="btnListFilterSelect" class="btn btn-sm btn-outline-primary" disabled>筛选全选</button>
-                        <button id="btnListFilterDeselect" class="btn btn-sm btn-outline-secondary" disabled>筛选取消</button>
-                        <button id="btnClearList" class="btn btn-sm btn-outline-danger" disabled>清空列表</button>
-                        <div class="flex-grow-1"></div>
-                        <button id="btnExportList" class="btn btn-sm btn-success" disabled title="待报列表为空时不可导出">导出CSV</button>
+                        <button id="btnListSelectAll" class="btn btn-sm btn-outline-primary">全选</button>
+                        <button id="btnListDeselectAll" class="btn btn-sm btn-outline-secondary">取消全选</button>
+                        <button id="btnDeleteSelected" class="btn btn-sm btn-outline-danger" disabled>删除选中</button>
+                    </div>
+                    <button id="btnGenerate" class="btn btn-primary btn-lg w-100 mt-2">生成报税数据</button>
+                    <div id="loading" class="loading text-center mt-3" style="display:none;">
+                        <div class="spinner-border text-primary" role="status">
+                            <span class="visually-hidden">生成中...</span>
+                        </div>
+                        <p class="mt-2">正在生成文件，请稍候...</p>
                     </div>
                     <div id="listSummary" class="alert alert-info mb-0 mt-2"></div>
-                </div>
-            </div>
-        </div>
-
-        <!-- Step 3: Generate -->
-        <div class="card">
-            <div class="card-body">
-                <button id="btnGenerate" class="btn btn-primary btn-generate">
-                    生成 Excel 文件
-                </button>
-                <div id="loading" class="loading text-center mt-3">
-                    <div class="spinner-border text-primary" role="status">
-                        <span class="visually-hidden">生成中...</span>
-                    </div>
-                    <p class="mt-2">正在生成文件，请稍候...</p>
                 </div>
             </div>
         </div>
@@ -469,7 +458,7 @@
         <!-- Error Message -->
         <div id="errorBox" class="error-alert alert alert-danger" style="display: none;"></div>
 
-        <!-- Step 3: Results -->
+        <!-- Results -->
         <div id="results" class="card results">
             <div class="card-header">生成结果</div>
             <div class="card-body">
@@ -579,17 +568,15 @@
         const importedNamesBar = document.getElementById('importedNamesBar');
         const importedNamesTags = document.getElementById('importedNamesTags');
         const btnClearImportedNames = document.getElementById('btnClearImportedNames');
-        const btnClearList = document.getElementById('btnClearList');
-        const btnExportList = document.getElementById('btnExportList');
+        const btnDeleteSelected = document.getElementById('btnDeleteSelected');
         const selectAllSearch = document.getElementById('selectAllSearch');
         const selectAllList = document.getElementById('selectAllList');
         const listFilterMonth = document.getElementById('listFilterMonth');
         const listFilterUnit = document.getElementById('listFilterUnit');
         const listFilterSeq = document.getElementById('listFilterSeq');
-        const btnListFilterSelect = document.getElementById('btnListFilterSelect');
-        const btnListFilterDeselect = document.getElementById('btnListFilterDeselect');
+        const btnListSelectAll = document.getElementById('btnListSelectAll');
+        const btnListDeselectAll = document.getElementById('btnListDeselectAll');
         const searchConfirmedOnly = document.getElementById('searchConfirmedOnly');
-
         let searchResults = [];
         let tempList = [];
         let importedNames = [];
@@ -619,16 +606,15 @@
         btnSearchSelectAll.addEventListener('click', () => { setSearchCheckboxes(true); });
         btnSearchDeselectAll.addEventListener('click', () => { setSearchCheckboxes(false); });
         btnSearchDeleteSelected.addEventListener('click', deleteSearchSelected);
-        btnClearList.addEventListener('click', clearList);
-        btnExportList.addEventListener('click', exportList);
+        btnDeleteSelected.addEventListener('click', deleteListSelected);
+        btnListSelectAll.addEventListener('click', () => { setListCheckboxes(true); });
+        btnListDeselectAll.addEventListener('click', () => { setListCheckboxes(false); });
         btnImportNames.addEventListener('click', () => importNamesFile.click());
         importNamesFile.addEventListener('change', importNames);
         btnDownloadTemplate.addEventListener('click', downloadTemplate);
         btnClearImportedNames.addEventListener('click', clearImportedNames);
         selectAllSearch.addEventListener('change', function() { setSearchCheckboxes(this.checked); });
         selectAllList.addEventListener('change', function() { setListCheckboxes(this.checked); });
-        btnListFilterSelect.addEventListener('click', () => setFilteredCheckboxes(true));
-        btnListFilterDeselect.addEventListener('click', () => setFilteredCheckboxes(false));
         listFilterMonth.addEventListener('change', updateListSummary);
         listFilterUnit.addEventListener('change', updateListSummary);
         listFilterSeq.addEventListener('change', updateListSummary);
@@ -820,6 +806,13 @@
             renderSearchTable();
         }
 
+        function deleteListSelected() {
+            const checked = document.querySelectorAll('.list-cb:checked');
+            const indices = Array.from(checked).map(cb => parseInt(cb.dataset.idx)).sort((a,b) => b - a);
+            indices.forEach(i => tempList.splice(i, 1));
+            renderListTable();
+        }
+
         function addToList() {
             const checked = document.querySelectorAll('.search-cb:checked');
             checked.forEach(cb => {
@@ -842,15 +835,11 @@
                 listFilterMonth.disabled = true;
                 listFilterUnit.disabled = true;
                 listFilterSeq.disabled = true;
-                btnListFilterSelect.disabled = true;
-                btnListFilterDeselect.disabled = true;
-                btnClearList.disabled = true;
+                btnDeleteSelected.disabled = true;
                 return;
             }
 
-            btnClearList.disabled = false;
-            btnListFilterSelect.disabled = false;
-            btnListFilterDeselect.disabled = false;
+            btnDeleteSelected.disabled = true;
 
             const months = [...new Set(tempList.map(c => c.salary_month))].sort();
             const unitMap = {};
@@ -892,7 +881,7 @@
                 });
             });
             document.querySelectorAll('.list-cb').forEach(cb => {
-                cb.addEventListener('change', updateListSummary);
+                cb.addEventListener('change', function() { updateListSummary(); updateListDeleteButton(); });
             });
             listEmpty.style.display = 'none';
             listContent.style.display = 'block';
@@ -921,6 +910,7 @@
         function setListCheckboxes(checked) {
             document.querySelectorAll('.list-cb').forEach(cb => { cb.checked = checked; });
             updateListSummary();
+            updateListDeleteButton();
         }
 
         function getSelectedListCombos() {
@@ -934,10 +924,16 @@
             return selected;
         }
 
+        function updateListDeleteButton() {
+            const checked = document.querySelectorAll('.list-cb:checked').length;
+            btnDeleteSelected.disabled = checked === 0;
+        }
+
         function updateListSummary() {
             const visibleCbs = getListVisibleRows().map(tr => tr.querySelector('.list-cb'));
             const checkedVisible = visibleCbs.filter(cb => cb.checked);
             const totalChecked = document.querySelectorAll('.list-cb:checked');
+            updateListDeleteButton();
 
             let persons = 0, income = 0;
             totalChecked.forEach(cb => {
@@ -948,28 +944,6 @@
             const isFiltering = listFilterMonth.value || listFilterUnit.value || listFilterSeq.value;
             const filterInfo = isFiltering ? `（筛选后 ${checkedVisible.length}/${visibleCbs.length} 行被选中）` : '';
             listSummary.textContent = `已选择 ${totalChecked.length} 个批次，共 ${persons} 人，合计收入 ${formatNum(income)} 元 ${filterInfo}`;
-        }
-
-        function clearList() {
-            tempList = [];
-            renderListTable();
-        }
-
-        function exportList() {
-            if (tempList.length === 0) return;
-            const header = '结算单元名称,结算单元ID,所属月份,发放月份,批次,状态,经办人,人数,合计收入';
-            const rows = tempList.map(c =>
-                `${(c.unit_name || '').replace(/,/g, '，')},${c.unit},${c.salary_month},${c.pay_month || ''},${c.seq},${c.status || ''},${(c.handler || '').replace(/,/g, '，')},${c.person_count},${c.total_income}`
-            );
-            const bom = '\uFEFF';
-            const csv = bom + header + '\n' + rows.join('\n');
-            const blob = new Blob([csv], { type: 'text/csv;charset=utf-8' });
-            const url = URL.createObjectURL(blob);
-            const a = document.createElement('a');
-            a.href = url;
-            a.download = `待报列表_${new Date().toISOString().slice(0,10)}.csv`;
-            a.click();
-            URL.revokeObjectURL(url);
         }
 
         async function importNames() {
