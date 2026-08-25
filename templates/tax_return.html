@@ -196,7 +196,7 @@
             c.reported === 0 ? '<span class="status-no">全部未报送</span>' : '<span class="status-diff">部分报送</span>';
         document.getElementById('combosTbody').innerHTML = data.combos.map(c => `
             <tr>
-                <td>${c.unit}</td><td>${c.month}</td><td>${c.seq}</td>
+                <td>${c.unit_name || c.unit}${c.unit_name ? ` (${c.unit})` : ''}</td><td>${c.month}</td><td>${c.seq}</td>
                 <td>${c.count}</td><td class="status-ok">${c.reported}</td><td class="status-no">${c.unreported}</td>
                 <td>${comboStatus(c)}</td>
             </tr>`).join('');

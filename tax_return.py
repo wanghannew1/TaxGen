@@ -214,10 +214,12 @@ def compare_month(conn, month):
             })
 
     combo_stats = []
+    unit_names = _get_unit_names(conn, list(combos.keys()))
     for (unit, sm, seq), info in sorted(combos.items()):
         reported = sum(1 for p in info["persons"] if p in returns)
         combo_stats.append({
             "unit": unit,
+            "unit_name": unit_names.get((unit, sm, seq), ""),
             "month": sm,
             "seq": seq,
             "count": info["count"],
@@ -225,6 +227,32 @@ def compare_month(conn, month):
             "unreported": info["count"] - reported,
         })
     return details, combo_stats
+
+
+def _get_unit_names(conn, combos):
+    """从 TC8M 查询组合对应的结算单元名称(按银行拆分多条时取MAX去重)。"""
+    if not combos:
+        return {}
+    names = {}
+    for start in range(0, len(combos), 400):
+        chunk = combos[start:start + 400]
+        placeholders = ", ".join(f"(:u{i}, :m{i}, :s{i})" for i in range(len(chunk)))
+        binds = {}
+        for i, (u, m, s) in enumerate(chunk):
+            binds[f"u{i}"] = u
+            binds[f"m{i}"] = m
+            binds[f"s{i}"] = s
+        sql = f"""
+            SELECT ATB930, ATC931, ATC937, MAX(ATB931)
+            FROM TC8M
+            WHERE (ATB930, ATC931, ATC937) IN ({placeholders})
+            GROUP BY ATB930, ATC931, ATC937
+        """
+        with conn.cursor() as cursor:
+            cursor.execute(sql, binds)
+            for row in cursor.fetchall():
+                names[(int(row[0] or 0), int(row[1] or 0), str(row[2] or ""))] = str(row[3] or "")
+    return names
 
 
 def summarize(conn, month):

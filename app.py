@@ -299,9 +299,9 @@ def api_tax_return_export():
             ws.append([month, d["name"], d["cert_no"], d["sys_income"], d["sys_tax"],
                        d.get("ret_income"), d.get("ret_tax"), d["diff"], d["status"]])
         ws2 = wb.create_sheet("按结算单元批次")
-        ws2.append(["结算单元", "所属月份", "批次", "人数", "已报送", "未报送"])
+        ws2.append(["结算单元", "结算单元名称", "所属月份", "批次", "人数", "已报送", "未报送"])
         for c in combo_stats:
-            ws2.append([c["unit"], c["month"], c["seq"], c["count"], c["reported"], c["unreported"]])
+            ws2.append([c["unit"], c.get("unit_name", ""), c["month"], c["seq"], c["count"], c["reported"], c["unreported"]])
         timestamp = datetime.now().strftime("%Y%m%d%H%M%S")
         filename = f"报税状态统计_{month}_{timestamp}.xlsx"
         wb.save(os.path.join(OUTPUT_DIR, filename))
