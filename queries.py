@@ -103,6 +103,24 @@ def get_available_months(conn) -> List[MonthOption]:
     return options
 
 
+def get_pay_months(conn) -> List[MonthOption]:
+    """查询 TC8M 中所有可用的发放月份(ATC8G7)，供回盘统计选择。"""
+    sql = """
+        SELECT DISTINCT ATC8G7 FROM TC8M
+        WHERE ATC8G7 IS NOT NULL AND ATC8M3 = 2
+        ORDER BY ATC8G7 DESC
+    """
+    options = []
+    with conn.cursor() as cursor:
+        cursor.execute(sql)
+        for row in cursor.fetchall():
+            month = int(row[0] or 0)
+            if month <= 0:
+                continue
+            options.append(MonthOption(value=month, label=f"{month // 100}年{month % 100:02d}月"))
+    return options
+
+
 def get_salary_records(conn, month: int) -> List[SalaryRecord]:
     """按工资所属年月查询正常工资记录 (TC93 + AC01 左连接)。
 

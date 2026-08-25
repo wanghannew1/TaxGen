@@ -146,40 +146,49 @@ def get_returns(month):
     return {r["cert_no"]: dict(r) for r in rows}
 
 
-def get_system_aggregate(conn, month):
-    """从 TC93 按人+所属月份聚合系统预算个税/收入/五险，同时返回组合维度人员映射。"""
-    from queries import get_salary_records
+def get_system_aggregate(conn, pay_month):
+    """按发放月份(税款所属期)聚合系统预算数据。
+
+    pay_month 对应 TC8M.ATC8G7(发放月份/税款所属期)，先取该发放月份下的
+    全部已发放组合(结算单元+所属月份+批次)，再按组合的所属月份分别查 TC93 聚合。
+    """
+    from queries import get_salary_records, search_tc8m
     from templates_gen.formulas import calc_本期收入, calc_免税
-    records = get_salary_records(conn, month)
+    tc8m_combos = search_tc8m(conn, pay_month=pay_month, status=2)
+    combo_set = {(c["unit"], c["salary_month"], c["seq"]) for c in tc8m_combos}
+    salary_months = {c["salary_month"] for c in tc8m_combos}
     agg = {}
     combos = {}
-    for rec in records:
-        key = rec.身份证 or rec.职工号
-        if not key:
-            continue
-        combo = (rec.结算单元, rec.工资所属年月, rec.当月批次)
-        combos.setdefault(combo, {"persons": set(), "count": 0})
-        combos[combo]["persons"].add(key)
-        combos[combo]["count"] += 1
-        cur = agg.get(key)
-        income = calc_本期收入(rec)
-        tax_exempt = calc_免税(rec)
-        if cur is None:
-            agg[key] = {
-                "name": rec.姓名,
-                "income": income,
-                "tax_free": tax_exempt,
-                "insurance": rec.养老个人 + rec.医疗个人 + rec.失业个人 + rec.公积金个人,
-                "tax": rec.个人所得税,
-                "unit": rec.结算单元,
-                "month": rec.工资所属年月,
-                "seq": rec.当月批次,
-            }
-        else:
-            cur["income"] += income
-            cur["tax_free"] += tax_exempt
-            cur["insurance"] += rec.养老个人 + rec.医疗个人 + rec.失业个人 + rec.公积金个人
-            cur["tax"] += rec.个人所得税
+    for sm in salary_months:
+        for rec in get_salary_records(conn, sm):
+            if (rec.结算单元, rec.工资所属年月, rec.当月批次) not in combo_set:
+                continue
+            key = rec.身份证 or rec.职工号
+            if not key:
+                continue
+            combo = (rec.结算单元, rec.工资所属年月, rec.当月批次)
+            combos.setdefault(combo, {"persons": set(), "count": 0})
+            combos[combo]["persons"].add(key)
+            combos[combo]["count"] += 1
+            cur = agg.get(key)
+            income = calc_本期收入(rec)
+            tax_exempt = calc_免税(rec)
+            if cur is None:
+                agg[key] = {
+                    "name": rec.姓名,
+                    "income": income,
+                    "tax_free": tax_exempt,
+                    "insurance": rec.养老个人 + rec.医疗个人 + rec.失业个人 + rec.公积金个人,
+                    "tax": rec.个人所得税,
+                    "unit": rec.结算单元,
+                    "month": rec.工资所属年月,
+                    "seq": rec.当月批次,
+                }
+            else:
+                cur["income"] += income
+                cur["tax_free"] += tax_exempt
+                cur["insurance"] += rec.养老个人 + rec.医疗个人 + rec.失业个人 + rec.公积金个人
+                cur["tax"] += rec.个人所得税
     return agg, combos
 
 
@@ -198,10 +207,11 @@ def compare_month(conn, month):
             })
         else:
             diff = round(abs(float(s["tax"]) - float(r["tax_due"])), 2)
+            income_diff = round(abs(float(s["income"]) - float(r["income"])), 2)
             details.append({
                 "cert_no": cert, "name": s["name"], "month": month,
-                "sys_income": round(float(s["income"]), 2), "sys_tax": round(float(s["tax"]), 2),
-                "ret_income": r["income"], "ret_tax": r["tax_due"], "diff": diff,
+                "sys_income": round(float(s["income"]), 2), "ret_income": r["income"], "income_diff": income_diff,
+                "sys_tax": round(float(s["tax"]), 2), "ret_tax": r["tax_due"], "diff": diff,
                 "status": "已报送" if diff <= 0.01 else "有差异",
             })
     for cert, r in returns.items():

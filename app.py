@@ -4,7 +4,7 @@ import os
 from datetime import datetime
 from flask import Flask, render_template, request, jsonify, send_file
 from db import init_db, get_connection, close_db
-from queries import get_available_months, get_salary_records, get_personnel_info, get_suggestions, search_tc8m, get_abnormal_records, get_tc93_all_fields, get_tc93_field_comments, get_merge_warnings
+from queries import get_available_months, get_salary_records, get_personnel_info, get_suggestions, search_tc8m, get_abnormal_records, get_tc93_all_fields, get_tc93_field_comments, get_merge_warnings, get_pay_months
 from templates_gen.normal_salary import generate_normal_salary, generate_tc93_full_sheet, generate_abnormal_sheet
 from templates_gen.labor_service import generate_labor_service
 from templates_gen.annual_bonus import generate_annual_bonus
@@ -228,6 +228,14 @@ def api_validate(month):
 def page_tax_return():
     return render_template("tax_return.html")
 
+@app.route("/api/pay-months")
+def api_pay_months():
+    try:
+        conn = get_connection()
+        return jsonify([{"value": m.value, "label": m.label} for m in get_pay_months(conn)])
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
 @app.route("/api/tax-return/import", methods=["POST"])
 def api_tax_return_import():
     try:
@@ -294,10 +302,10 @@ def api_tax_return_export():
         wb = Workbook()
         ws = wb.active
         ws.title = "报税状态统计"
-        ws.append(["月份", "姓名", "证件号码", "系统本期收入", "系统预算个税", "回盘本期收入", "回盘个税(应补退)", "差值", "状态"])
+        ws.append(["月份", "姓名", "证件号码", "系统本期收入", "回盘本期收入", "收入差异", "系统预算个税", "回盘个税(应补退)", "个税差值", "状态"])
         for d in details:
-            ws.append([month, d["name"], d["cert_no"], d["sys_income"], d["sys_tax"],
-                       d.get("ret_income"), d.get("ret_tax"), d["diff"], d["status"]])
+            ws.append([month, d["name"], d["cert_no"], d["sys_income"], d.get("ret_income"),
+                       d.get("income_diff"), d["sys_tax"], d.get("ret_tax"), d["diff"], d["status"]])
         ws2 = wb.create_sheet("按结算单元批次")
         ws2.append(["结算单元", "结算单元名称", "所属月份", "批次", "人数", "已报送", "未报送"])
         for c in combo_stats:
