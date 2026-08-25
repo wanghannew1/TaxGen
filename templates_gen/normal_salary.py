@@ -98,10 +98,10 @@ def generate_normal_salary(records: List[SalaryRecord], title: str, output_dir: 
     vs = wb.create_sheet("验证报告")
     vs_headers = [
         "ATC930", "姓名",
-        "工资总额(AA)", "本次免税(936)", "大病险(BD)", "补缴退款差额(BE)", "本期收入",
-        "养老(BAA001)", "失业(BAA003)", "医疗(BAA002)", "公积金(CAA002)",
-        "其他调整(AG)", "个人欠款(E)", "扣款大病险(Y2)", "左",
-        "实发(C)", "工会会费(Z2)", "代理费(BAA300)", "个税(D)", "免税",
+        "本次工资总额(ATC93AA)", "本次免税(ATC936)", "大病险（个人承担）(ATC93BD)", "补缴及退款保险差额（个人）(ATC93BE)", "本期收入",
+        "当月养老个人缴(BAA001)", "当月失业个人缴(BAA003)", "当月医疗个人缴(BAA002)", "个人公积金月缴存额(CAA002)",
+        "个人其他调整(ATC93AG)", "个人欠款(ATC93E)", "扣款-大病险(ATC93Y2)", "左",
+        "本次实发金额(ATC93C)", "税后扣除工会会费(ATC93Z2)", "个人承担代理费(BAA300)", "本次个人所得税(ATC93D)", "免税(ATC936+ATC93BD)",
         "右", "差值", "状态"
     ]
     for col, h in enumerate(vs_headers, 1):
