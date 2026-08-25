@@ -77,10 +77,9 @@ def generate_normal_salary(records: List[SalaryRecord], title: str, output_dir: 
         rec_remark = combo_map.get((rec.结算单元, rec.工资所属年月, rec.当月批次), title)
         ws.cell(row=row, column=29, value=rec_remark)
         
-        # 验证: 左 = 本期收入 - 养老 - 失业 - 医疗 - 公积金 - 年金(0)
-        #        右 = 实发 + 个税 - 免税
-        left = income - rec.养老个人 - rec.失业个人 - rec.医疗个人 - rec.公积金个人 - 0
-        right = rec.实发工资 + rec.个人所得税 - tax_exempt
+        left = income - rec.养老个人 - rec.失业个人 - rec.医疗个人 - rec.公积金个人 \
+               - rec.个人其他调整 - rec.个人欠款 - rec.扣款大病险
+        right = rec.实发工资 + rec.税后工会会费 + rec.个人代理费 + rec.个人所得税 - tax_exempt
         diff = abs(left - right)
         passed = diff < 0.01
         validations.append({

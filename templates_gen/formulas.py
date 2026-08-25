@@ -11,8 +11,8 @@ from models import SalaryRecord
 
 
 def calc_本期收入(rec: SalaryRecord) -> Decimal:
-    """本期收入 = 工资总额 − 本次免税 − 大病险(个人)"""
-    return rec.工资总额 - rec.补发3 - rec.大病险个人
+    """本期收入 = 工资总额 − 本次免税 − 大病险(个人) − 补缴及退款保险差额(个人)"""
+    return rec.工资总额 - rec.补发3 - rec.大病险个人 - rec.补缴及退款保险金额个人
 
 
 def calc_免税(rec: SalaryRecord) -> Decimal:

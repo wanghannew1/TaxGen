@@ -136,6 +136,11 @@ def get_salary_records(conn, month: int) -> List[SalaryRecord]:
           t93.ATC93BE AS 补缴及退款保险差额个人,
           t93.ATC93BD AS 大病险个人,
           t93.ATC936 AS 本次免税,
+          t93.ATC93AG AS 个人其他调整,
+          t93.ATC93E AS 个人欠款,
+          t93.ATC93Y2 AS 扣款大病险,
+          t93.ATC93Z2 AS 税后工会会费,
+          t93.BAA300 AS 个人代理费,
           t93.ATC930 AS tc930_id
         FROM TC93 t93
         LEFT JOIN AC01 ac01 ON t93.AAC001 = ac01.AAC001
@@ -168,7 +173,12 @@ def get_salary_records(conn, month: int) -> List[SalaryRecord]:
                 补缴及退款保险金额个人=Decimal(str(row[22] or 0)),
                 大病险个人=Decimal(str(row[23] or 0)),
                 补发3=Decimal(str(row[24] or 0)),
-                tc930_id=int(row[25] or 0),
+                个人其他调整=Decimal(str(row[25] or 0)),
+                个人欠款=Decimal(str(row[26] or 0)),
+                扣款大病险=Decimal(str(row[27] or 0)),
+                税后工会会费=Decimal(str(row[28] or 0)),
+                个人代理费=Decimal(str(row[29] or 0)),
+                tc930_id=int(row[30] or 0),
             ))
     return records
 

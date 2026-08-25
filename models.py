@@ -34,6 +34,13 @@ class SalaryRecord:
     大病险个人: Decimal = Decimal("0")  # ATC93BD - 大病险（个人承担）
     补发3: Decimal = Decimal("0")  # ATC936 - 本次免税 (= 采暖费 + 独生子女费)
 
+    # 验证辅助字段
+    个人其他调整: Decimal = Decimal("0")  # ATC93AG
+    个人欠款: Decimal = Decimal("0")  # ATC93E
+    扣款大病险: Decimal = Decimal("0")  # ATC93Y2 - 扣款-大病险
+    税后工会会费: Decimal = Decimal("0")  # ATC93Z2
+    个人代理费: Decimal = Decimal("0")  # BAA300
+
     # 验证字段
     本期收入: Decimal = Decimal("0")  # 计算得出
     免税: Decimal = Decimal("0")  # 计算得出
