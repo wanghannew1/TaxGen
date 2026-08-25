@@ -203,8 +203,10 @@ def compare_month(conn, month):
     details = []
     for cert, s in system.items():
         keys = s.get("unit_keys", {(s.get("unit", 0), month, "1")})
-        uname = "、".join(dict.fromkeys(
-            unit_names.get(k, "") or str(k[0]) for k in sorted(keys)))
+        name_by_unit = {}
+        for k in sorted(keys):
+            name_by_unit.setdefault(k[0], unit_names.get(k, "") or str(k[0]))
+        uname = "、".join(name_by_unit.values())
         r = returns.get(cert)
         if r is None:
             details.append({
