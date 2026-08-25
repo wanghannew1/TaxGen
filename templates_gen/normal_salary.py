@@ -241,10 +241,35 @@ def generate_formula_explanation_sheet(wb: Workbook, records: List[SalaryRecord]
     w(29, 1, "右 = 实际发放的钱 + 代扣的个税 − 已从收入中剔除的免税部分")
     w(30, 1, "两边从不同角度还原同一笔工资，应当相等；不相等则数据有疑点，需人工核对。")
 
-    w(32, 1, "五、验证报告列字段对照", bold=True)
+    w(32, 1, "五、字段关系图", bold=True)
+    rel_rows = [
+        ("", "【收入侧】", ""),
+        ("本次工资总额(ATC93AA)", "− 本次免税(ATC936)", "采暖费+独生子女费，免税不计收入"),
+        ("", "− 大病险个人(ATC93BD)", "大病险个人部分同样免税"),
+        ("", "− 补缴退款差额(ATC93BE)", "补缴/退款冲抵"),
+        ("= 本期收入", "← 报税口径的收入", ""),
+        ("本期收入", "− 养老(BAA001) − 失业(BAA003) − 医疗(BAA002) − 公积金(CAA002)", "五险一金个人缴"),
+        ("", "− 其他调整(ATC93AG) − 个人欠款(ATC93E) − 扣款大病险(ATC93Y2)", "其他扣减"),
+        ("= 左", "← 理论到手的钱", ""),
+        ("", "", ""),
+        ("", "【发放侧】", ""),
+        ("本次实发金额(ATC93C)", "+ 税后工会会费(ATC93Z2)", "税后另扣的工会费，还原"),
+        ("", "+ 个人代理费(BAA300)", "个人承担的代理费，还原"),
+        ("", "+ 个人所得税(ATC93D)", "代扣的个税，还原"),
+        ("", "− 免税(ATC936+ATC93BD)", "收入里已剔除的免税部分"),
+        ("= 右", "← 从实发反推的同一笔钱", ""),
+        ("", "", ""),
+        ("左 = 右（差值 < 0.01）", "→ 数据正确", ""),
+    ]
+    for i, (c1, c2, c3) in enumerate(rel_rows, 33):
+        w(i, 1, c1)
+        w(i, 2, c2)
+        w(i, 3, c3)
+
+    w(51, 1, "六、验证报告列字段对照", bold=True)
     headers = ["验证列", "公式", "涉及字段"]
     for col, h in enumerate(headers, 1):
-        w(33, col, h, bold=True)
+        w(52, col, h, bold=True)
     rows = [
         ("本期收入", "工资总额 − 本次免税 − 大病险个人 − 补缴及退款保险差额个人", "ATC93AA, ATC936, ATC93BD, ATC93BE"),
         ("左", "本期收入 − 养老 − 失业 − 医疗 − 公积金 − 个人其他调整 − 个人欠款 − 扣款大病险", "BAA001, BAA003, BAA002, CAA002, ATC93AG, ATC93E, ATC93Y2"),
@@ -252,12 +277,12 @@ def generate_formula_explanation_sheet(wb: Workbook, records: List[SalaryRecord]
         ("差值", "|左 − 右|", ""),
         ("状态", "差值 < 0.01 为通过", ""),
     ]
-    for i, (c1, c2, c3) in enumerate(rows, 34):
+    for i, (c1, c2, c3) in enumerate(rows, 53):
         w(i, 1, c1)
         w(i, 2, c2)
         w(i, 3, c3)
 
-    w(40, 1, "六、验算示例（第一条记录实际数值）", bold=True)
+    w(59, 1, "七、验算示例（第一条记录实际数值）", bold=True)
     if records:
         rec = records[0]
         income = calc_本期收入(rec)
@@ -285,7 +310,7 @@ def generate_formula_explanation_sheet(wb: Workbook, records: List[SalaryRecord]
             ("右", right, "实发 + 工会会费 + 代理费 + 个税 − 免税"),
             ("差值", abs(left - right), "|左 − 右|，<0.01 通过"),
         ]
-        for i, (name, val, note) in enumerate(ex_rows, 41):
+        for i, (name, val, note) in enumerate(ex_rows, 60):
             w(i, 1, name)
             w(i, 2, val)
             w(i, 3, note)
