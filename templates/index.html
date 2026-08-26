@@ -969,7 +969,7 @@
 
             const isFiltering = listFilterMonth.value || listFilterUnit.value || listFilterSeq.value;
             const filterInfo = isFiltering ? `（筛选后 ${checkedVisible.length}/${visibleCbs.length} 行被选中）` : '';
-            listSummary.textContent = `已选择 ${totalChecked.length} 个批次，共 ${persons} 人，合计收入 ${formatNum(income)} 元 ${filterInfo}`;
+            listSummary.textContent = `已选择 ${totalChecked.length} 个批次，共 ${persons} 人·笔，合计收入 ${formatNum(income)} 元 ${filterInfo}`;
         }
 
         async function importNames() {
