@@ -1099,7 +1099,7 @@
                         const items = recs.map(r =>
                             `${r.unit_name || r.unit}${fmtMonth(r.salary_month)}第${r.seq}批次工资单（金额${fmtMoney(r.income)}元）`
                         ).join('、');
-                        return `${w.name}${fmtMonth(w.salary_month)}发薪涉及多个结算单元-年月-批次。除当前已选的工资结算单外，还有一笔${items}尚未纳入本次计税范围，请确认是否合并计税。`;
+                        return `${w.name}${fmtMonth(w.salary_month)}发薪涉及多个结算单元|年月|批次。除当前已选的工资结算单外，还有一笔${items}尚未纳入本次计税范围，请确认是否合并计税。`;
                     }).join('<br>');
                     const more = data.merge_warnings.length > 5 ? `<br>...等共 ${data.merge_warnings.length} 条未合并记录` : '';
                     mergeBox.innerHTML = `<strong>⚠ 合并提示:</strong><br>${warnText}${more}`;
