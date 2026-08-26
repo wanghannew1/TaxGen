@@ -244,7 +244,7 @@ def get_tc93_all_fields(conn, month: int) -> List[dict]:
         FROM TC93 t93
         LEFT JOIN AC01 ac01 ON t93.AAC001 = ac01.AAC001
         WHERE t93.ATC931 = :month
-        ORDER BY t93.AAC003
+        ORDER BY ac01.AAC002 NULLS LAST, t93.ATC930
     """
     with conn.cursor() as cursor:
         cursor.execute(sql, {"month": month})
