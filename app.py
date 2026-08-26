@@ -148,7 +148,7 @@ def api_generate():
         warnings = []
         if confirmed_combos and merge_by_person:
             persons = list({r.职工号 for r in raw_records})
-            warnings = get_merge_warnings(conn, list(salary_months) if confirmed_combos else [month],
+            warnings = get_merge_warnings(conn, [month],
                                           combo_set if confirmed_combos else set(), persons)
         abnormal_reasons = {r.get("ATC930"): f"ATC93G={r.get('ATC93G', 'NULL')}(未结算)" for r in abnormal}
         
