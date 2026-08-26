@@ -443,7 +443,10 @@ def get_merge_warnings(conn, pay_months, combo_set, persons) -> List[dict]:
     sql_tpl = f"""
         SELECT t93.AAC003, ac01.AAC002, t93.ATB930, t93.ATC931, t93.ATC937, t93.ATC93AA,
                (SELECT MAX(m.ATB931) FROM TC8M m
-                WHERE m.ATB930 = t93.ATB930 AND m.ATC931 = t93.ATC931 AND m.ATC937 = t93.ATC937)
+                WHERE m.ATB930 = t93.ATB930 AND m.ATC931 = t93.ATC931 AND m.ATC937 = t93.ATC937),
+               (SELECT MAX(m.ATC8G7) FROM TC8M m
+                WHERE m.ATB930 = t93.ATB930 AND m.ATC931 = t93.ATC931 AND m.ATC937 = t93.ATC937
+                  AND m.ATC8M3 = 2)
         FROM TC93 t93
         LEFT JOIN AC01 ac01 ON t93.AAC001 = ac01.AAC001
         WHERE t93.ATC93G = '1'
@@ -470,6 +473,7 @@ def get_merge_warnings(conn, pay_months, combo_set, persons) -> List[dict]:
                     "unit": int(row[2] or 0),
                     "unit_name": str(row[6] or ""),
                     "salary_month": int(row[3] or 0),
+                    "pay_month": int(row[7] or 0),
                     "seq": str(row[4] or ""),
                     "income": float(row[5] or 0),
                 })
