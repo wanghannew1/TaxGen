@@ -84,6 +84,8 @@ def generate_normal_salary(records: List[SalaryRecord], title: str, output_dir: 
         passed = diff < 0.01
         validations.append({
             "tc930": rec.tc930_id, "姓名": rec.姓名,
+            "unit_name": combo_map.get((rec.结算单元, rec.工资所属年月, rec.当月批次), title),
+            "salary_month": rec.工资所属年月, "seq": rec.当月批次,
             "工资总额": rec.工资总额, "本次免税": rec.补发3, "大病险个人": rec.大病险个人,
             "补缴退款差额": rec.补缴及退款保险金额个人, "本期收入": income,
             "养老": rec.养老个人, "失业": rec.失业个人, "医疗": rec.医疗个人, "公积金": rec.公积金个人,
@@ -96,7 +98,7 @@ def generate_normal_salary(records: List[SalaryRecord], title: str, output_dir: 
     
     vs = wb.create_sheet("验证报告")
     vs_headers = [
-        "ATC930", "姓名",
+        "ATC930", "姓名", "结算单元名称", "所属月份", "批次",
         "本次工资总额(ATC93AA)", "本次免税(ATC936)", "大病险（个人承担）(ATC93BD)", "补缴及退款保险差额（个人）(ATC93BE)", "本期收入",
         "当月养老个人缴(BAA001)", "当月失业个人缴(BAA003)", "当月医疗个人缴(BAA002)", "个人公积金月缴存额(CAA002)",
         "个人其他调整(ATC93AG)", "个人欠款(ATC93E)", "扣款-大病险(ATC93Y2)", "意外险个人(ATC93BH)", "左",
@@ -107,7 +109,7 @@ def generate_normal_salary(records: List[SalaryRecord], title: str, output_dir: 
         vs.cell(row=1, column=col, value=h)
     for idx, v in enumerate(validations, 1):
         vals = [
-            v["tc930"], v["姓名"],
+            v["tc930"], v["姓名"], v["unit_name"], v["salary_month"], v["seq"],
             v["工资总额"], v["本次免税"], v["大病险个人"], v["补缴退款差额"], v["本期收入"],
             v["养老"], v["失业"], v["医疗"], v["公积金"],
             v["其他调整"], v["个人欠款"], v["扣款大病险"], v["意外险"], v["左"],
