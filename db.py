@@ -16,7 +16,7 @@ def init_db():
         user=DB_CONFIG['user'],
         password=DB_CONFIG['password'],
         dsn=dsn,
-        min=2,
+        min=1,
         max=10,
         disable_oob=True,
         tcp_connect_timeout=10,

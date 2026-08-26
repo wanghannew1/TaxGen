@@ -23,7 +23,7 @@
         }
 
         .container {
-            max-width: 1400px;
+            max-width: 1800px;
             margin: 0 auto;
         }
 
@@ -474,6 +474,7 @@
         <div id="results" class="card results">
             <div class="card-header">生成结果</div>
             <div class="card-body">
+                <div id="mergeWarnings" class="alert alert-danger" style="display: none;"></div>
                 <table class="table table-striped" id="resultsTable">
                     <thead>
                         <tr>
@@ -1082,6 +1083,9 @@
                             </td>
                         </tr>`;
                 }
+                const mergeBox = document.getElementById('mergeWarnings');
+                mergeBox.style.display = 'none';
+                mergeBox.innerHTML = '';
                 if (data.merge_warnings && data.merge_warnings.length > 0) {
                     const warnMap = {};
                     data.merge_warnings.forEach(w => {
@@ -1093,13 +1097,8 @@
                         `${w.name} 在${w.salary_month}月份 ${w.unit_name || w.unit}结算单元 ${w.salary_month}年月 ${w.seq}批次工资单中，还有${w.count}笔工资(合计${w.income.toLocaleString()}元)`
                     ).join('<br>');
                     const more = data.merge_warnings.length > 5 ? `<br>...等共 ${data.merge_warnings.length} 条未合并记录` : '';
-                    resultsTbody.innerHTML += `
-                        <tr>
-                            <td colspan="6" class="text-danger">
-                                ⚠ 合并提示: 以下人员在未选中的结算单元/批次还有工资记录，本次报送数据暂未合并，请注意:
-                                <br>${warnText}${more}
-                            </td>
-                        </tr>`;
+                    mergeBox.innerHTML = `<strong>⚠ 合并提示:</strong> 以下人员在未选中的结算单元/批次还有工资记录，本次报送数据暂未合并，请注意:<br>${warnText}${more}`;
+                    mergeBox.style.display = 'block';
                 }
                 if (data.files && data.files.length > 0) {
                     data.files.forEach(f => {
