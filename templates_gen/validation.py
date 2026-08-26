@@ -21,7 +21,7 @@ def validate_salary_records(records: List[SalaryRecord]) -> ValidationReport:
         tax_exempt = calc_免税(rec)
         
         left = income - rec.养老个人 - rec.失业个人 - rec.医疗个人 - rec.公积金个人 \
-               - rec.个人其他调整 - rec.个人欠款 - rec.扣款大病险
+               - rec.个人其他调整 - rec.个人欠款 - rec.扣款大病险 - rec.意外险个人
         right = rec.实发工资 + rec.税后工会会费 + rec.个人代理费 + rec.个人所得税 - tax_exempt
         diff = abs(left - right)
         passed = diff < 0.01

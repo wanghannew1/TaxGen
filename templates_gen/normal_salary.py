@@ -78,7 +78,7 @@ def generate_normal_salary(records: List[SalaryRecord], title: str, output_dir: 
         ws.cell(row=row, column=29, value=rec_remark)
         
         left = income - rec.养老个人 - rec.失业个人 - rec.医疗个人 - rec.公积金个人 \
-               - rec.个人其他调整 - rec.个人欠款 - rec.扣款大病险
+               - rec.个人其他调整 - rec.个人欠款 - rec.扣款大病险 - rec.意外险个人
         right = rec.实发工资 + rec.税后工会会费 + rec.个人代理费 + rec.个人所得税 - tax_exempt
         diff = abs(left - right)
         passed = diff < 0.01
@@ -87,7 +87,7 @@ def generate_normal_salary(records: List[SalaryRecord], title: str, output_dir: 
             "工资总额": rec.工资总额, "本次免税": rec.补发3, "大病险个人": rec.大病险个人,
             "补缴退款差额": rec.补缴及退款保险金额个人, "本期收入": income,
             "养老": rec.养老个人, "失业": rec.失业个人, "医疗": rec.医疗个人, "公积金": rec.公积金个人,
-            "其他调整": rec.个人其他调整, "个人欠款": rec.个人欠款, "扣款大病险": rec.扣款大病险,
+            "其他调整": rec.个人其他调整, "个人欠款": rec.个人欠款, "扣款大病险": rec.扣款大病险, "意外险": rec.意外险个人,
             "左": left,
             "实发": rec.实发工资, "工会会费": rec.税后工会会费, "代理费": rec.个人代理费,
             "个税": rec.个人所得税, "免税": tax_exempt,
@@ -99,7 +99,7 @@ def generate_normal_salary(records: List[SalaryRecord], title: str, output_dir: 
         "ATC930", "姓名",
         "本次工资总额(ATC93AA)", "本次免税(ATC936)", "大病险（个人承担）(ATC93BD)", "补缴及退款保险差额（个人）(ATC93BE)", "本期收入",
         "当月养老个人缴(BAA001)", "当月失业个人缴(BAA003)", "当月医疗个人缴(BAA002)", "个人公积金月缴存额(CAA002)",
-        "个人其他调整(ATC93AG)", "个人欠款(ATC93E)", "扣款-大病险(ATC93Y2)", "左",
+        "个人其他调整(ATC93AG)", "个人欠款(ATC93E)", "扣款-大病险(ATC93Y2)", "意外险个人(ATC93BH)", "左",
         "本次实发金额(ATC93C)", "税后扣除工会会费(ATC93Z2)", "个人承担代理费(BAA300)", "本次个人所得税(ATC93D)", "免税(ATC936+ATC93BD)",
         "右", "差值", "状态"
     ]
@@ -110,7 +110,7 @@ def generate_normal_salary(records: List[SalaryRecord], title: str, output_dir: 
             v["tc930"], v["姓名"],
             v["工资总额"], v["本次免税"], v["大病险个人"], v["补缴退款差额"], v["本期收入"],
             v["养老"], v["失业"], v["医疗"], v["公积金"],
-            v["其他调整"], v["个人欠款"], v["扣款大病险"], v["左"],
+            v["其他调整"], v["个人欠款"], v["扣款大病险"], v["意外险"], v["左"],
             v["实发"], v["工会会费"], v["代理费"], v["个税"], v["免税"],
             v["右"], v["差值"], "通过" if v["通过"] else "失败"
         ]
@@ -284,7 +284,7 @@ def generate_formula_explanation_sheet(wb: Workbook, records: List[SalaryRecord]
         w(52, col, h, bold=True)
     rows = [
         ("本期收入", "工资总额 − 本次免税 − 大病险个人 − 补缴及退款保险差额个人", "ATC93AA, ATC936, ATC93BD, ATC93BE"),
-        ("左", "本期收入 − 养老 − 失业 − 医疗 − 公积金 − 个人其他调整 − 个人欠款 − 扣款大病险", "BAA001, BAA003, BAA002, CAA002, ATC93AG, ATC93E, ATC93Y2"),
+        ("左", "本期收入 − 养老 − 失业 − 医疗 − 公积金 − 个人其他调整 − 个人欠款 − 扣款大病险 − 意外险个人", "BAA001, BAA003, BAA002, CAA002, ATC93AG, ATC93E, ATC93Y2, ATC93BH"),
         ("右", "实发合计 + 税后工会会费 + 个人代理费 + 个税 − 免税", "ATC93C, ATC93Z2, BAA300, ATC93D, ATC936, ATC93BD"),
         ("差值", "|左 − 右|", ""),
         ("状态", "差值 < 0.01 为通过", ""),
@@ -300,7 +300,7 @@ def generate_formula_explanation_sheet(wb: Workbook, records: List[SalaryRecord]
         income = calc_本期收入(rec)
         tax_exempt = calc_免税(rec)
         left = (income - rec.养老个人 - rec.失业个人 - rec.医疗个人 - rec.公积金个人
-                - rec.个人其他调整 - rec.个人欠款 - rec.扣款大病险)
+                - rec.个人其他调整 - rec.个人欠款 - rec.扣款大病险 - rec.意外险个人)
         right = (rec.实发工资 + rec.税后工会会费 + rec.个人代理费 + rec.个人所得税 - tax_exempt)
         ex_rows = [
             ("姓名", rec.姓名, ""),
@@ -337,7 +337,7 @@ def generate_raw_detail_sheet(wb: Workbook, raw_records: List[SalaryRecord],
         "ATC930", "姓名", "证件号码", "结算单元", "所属月份", "批次",
         "工资总额(AA)", "本次免税(936)", "大病险(BD)", "补缴退款差额(BE)", "本期收入",
         "养老(BAA001)", "失业(BAA003)", "医疗(BAA002)", "公积金(CAA002)",
-        "其他调整(AG)", "个人欠款(E)", "扣款大病险(Y2)",
+        "其他调整(AG)", "个人欠款(E)", "扣款大病险(Y2)", "意外险(BH)",
         "实发(C)", "工会会费(Z2)", "代理费(BAA300)", "个税(D)", "免税",
         "左", "右", "差值", "状态", "备注"
     ]
@@ -347,7 +347,7 @@ def generate_raw_detail_sheet(wb: Workbook, raw_records: List[SalaryRecord],
         income = calc_本期收入(rec)
         tax_exempt = calc_免税(rec)
         left = (income - rec.养老个人 - rec.失业个人 - rec.医疗个人 - rec.公积金个人
-                - rec.个人其他调整 - rec.个人欠款 - rec.扣款大病险)
+                - rec.个人其他调整 - rec.个人欠款 - rec.扣款大病险 - rec.意外险个人)
         right = (rec.实发工资 + rec.税后工会会费 + rec.个人代理费 + rec.个人所得税 - tax_exempt)
         diff = abs(left - right)
         remark = combo_map.get((rec.结算单元, rec.工资所属年月, rec.当月批次), title)
@@ -355,7 +355,7 @@ def generate_raw_detail_sheet(wb: Workbook, raw_records: List[SalaryRecord],
             rec.tc930_id, rec.姓名, rec.身份证, rec.结算单元, rec.工资所属年月, rec.当月批次,
             rec.工资总额, rec.补发3, rec.大病险个人, rec.补缴及退款保险金额个人, income,
             rec.养老个人, rec.失业个人, rec.医疗个人, rec.公积金个人,
-            rec.个人其他调整, rec.个人欠款, rec.扣款大病险,
+            rec.个人其他调整, rec.个人欠款, rec.扣款大病险, rec.意外险个人,
             rec.实发工资, rec.税后工会会费, rec.个人代理费, rec.个人所得税, tax_exempt,
             left, right, round(float(diff), 4), "通过" if diff < 0.01 else "失败", remark
         ]

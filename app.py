@@ -54,6 +54,7 @@ def merge_records_by_person(records):
             m.扣款大病险 += rec.扣款大病险
             m.税后工会会费 += rec.税后工会会费
             m.个人代理费 += rec.个人代理费
+            m.意外险个人 += rec.意外险个人
         merged.append(m)
     return merged
 
