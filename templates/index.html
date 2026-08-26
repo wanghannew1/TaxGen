@@ -1087,17 +1087,22 @@
                 mergeBox.style.display = 'none';
                 mergeBox.innerHTML = '';
                 if (data.merge_warnings && data.merge_warnings.length > 0) {
-                    const warnMap = {};
+                    const byPerson = {};
                     data.merge_warnings.forEach(w => {
-                        const key = `${w.name}-${w.salary_month}-${w.unit}-${w.seq}`;
-                        if (!warnMap[key]) warnMap[key] = { ...w, count: 1 };
-                        else warnMap[key].count += 1;
+                        if (!byPerson[w.name]) byPerson[w.name] = [];
+                        byPerson[w.name].push(w);
                     });
-                    const warnText = Object.values(warnMap).slice(0, 5).map(w =>
-                        `${w.name} 在${w.salary_month}月份 ${w.unit_name || w.unit} ${w.salary_month} ${w.seq}批次工资单中，还有${w.count}笔工资(合计${w.income.toLocaleString()}元)`
-                    ).join('<br>');
+                    const fmtMonth = m => `${Math.floor(m / 100)}年${m % 100}月`;
+                    const fmtMoney = v => v.toLocaleString('zh-CN', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+                    const warnText = Object.values(byPerson).slice(0, 5).map(recs => {
+                        const w = recs[0];
+                        const items = recs.map(r =>
+                            `${r.unit_name || r.unit}${fmtMonth(r.salary_month)}第${r.seq}批次工资单（金额${fmtMoney(r.income)}元）`
+                        ).join('、');
+                        return `${w.name}${fmtMonth(w.salary_month)}发薪涉及多个结算单元及批次。除当前已选的工资结算单外，还有一笔${items}尚未纳入本次计税范围，请确认是否合并计税。`;
+                    }).join('<br>');
                     const more = data.merge_warnings.length > 5 ? `<br>...等共 ${data.merge_warnings.length} 条未合并记录` : '';
-                    mergeBox.innerHTML = `<strong>⚠ 合并提示:</strong> 以下人员在未选中的结算单元/批次还有工资记录，本次报送数据暂未合并，请注意:<br>${warnText}${more}`;
+                    mergeBox.innerHTML = `<strong>⚠ 合并提示:</strong><br>${warnText}${more}`;
                     mergeBox.style.display = 'block';
                 }
                 if (data.files && data.files.length > 0) {
