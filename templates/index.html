@@ -1097,7 +1097,7 @@
                     const warnText = Object.values(byPerson).slice(0, 5).map(recs => {
                         const w = recs[0];
                         const items = recs.map(r =>
-                            `${r.unit_name || r.unit}${fmtMonth(r.salary_month)}第${r.seq}批次工资单（金额${fmtMoney(r.income)}元）`
+                            `${r.unit_name || r.unit}所属${fmtMonth(r.salary_month)}第${r.seq}批次工资单（金额${fmtMoney(r.income)}元）`
                         ).join('、');
                         const pm = w.pay_month || w.salary_month;
                         return `${w.name}${fmtMonth(pm)}发薪涉及多个结算单元|年月|批次。除当前已选的工资结算单外，还有一笔${items}尚未纳入本次计税范围，请确认是否合并计税。`;
