@@ -22,7 +22,7 @@
 ### 1. 进入项目目录
 
 ```bash
-cd /home/ubuntu/github/TaxGen
+cd /home/vod/code/tax-gen   # 替换为你实际克隆仓库的位置
 ```
 
 ### 2. 安装 uv 并创建虚拟环境
