@@ -146,15 +146,18 @@ def generate_normal_salary(records: List[SalaryRecord], title: str, output_dir: 
 
 
 def generate_tc93_full_sheet(wb: Workbook, tc93_all: List[dict], comments: Optional[dict] = None):
-    """TC93总表 sheet：第1行字段注释，第2行字段名，数据从第3行。按身份证排序，身份证右侧加重复计数列。"""
+    """TC93总表 sheet：身份证/重复次数/经办年月置最左，按身份证排序，同身份证相邻。"""
     if not tc93_all:
         return
     ws = wb.create_sheet("TC93总表")
+    tc93_all = sorted(tc93_all, key=lambda r: (not r.get("身份证"), str(r.get("身份证") or ""),
+                                               int(r.get("ATC930") or 0)))
     cols = list(tc93_all[0].keys())
+    first_cols = [c for c in ("身份证", "ATC8G7") if c in cols]
+    cols = first_cols + [c for c in cols if c not in first_cols]
     id_counts = Counter(rec.get("身份证", "") for rec in tc93_all)
     if "身份证" in cols:
-        idx = cols.index("身份证")
-        cols.insert(idx + 1, "重复次数")
+        cols.insert(1, "重复次数")
     for col_idx, col_name in enumerate(cols, 1):
         if col_name == "重复次数":
             ws.cell(row=1, column=col_idx, value="该身份证号在本sheet中出现的行数")
