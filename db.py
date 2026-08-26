@@ -17,7 +17,9 @@ def init_db():
         password=DB_CONFIG['password'],
         dsn=dsn,
         min=2,
-        max=10
+        max=10,
+        disable_oob=True,
+        tcp_connect_timeout=10,
     )
     print(f"Database pool created: {dsn}")
 
