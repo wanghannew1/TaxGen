@@ -1,0 +1,26 @@
+[Unit]
+Description=TaxGen 个税模板填表工具 (Flask)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=ubuntu
+Group=ubuntu
+WorkingDirectory=/home/ubuntu/github/TaxGen
+Environment=LD_LIBRARY_PATH=/opt/oracle/instantclient_23_4
+Environment=PYTHONUNBUFFERED=1
+Environment=FLASK_DEBUG=0
+# 数据库连接信息从项目目录 .env 读取（config.py 自动加载）
+ExecStart=/home/ubuntu/github/TaxGen/.venv/bin/python app.py
+Restart=on-failure
+RestartSec=5
+# 首次启动需初始化 Oracle 连接池，放宽启动超时
+TimeoutStartSec=30
+
+# 安全加固
+NoNewPrivileges=true
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target

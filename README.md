@@ -13,6 +13,7 @@
 ## 环境要求
 
 - Python 3.12
+- uv（包管理工具，安装方式见下方部署步骤）
 - Oracle Instant Client 23.4（已安装在 `/opt/oracle/instantclient_23_4`）
 - Oracle 11g 数据库访问权限（10.0.0.8:1521:orcl）
 
@@ -24,17 +25,28 @@
 cd /home/ubuntu/github/TaxGen
 ```
 
-### 2. 激活虚拟环境
+### 2. 安装 uv 并创建虚拟环境
+
+安装 uv（若未安装）：
 
 ```bash
+curl -LsSf https://astral.sh/uv/install.sh | sh
+```
+
+创建虚拟环境并激活：
+
+```bash
+uv venv
 source .venv/bin/activate
 ```
 
-### 3. 安装依赖
+### 3. 安装依赖（使用清华镜像）
 
 ```bash
-pip install -r requirements.txt
+uv pip install -r requirements.txt --index-url https://pypi.tuna.tsinghua.edu.cn/simple
 ```
+
+> 若需切换回官方源，去掉 `--index-url` 参数即可；也可以设置环境变量 `UV_DEFAULT_INDEX=https://pypi.tuna.tsinghua.edu.cn/simple` 全局生效。
 
 ### 4. 配置数据库连接
 
@@ -65,15 +77,45 @@ print('数据库连接成功')
 "
 ```
 
+### 6. 注册 systemd 服务（开机自启）
+
+项目已附带 systemd 服务单元文件 `deploy/taxgen.service`，一键安装脚本会自动拷贝单元文件、设置开机自启并启动服务：
+
+```bash
+sudo bash deploy/install_systemd.sh
+```
+
+安装完成后服务以 `ubuntu` 用户运行，监听 `0.0.0.0:5000`，进程崩溃自动重启。
+
+常用命令：
+
+```bash
+sudo systemctl status taxgen      # 查看状态
+sudo systemctl restart taxgen     # 重启
+sudo systemctl stop taxgen        # 停止
+sudo systemctl disable taxgen     # 取消开机自启
+sudo journalctl -u taxgen -f      # 查看实时日志
+```
+
+> 手动修改服务配置后需执行 `sudo systemctl daemon-reload && sudo systemctl restart taxgen`。
+
 ## 使用
 
 ### 启动 Web 服务
 
+生产环境（推荐）使用 systemd 管理，开机自启、崩溃自动重启：
+
 ```bash
-LD_LIBRARY_PATH=/opt/oracle/instantclient_23_4 .venv/bin/python app.py
+sudo systemctl start taxgen
 ```
 
-浏览器打开 `http://localhost:5000`
+手动前台启动（调试用，`FLASK_DEBUG=1` 开启调试模式）：
+
+```bash
+LD_LIBRARY_PATH=/opt/oracle/instantclient_23_4 FLASK_DEBUG=1 .venv/bin/python app.py
+```
+
+浏览器打开 `http://localhost:5000`（远程访问用服务器 IP）
 
 ### 操作步骤
 
@@ -146,6 +188,9 @@ TaxGen/
 │   ├── conftest.py
 │   └── test_integration.py # 18 项集成测试
 ├── output/                 # 生成的 Excel 文件
+├── deploy/
+│   ├── taxgen.service      # systemd 服务单元文件
+│   └── install_systemd.sh  # systemd 一键安装脚本
 ├── requirements.txt
 ├── .env.example
 └── .env                    # 实际数据库配置（不入库）
