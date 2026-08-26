@@ -1094,7 +1094,7 @@
                         else warnMap[key].count += 1;
                     });
                     const warnText = Object.values(warnMap).slice(0, 5).map(w =>
-                        `${w.name} 在${w.salary_month}月份 ${w.unit_name || w.unit}结算单元 ${w.salary_month}年月 ${w.seq}批次工资单中，还有${w.count}笔工资(合计${w.income.toLocaleString()}元)`
+                        `${w.name} 在${w.salary_month}月份 ${w.unit_name || w.unit} ${w.salary_month} ${w.seq}批次工资单中，还有${w.count}笔工资(合计${w.income.toLocaleString()}元)`
                     ).join('<br>');
                     const more = data.merge_warnings.length > 5 ? `<br>...等共 ${data.merge_warnings.length} 条未合并记录` : '';
                     mergeBox.innerHTML = `<strong>⚠ 合并提示:</strong> 以下人员在未选中的结算单元/批次还有工资记录，本次报送数据暂未合并，请注意:<br>${warnText}${more}`;
