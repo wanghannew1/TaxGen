@@ -230,13 +230,17 @@ def get_tc93_field_comments(conn) -> Dict[str, str]:
         for row in cursor.fetchall():
             comments[str(row[0])] = str(row[1] or "")
     comments["身份证"] = "公民身份号码"
+    comments["ATC8G7"] = "经办年月（发放年月最终依据，来自TC8M；与TC93.ATC932工资发放年月、ATC931工资所属年月易混淆）"
     return comments
 
 
 def get_tc93_all_fields(conn, month: int) -> List[dict]:
-    """查询指定月份TC93全部字段，供导出总表使用。"""
+    """查询指定月份TC93全部字段，供导出总表使用。附经办年月(ATC8G7)作发放年月最终依据。"""
     sql = """
-        SELECT t93.*, ac01.AAC002 AS 身份证
+        SELECT t93.*, ac01.AAC002 AS 身份证,
+               (SELECT MAX(m.ATC8G7) FROM TC8M m
+                WHERE m.ATB930 = t93.ATB930 AND m.ATC931 = t93.ATC931 AND m.ATC937 = t93.ATC937
+                  AND m.ATC8M3 = 2) AS ATC8G7
         FROM TC93 t93
         LEFT JOIN AC01 ac01 ON t93.AAC001 = ac01.AAC001
         WHERE t93.ATC931 = :month

@@ -330,6 +330,17 @@ def generate_formula_explanation_sheet(wb: Workbook, records: List[SalaryRecord]
             w(i, 2, val)
             w(i, 3, note)
 
+    w(80, 1, "八、东软数据库月份字段说明（重要）", bold=True)
+    w(81, 1, "东软系统存在三个易混淆的月份字段，务必区分：")
+    w(82, 1, "  ATC931 工资所属年月   — 工资属于哪个月（如6月工资=202606）")
+    w(83, 1, "  ATC932 工资发放年月   — 工资实际发放的月份（TC93表内字段）")
+    w(84, 1, "  ATC8G7 经办年月       — 发放年月的【最终依据】（TC8M表字段，本工具'发放月份'下拉即此字段）")
+    w(85, 1, "本工具选择'发放月份'时，实际筛选的是 TC8M.ATC8G7（经办年月）。")
+    w(86, 1, "同一组合(结算单元+所属月份+批次)下，TC93.ATC932 可能与 TC8M.ATC8G7 不一致：")
+    w(87, 1, "如 单元37185 所属202606批1 的 TC93.ATC932=202606（6月发放），但 TC8M.ATC8G7=202607（7月经办申报）。")
+    w(88, 1, "因此 TC93总表 sheet 中会出现'发放年月(ATC932)=202606'而您选择发放月份202607的记录——这是正常的，")
+    w(89, 1, "请以 TC93总表 最后列的'经办年月(ATC8G7)'为准判断该笔工资属于哪个申报期。")
+
 
 def generate_raw_detail_sheet(wb: Workbook, raw_records: List[SalaryRecord],
                               combo_map: dict, title: str):
@@ -393,7 +404,7 @@ def generate_merge_detail_sheet(wb: Workbook, raw_records: List[SalaryRecord],
         income = calc_本期收入(m)
         tax_exempt = calc_免税(m)
         left = (income - m.养老个人 - m.失业个人 - m.医疗个人 - m.公积金个人
-                - m.个人其他调整 - m.个人欠款 - m.扣款大病险)
+                - m.个人其他调整 - m.个人欠款 - m.扣款大病险 - m.意外险个人)
         right = (m.实发工资 + m.税后工会会费 + m.个人代理费 + m.个人所得税 - tax_exempt)
         diff = abs(left - right)
         vals = [
