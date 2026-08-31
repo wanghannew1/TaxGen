@@ -33,6 +33,7 @@ class SalaryRecord:
     补缴及退款保险金额个人: Decimal = Decimal("0")  # ATC93BE - 补缴及退款保险差额（个人）
     大病险个人: Decimal = Decimal("0")  # ATC93BD - 大病险（个人承担）
     补发3: Decimal = Decimal("0")  # ATC936 - 本次免税 (= 采暖费 + 独生子女费)
+    个人交纳现金: Decimal = Decimal("0")  # ATC93X3 - 个人交纳现金（现金交纳社保等，计入本期收入）
 
     # 验证辅助字段
     个人其他调整: Decimal = Decimal("0")  # ATC93AG

@@ -60,6 +60,7 @@ def merge_records_by_person(records, by_pay_month: bool = False):
             m.补缴及退款保险金额个人 += rec.补缴及退款保险金额个人
             m.大病险个人 += rec.大病险个人
             m.补发3 += rec.补发3
+            m.个人交纳现金 += rec.个人交纳现金
             m.个人其他调整 += rec.个人其他调整
             m.个人欠款 += rec.个人欠款
             m.扣款大病险 += rec.扣款大病险
