@@ -452,8 +452,22 @@
                     <div class="form-check mt-2 mb-1">
                         <input class="form-check-input" type="checkbox" id="mergeByPerson" checked>
                         <label class="form-check-label" for="mergeByPerson">
-                            按人+所属月份合并（同人同月多笔工资合并为一笔，按最后批次归属）
+                            合并多条工资记录
                         </label>
+                    </div>
+                    <div class="ms-4 mb-1" id="mergeGranularityBox">
+                        <div class="form-check">
+                            <input class="form-check-input" type="radio" name="mergeGranularity" id="mergeByMonth" value="month" checked>
+                            <label class="form-check-label" for="mergeByMonth">
+                                按人+所属月份合并（同人同月多笔合并，同一人可能多行）
+                            </label>
+                        </div>
+                        <div class="form-check">
+                            <input class="form-check-input" type="radio" name="mergeGranularity" id="mergeByPayMonth" value="pay_month">
+                            <label class="form-check-label" for="mergeByPayMonth">
+                                按人+发放月份合并（每人一行，本期收入/五险一金/个税全部合计）
+                            </label>
+                        </div>
                     </div>
                     <button id="btnGenerate" class="btn btn-primary btn-lg w-100 mt-2">生成报税数据</button>
                     <div id="loading" class="loading text-center mt-3" style="display:none;">
@@ -598,6 +612,12 @@
         document.addEventListener('DOMContentLoaded', function() {
             suggestionsCard.style.display = 'block';
             loadMonths();
+            const mergeByPerson = document.getElementById('mergeByPerson');
+            const granularityBox = document.getElementById('mergeGranularityBox');
+            granularityBox.style.display = mergeByPerson.checked ? 'block' : 'none';
+            mergeByPerson.addEventListener('change', function() {
+                granularityBox.style.display = this.checked ? 'block' : 'none';
+            });
         });
 
         selectAllCb.addEventListener('change', function() {
@@ -1065,7 +1085,7 @@
             validationReport.style.display = 'none';
 
             try {
-                const body = { month: parseInt(month), templates, confirmed_combos: confirmedCombos, merge_by_person: document.getElementById('mergeByPerson').checked };
+                const body = { month: parseInt(month), templates, confirmed_combos: confirmedCombos, merge_by_person: document.getElementById('mergeByPerson').checked, merge_by_pay_month: document.getElementById('mergeByPerson').checked && document.querySelector('input[name="mergeGranularity"]:checked').value === 'pay_month' };
                 const resp = await fetch('/api/generate', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
