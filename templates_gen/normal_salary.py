@@ -276,7 +276,7 @@ def generate_formula_explanation_sheet(wb: Workbook, records: List[SalaryRecord]
         ("", "【收入侧】", ""),
         ("本次工资总额(ATC93AA)", "− 本次免税(ATC936)", "采暖费+独生子女费，免税不计收入"),
         ("", "− 大病险个人(ATC93BD)", "大病险个人部分同样免税"),
-        ("", "− 补缴退款差额(ATC93BE) + 交纳现金(X3)", "补缴/退款冲抵；个人现金交纳社保计入收入"),
+        ("", "− 补缴退款差额(ATC93BE) + 交纳现金(X3) − 个人欠款(E)", "补缴/退款冲抵；现金交纳与欠款冲抵均计入收入"),
         ("= 本期收入", "← 报税口径的收入", ""),
         ("本期收入", "− 养老(BAA001) − 失业(BAA003) − 医疗(BAA002) − 公积金(CAA002)", "五险一金个人缴"),
         ("", "− 其他调整(ATC93AG) − 扣款大病险(ATC93Y2)", "其他扣减（个人欠款已含在收入中）"),
@@ -301,7 +301,7 @@ def generate_formula_explanation_sheet(wb: Workbook, records: List[SalaryRecord]
     for col, h in enumerate(headers, 1):
         w(52, col, h, bold=True)
     rows = [
-        ("本期收入", "工资总额 − 本次免税 − 大病险个人 − 补缴及退款保险差额个人 + 个人交纳现金", "ATC93AA, ATC936, ATC93BD, ATC93BE, ATC93X3"),
+        ("本期收入", "工资总额 − 本次免税 − 大病险个人 − 补缴及退款保险差额个人 + 个人交纳现金 − 个人欠款", "ATC93AA, ATC936, ATC93BD, ATC93BE, ATC93X3, ATC93E"),
         ("左", "本期收入 − 养老 − 失业 − 医疗 − 公积金 − 个人其他调整 − 扣款大病险 − 意外险个人", "BAA001, BAA003, BAA002, CAA002, ATC93AG, ATC93Y2, ATC93BH"),
         ("右", "实发合计 + 税后工会会费 + 个人代理费 + 个税 − 免税", "ATC93C, ATC93Z2, BAA300, ATC93D, ATC936, ATC93BD"),
         ("差值", "|左 − 右|", ""),
