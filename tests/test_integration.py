@@ -317,3 +317,73 @@ class TestGenerateEndToEnd:
         if "TC93总表" in wb.sheetnames:
             ws = wb["TC93总表"]
             assert ws.max_row <= len(tc93_all) + 2
+
+
+class TestMergeByPayMonth:
+    """按人+发放月份合并（同一发放月份每人一行，跨所属月份收入/五险一金/个税合计）"""
+
+    def _mk(self, pid, name, month, batch, total=0, tax=0, social=0, paid=0,
+            cert="130225198812115529", unit=37339):
+        from decimal import Decimal
+        rec = SalaryRecord(职工号=pid, 姓名=name, 身份证=cert, 工资所属年月=month,
+                           结算单元=unit, 当月批次=batch, tc930_id=month * 100 + int(batch))
+        rec.工资总额 = Decimal(str(total))
+        rec.个人所得税 = Decimal(str(tax))
+        rec.养老个人 = Decimal(str(social))
+        rec.实发工资 = Decimal(str(paid))
+        return rec
+
+    def _wang4(self):
+        # 与真实数据一致: 王建秋 4 笔跨所属月份记录
+        return [
+            self._mk("4370", "王建秋", 202604, 1),
+            self._mk("4370", "王建秋", 202605, 3),
+            self._mk("4370", "王建秋", 202606, 4, total=9210.6, tax=432.8,
+                     social=2046.59, paid=6731.21),
+            self._mk("4370", "王建秋", 202607, "2", total=61978.65, tax=13733.01,
+                     social=2046.59, paid=46199.05),
+        ]
+
+    def test_merge_by_pay_month_groups_person_only(self):
+        """by_pay_month=True 时 4 笔跨月记录合并为 1 笔，金额全部合计"""
+        from decimal import Decimal
+        from app import merge_records_by_person
+        merged = merge_records_by_person(self._wang4(), by_pay_month=True)
+        assert len(merged) == 1
+        m = merged[0]
+        assert m.工资总额 == Decimal("71189.25")
+        assert m.个人所得税 == Decimal("14165.81")
+        assert m.养老个人 == Decimal("4093.18")
+        assert m.实发工资 == Decimal("52930.26")
+        # 基准取流水号最大(最新经办)记录: 202607 批2
+        assert m.工资所属年月 == 202607
+        assert m.当月批次 == "2"
+
+    def test_merge_default_keeps_month_granularity(self):
+        """默认(by_pay_month=False)仍按人+所属月份合并，跨月不合并"""
+        from app import merge_records_by_person
+        merged = merge_records_by_person(self._wang4())
+        assert len(merged) == 4
+
+    def test_merge_pay_month_export_one_row_per_person(self, output_dir):
+        """merge_mode=pay_month 时 正常工资薪金收入 每人一行，合并明细可追溯"""
+        from decimal import Decimal
+        from app import merge_records_by_person
+        raw = self._wang4()
+        merged = merge_records_by_person(raw, by_pay_month=True)
+        result = generate_normal_salary(
+            merged, "测试按人合并", output_dir, raw_records=raw, merge_mode="pay_month",
+            combos=[{"unit": 37339, "salary_month": 202607, "seq": "2",
+                     "unit_name": "吉林大学第二医院B"}])
+        wb = load_workbook(result.file_path)
+        ws = wb["正常工资薪金收入"]
+        assert ws.max_row == 2  # 表头 + 1人1行
+        assert ws.cell(row=2, column=5).value == 71189.25  # 本期收入合计
+        assert ws.cell(row=2, column=7).value == 4093.18  # 养老合计
+        assert "吉林大学第二医院B-202607-2" in str(ws.cell(row=2, column=29).value)
+        md = wb["合并明细"]
+        assert md.max_row == 2
+        assert md.cell(row=2, column=4).value == 4  # 原始条数
+        assert md.cell(row=2, column=3).value == "202604;202605;202606;202607"
+        assert md.cell(row=2, column=9).value == 4093.18  # 合并五险
+        assert md.cell(row=2, column=10).value == 14165.81  # 合并个税

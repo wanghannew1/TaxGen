@@ -21,16 +21,27 @@ os.makedirs(OUTPUT_DIR, exist_ok=True)
 atexit.register(close_db)
 
 
-def merge_records_by_person(records):
-    """按人+所属月份合并多条工资记录为一笔，基准取时间上最后一个批次(批次号最大、流水号最大)。"""
+def merge_records_by_person(records, by_pay_month: bool = False):
+    """按人合并多条工资记录为一笔，基准取时间上最后一个批次(批次号最大、流水号最大)。
+
+    by_pay_month=False: 按人+所属月份合并（现状，同人同月多笔合并，同一人可能多行）。
+    by_pay_month=True:  按人+发放月份合并（同一发放月份内每人一行，跨所属月份的收入/五险一金/个税全部合计）。
+                        仅适用于组合确认流程——所有组合共享同一发放月份(TC8M.ATC8G7)。
+    """
     from copy import deepcopy
+    group_key = (lambda rec: (rec.职工号,)) if by_pay_month \
+        else (lambda rec: (rec.职工号, rec.工资所属年月))
     groups = {}
     for rec in records:
-        groups.setdefault((rec.职工号, rec.工资所属年月), []).append(rec)
+        groups.setdefault(group_key(rec), []).append(rec)
 
     merged = []
     for key, recs in groups.items():
-        base = max(recs, key=lambda r: (int(r.当月批次 or 0), r.tc930_id))
+        if by_pay_month:
+            # 跨所属月份合并时"最后批次"语义失效，基准取流水号最大(最新经办)的记录
+            base = max(recs, key=lambda r: r.tc930_id)
+        else:
+            base = max(recs, key=lambda r: (int(r.当月批次 or 0), r.tc930_id))
         m = deepcopy(base)
         for rec in recs:
             if rec is base:
@@ -143,9 +154,10 @@ def api_generate():
             tc93_all = get_tc93_all_fields(conn, month)
             abnormal = get_abnormal_records(conn, month)
         merge_by_person = data.get("merge_by_person", True)
+        merge_by_pay_month = bool(data.get("merge_by_pay_month"))
         raw_records = records
         if merge_by_person:
-            records = merge_records_by_person(records)
+            records = merge_records_by_person(records, by_pay_month=merge_by_pay_month)
         warnings = []
         if confirmed_combos and merge_by_person:
             persons = list({r.职工号 for r in raw_records})
@@ -171,8 +183,9 @@ def api_generate():
                                            tc93_all=tc93_all, abnormal=abnormal,
                                            abnormal_reasons=abnormal_reasons,
                                            combos=confirmed_combos,
-                                           tc93_comments=get_tc93_field_comments(conn),
-                                           raw_records=raw_records if merge_by_person else None)
+                                            tc93_comments=get_tc93_field_comments(conn),
+                                            raw_records=raw_records if merge_by_person else None,
+                                            merge_mode="pay_month" if merge_by_pay_month else "month")
             elif tpl == "laborService":
                 r = generate_labor_service(records, f"劳务派遣人员工资发放表{month}", OUTPUT_DIR)
             elif tpl == "annualBonus":

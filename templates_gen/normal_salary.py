@@ -27,10 +27,12 @@ def generate_normal_salary(records: List[SalaryRecord], title: str, output_dir: 
                            abnormal_reasons: Optional[dict] = None,
                            combos: Optional[List[dict]] = None,
                            tc93_comments: Optional[dict] = None,
-                           raw_records: Optional[List[SalaryRecord]] = None) -> GenerateResult:
+                           raw_records: Optional[List[SalaryRecord]] = None,
+                           merge_mode: str = "month") -> GenerateResult:
     """生成正常工资薪金所得 Excel 模板
 
     新增 tc93_all: TC93总表(全字段), abnormal: 异常记录, abnormal_reasons: 过滤原因
+    merge_mode: "month"=按人+所属月份合并, "pay_month"=按人+发放月份合并(每人一行)
     """
     os.makedirs(output_dir, exist_ok=True)
     timestamp = datetime.now().strftime("%Y%m%d%H%M%S")
@@ -128,7 +130,7 @@ def generate_normal_salary(records: List[SalaryRecord], title: str, output_dir: 
         generate_combo_list_sheet(wb, combos)
     if raw_records:
         generate_raw_detail_sheet(wb, raw_records, combo_map, title)
-        generate_merge_detail_sheet(wb, raw_records, records)
+        generate_merge_detail_sheet(wb, raw_records, records, merge_mode)
     generate_formula_explanation_sheet(wb, records)
     
     wb.save(output_path)
@@ -391,12 +393,19 @@ def generate_raw_detail_sheet(wb: Workbook, raw_records: List[SalaryRecord],
 
 
 def generate_merge_detail_sheet(wb: Workbook, raw_records: List[SalaryRecord],
-                                merged_records: List[SalaryRecord]):
-    """合并明细sheet：按人+所属月份分组，展示原始条目与合并后汇总，合并过程可追溯。"""
+                                merged_records: List[SalaryRecord],
+                                merge_mode: str = "month"):
+    """合并明细sheet：按人(+所属月份)分组，展示原始条目与合并后汇总，合并过程可追溯。
+
+    merge_mode="month":     按人+所属月份分组（现状）
+    merge_mode="pay_month": 按人分组，跨所属月份合并为一行
+    """
     ws = wb.create_sheet("合并明细")
+    by_pay_month = merge_mode == "pay_month"
     groups = {}
     for rec in raw_records:
-        groups.setdefault((rec.职工号, rec.工资所属年月), []).append(rec)
+        key = (rec.职工号,) if by_pay_month else (rec.职工号, rec.工资所属年月)
+        groups.setdefault(key, []).append(rec)
 
     headers = [
         "姓名", "证件号码", "所属月份", "原始条数",
@@ -407,14 +416,21 @@ def generate_merge_detail_sheet(wb: Workbook, raw_records: List[SalaryRecord],
     for col, h in enumerate(headers, 1):
         ws.cell(row=1, column=col, value=h)
 
-    merged_map = {(m.职工号, m.工资所属年月): m for m in merged_records}
+    if by_pay_month:
+        merged_map = {m.职工号: m for m in merged_records}
+        ordered = sorted(groups.items(), key=lambda kv: (kv[0][0],))
+    else:
+        merged_map = {(m.职工号, m.工资所属年月): m for m in merged_records}
+        ordered = sorted(groups.items(), key=lambda kv: (kv[0][1], kv[0][0]))
     row = 2
-    for (pid, month), recs in sorted(groups.items(), key=lambda kv: (kv[0][1], kv[0][0])):
-        m = merged_map.get((pid, month))
-        raw_desc = "; ".join(
-            f"{r.tc930_id}/{round(float(calc_本期收入(r)), 2)}/{r.个人所得税}" for r in recs)
+    for key, recs in ordered:
+        m = merged_map.get(key[0] if by_pay_month else key)
         if m is None:
             continue
+        raw_desc = "; ".join(
+            f"{r.tc930_id}/{round(float(calc_本期收入(r)), 2)}/{r.个人所得税}" for r in recs)
+        month_display = (";".join(str(x) for x in sorted({r.工资所属年月 for r in recs}))
+                         if by_pay_month else key[1])
         income = calc_本期收入(m)
         tax_exempt = calc_免税(m)
         left = (income - m.养老个人 - m.失业个人 - m.医疗个人 - m.公积金个人
@@ -422,7 +438,7 @@ def generate_merge_detail_sheet(wb: Workbook, raw_records: List[SalaryRecord],
         right = (m.实发工资 + m.税后工会会费 + m.个人代理费 + m.个人所得税 - tax_exempt)
         diff = abs(left - right)
         vals = [
-            recs[0].姓名, recs[0].身份证, month, len(recs),
+            recs[0].姓名, recs[0].身份证, month_display, len(recs),
             raw_desc, m.结算单元, m.当月批次,
             income, m.养老个人 + m.失业个人 + m.医疗个人 + m.公积金个人, m.个人所得税,
             m.实发工资, tax_exempt,
