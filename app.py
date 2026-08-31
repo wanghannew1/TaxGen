@@ -154,7 +154,7 @@ def api_generate():
             tc93_all = get_tc93_all_fields(conn, month)
             abnormal = get_abnormal_records(conn, month)
         merge_by_person = data.get("merge_by_person", True)
-        merge_by_pay_month = bool(data.get("merge_by_pay_month"))
+        merge_by_pay_month = bool(data.get("merge_by_pay_month", True))
         raw_records = records
         if merge_by_person:
             records = merge_records_by_person(records, by_pay_month=merge_by_pay_month)

@@ -294,6 +294,17 @@ class TestGenerateEndToEnd:
         assert 'tc93_total_count' in data
         assert data['tc93_total_count'] >= data['abnormal_count']
 
+    def test_generate_api_default_merge_by_pay_month(self, app_client, conn):
+        """未传 merge_by_pay_month 时默认按人+发放月份合并: 导出行数=唯一人数"""
+        from queries import get_salary_records
+        raw = get_salary_records(conn, 202607)
+        unique_persons = len({r.职工号 for r in raw})
+        resp = app_client.post('/api/generate',
+            json={"month": 202607, "templates": ["normalSalary"]})
+        assert resp.status_code == 200
+        data = resp.get_json()
+        assert data['files'][0]['count'] == unique_persons
+
     def test_generate_with_combos(self, conn, output_dir):
         """带 confirmed_combos 时 TC93总表和异常记录表必须按组合过滤"""
         from queries import get_tc93_all_fields, get_abnormal_records
