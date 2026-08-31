@@ -237,7 +237,7 @@ class TestModelCompleteness:
         '应发工资', '实发工资', '个人所得税', '工资总额',
         '独生子女费', '采暖费', '奖金',
         '养老个人', '医疗个人', '失业个人', '公积金个人',
-        '补缴及退款保险金额个人', '大病险个人', '补发3',
+        '补缴及退款保险金额个人', '大病险个人', '补发3', '个人交纳现金',
     ]
 
     def test_salary_record_has_all_fields(self):
@@ -328,6 +328,74 @@ class TestGenerateEndToEnd:
         if "TC93总表" in wb.sheetnames:
             ws = wb["TC93总表"]
             assert ws.max_row <= len(tc93_all) + 2
+
+
+class TestX3Income:
+    """个人交纳现金(ATC93X3)计入本期收入, 与个税端回盘口径一致"""
+
+    def _mk(self, total=0, be=0, x3=0, social=0, paid=0, tax=0):
+        from decimal import Decimal
+        rec = SalaryRecord()
+        rec.工资总额 = Decimal(str(total))
+        rec.补缴及退款保险金额个人 = Decimal(str(be))
+        rec.个人交纳现金 = Decimal(str(x3))
+        rec.养老个人 = Decimal(str(social))
+        rec.实发工资 = Decimal(str(paid))
+        rec.个人所得税 = Decimal(str(tax))
+        return rec
+
+    def test_x3_added_to_income(self):
+        """宋红玥案例: 应发0 交纳现金608.5 -> 本期收入608.5"""
+        from decimal import Decimal
+        from templates_gen.formulas import calc_本期收入
+        rec = self._mk(total=0, x3=608.5)
+        assert calc_本期收入(rec) == Decimal("608.5")
+
+    def test_x3_balances_validation(self):
+        """宋霜案例: 总额359.68 X3 608.5 五险608.5 实发359.68 -> 左=右"""
+        from decimal import Decimal
+        from templates_gen.formulas import calc_本期收入, calc_免税
+        rec = self._mk(total=359.68, x3=608.5, social=608.5, paid=359.68)
+        income = calc_本期收入(rec)
+        assert income == Decimal("968.18")
+        left = income - rec.养老个人
+        right = rec.实发工资 + rec.个人所得税 - calc_免税(rec)
+        assert abs(left - right) < Decimal("0.01")
+
+    def test_merge_sums_x3(self):
+        """合并时个人交纳现金必须合计"""
+        from decimal import Decimal
+        from app import merge_records_by_person
+        recs = [self._mk(total=0, x3=608.5), self._mk(total=100, x3=200)]
+        recs[0].职工号 = recs[1].职工号 = "1"
+        merged = merge_records_by_person(recs)
+        assert len(merged) == 1
+        assert merged[0].个人交纳现金 == Decimal("808.5")
+
+    def test_x3_and_e_match_return_disk(self):
+        """马静案例: 总额0 BE1825.5 X3=0 E=-2434 -> 收入608.5(与回盘一致)"""
+        from decimal import Decimal
+        from templates_gen.formulas import calc_本期收入
+        rec = self._mk(total=0, be=1825.5, social=608.5)
+        rec.个人欠款 = Decimal("-2434")
+        assert calc_本期收入(rec) == Decimal("608.5")
+
+    def test_x3_e_validation_equivalent(self):
+        """E 从左式移入收入后, 左=右 结果与原公式代数等价"""
+        from decimal import Decimal
+        from templates_gen.formulas import calc_本期收入, calc_免税
+        rec = self._mk(total=0, be=1825.5, social=608.5)
+        rec.个人欠款 = Decimal("-2434")
+        income = calc_本期收入(rec)
+        # 新左式(不含E)
+        left_new = income - rec.养老个人
+        # 旧左式(收入不含E, 左式减E)
+        income_old = rec.工资总额 - rec.补缴及退款保险金额个人
+        left_old = income_old - rec.养老个人 - rec.个人欠款
+        assert left_new == left_old
+        # 零工资补缴行: 左=0=右
+        right = rec.实发工资 + rec.个人所得税 - calc_免税(rec)
+        assert abs(left_new - right) < Decimal("0.01")
 
 
 class TestMergeByPayMonth:
