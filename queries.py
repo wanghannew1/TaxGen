@@ -828,3 +828,143 @@ def get_default_report_month(conn) -> int:
     if latest and default > latest:
         return latest
     return default
+
+
+def get_handlers(conn, pay_month: int = 0) -> List[str]:
+    """查询经办人列表 (TC8M.AAE019 经办人, 已发放状态)。
+
+    注意: Oracle 中空字符串等价于 NULL, 只需 IS NOT NULL 判断。
+    pay_month 为 0 时查询全部经办人, 否则限定该发薪月份。
+    """
+    sql = """
+        SELECT DISTINCT AAE019 FROM TC8M
+        WHERE AAE019 IS NOT NULL
+          AND ATC8M3 = 2
+          {month_cond}
+        ORDER BY AAE019
+    """
+    month_cond = "AND ATC8G7 = :pay_month" if pay_month else ""
+    with conn.cursor() as cursor:
+        if pay_month:
+            cursor.execute(sql.format(month_cond=month_cond), {"pay_month": pay_month})
+        else:
+            cursor.execute(sql.format(month_cond=month_cond))
+        return [str(r[0]) for r in cursor.fetchall()]
+
+
+def get_units(conn, pay_month: int = 0) -> List[dict]:
+    """查询结算单元列表 (TC8M.ATB930 + AAB004 名称, 已发放状态)。"""
+    sql = """
+        SELECT DISTINCT ATB930, AAB004 FROM TC8M
+        WHERE ATB930 IS NOT NULL AND ATC8M3 = 2
+          {month_cond}
+        ORDER BY ATB930
+    """
+    month_cond = "AND ATC8G7 = :pay_month" if pay_month else ""
+    with conn.cursor() as cursor:
+        if pay_month:
+            cursor.execute(sql.format(month_cond=month_cond), {"pay_month": pay_month})
+        else:
+            cursor.execute(sql.format(month_cond=month_cond))
+        return [{"code": int(r[0]), "name": str(r[1] or "")} for r in cursor.fetchall()]
+
+
+def get_person_units(conn, cert_numbers, pay_months) -> Dict[str, dict]:
+    """批量查询人员的经办人/结算单元信息。
+
+    通过 TC8M(经办) JOIN TC93(工资) JOIN AC01(人员) 关联,
+    返回 {证件号(大写): {"handler": 经办人, "unit_code": 结算单元代码,
+    "unit_name": 结算单元名称}}。同一人多个结算单元时取 MAX(AAE019)。
+    """
+    if not cert_numbers:
+        return {}
+    certs = sorted({str(c).strip().upper() for c in cert_numbers if str(c).strip()})
+    result: Dict[str, dict] = {}
+    sql = """
+        SELECT ac01.AAC002, MAX(m.AAE019) AS handler,
+               MAX(m.ATB930) AS unit_code, MAX(m.AAB004) AS unit_name
+        FROM TC8M m
+        JOIN TC93 t93 ON t93.ATB930 = m.ATB930
+                     AND t93.ATC931 = m.ATC931
+                     AND t93.ATC937 = m.ATC937
+        LEFT JOIN AC01 ac01 ON t93.AAC001 = ac01.AAC001
+        WHERE m.ATC8M3 = 2
+          AND m.ATC8G7 IN ({month_placeholders})
+          AND ac01.AAC002 IN ({cert_placeholders})
+        GROUP BY ac01.AAC002
+    """
+    months = sorted(set(pay_months)) if pay_months else [0]
+    with conn.cursor() as cursor:
+        for start in range(0, len(certs), _IN_BATCH_SIZE):
+            chunk = certs[start:start + _IN_BATCH_SIZE]
+            month_ph = ", ".join(f":pm{i}" for i in range(len(months)))
+            cert_ph = ", ".join(f":c{i}" for i in range(len(chunk)))
+            binds = {f"pm{i}": m for i, m in enumerate(months)}
+            binds.update({f"c{i}": c for i, c in enumerate(chunk)})
+            cursor.execute(sql.format(month_placeholders=month_ph,
+                                      cert_placeholders=cert_ph), binds)
+            for row in cursor.fetchall():
+                cert = str(row[0] or "").strip().upper()
+                if cert:
+                    result[cert] = {
+                        "handler": str(row[1] or ""),
+                        "unit_code": int(row[2] or 0),
+                        "unit_name": str(row[3] or ""),
+                    }
+    return result
+
+
+def get_special_units(conn) -> List[dict]:
+    """查询特殊结算单元配置列表。"""
+    with conn.cursor() as cursor:
+        cursor.execute(
+            "SELECT unit_code, unit_name, zero_salary_no_add FROM special_unit_config ORDER BY unit_code")
+        return [{"code": int(r[0]), "name": str(r[1] or ""),
+                 "zero_salary_no_add": int(r[2] or 0)} for r in cursor.fetchall()]
+
+
+def add_special_unit(conn, unit_code: int, unit_name: str = "") -> None:
+    """新增特殊结算单元配置。"""
+    with conn.cursor() as cursor:
+        cursor.execute(
+            "INSERT INTO special_unit_config (unit_code, unit_name, zero_salary_no_add) VALUES (:c, :n, 1)",
+            {"c": unit_code, "n": unit_name})
+    conn.commit()
+
+
+def delete_special_unit(conn, unit_code: int) -> None:
+    """删除特殊结算单元配置。"""
+    with conn.cursor() as cursor:
+        cursor.execute("DELETE FROM special_unit_config WHERE unit_code = :c", {"c": unit_code})
+    conn.commit()
+
+
+def get_zero_salary_certs(conn, pay_month: int) -> Set[str]:
+    """查询指定发薪月份合计工资为0的结算单元中的人员证件号集合。
+
+    用途: 特殊结算单元(如二院)当月多批次合计工资为0时, 这些人员不增员。
+    """
+    certs = set()
+    sql = """
+        SELECT DISTINCT ac01.AAC002
+        FROM TC93 t93
+        JOIN TC8M m ON m.ATB930 = t93.ATB930
+                   AND m.ATC931 = t93.ATC931
+                   AND m.ATC937 = t93.ATC937
+        LEFT JOIN AC01 ac01 ON t93.AAC001 = ac01.AAC001
+        WHERE m.ATC8G7 = :pay_month
+          AND m.ATC8M3 = 2
+          AND t93.ATC93G = '1'
+          AND ac01.AAC002 IS NOT NULL
+          AND t93.ATB930 IN (
+              SELECT unit_code FROM special_unit_config WHERE zero_salary_no_add = 1
+          )
+          AND NVL(t93.ATC93AA, 0) = 0
+    """
+    with conn.cursor() as cursor:
+        cursor.execute(sql, {"pay_month": pay_month})
+        for row in cursor.fetchall():
+            cert = str(row[0] or "").strip().upper()
+            if cert:
+                certs.add(cert)
+    return certs

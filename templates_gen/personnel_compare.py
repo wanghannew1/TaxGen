@@ -112,7 +112,9 @@ def _cert_key(value) -> str:
 
 
 def compare_personnel(tax_export_persons, payroll_certs, payroll_personnel, termination_dates,
-                      unpaid_persons=None, contract_signed_persons=None):
+                      unpaid_persons=None, contract_signed_persons=None,
+                      person_units=None, filter_handlers=None, filter_units=None,
+                      exclude_certs=None):
     """增减员比对引擎。
 
     Args:
@@ -122,6 +124,10 @@ def compare_personnel(tax_export_persons, payroll_certs, payroll_personnel, term
         termination_dates: Dict[str, datetime] - 证件号 → TC90 合同终止日期
         unpaid_persons: Set[str] - 未发薪工资表人员证件号集合 (减员排除 + 增员条件②)
         contract_signed_persons: Set[str] - 合同签署时间范围内人员 (增员条件③)
+        person_units: Dict[str, dict] - 证件号 → {handler, unit_code, unit_name}
+        filter_handlers: List[str] - 经办人过滤 (空=不过滤)
+        filter_units: List[int] - 结算单元代码过滤 (空=不过滤)
+        exclude_certs: Set[str] - 需从增员中排除的人员 (特殊结算单元工资为0)
 
     Returns:
         (add_rows, departed_rows, pending_rows, stats):
@@ -134,6 +140,24 @@ def compare_personnel(tax_export_persons, payroll_certs, payroll_personnel, term
     unpaid_set.discard("")
     contract_set = {_cert_key(c) for c in (contract_signed_persons or set())}
     contract_set.discard("")
+    exclude_set = {_cert_key(c) for c in (exclude_certs or set())}
+    exclude_set.discard("")
+
+    handlers = {h for h in (filter_handlers or []) if h}
+    units = {int(u) for u in (filter_units or []) if u}
+    person_units = person_units or {}
+
+    def _passes_filter(cert):
+        if not handlers and not units:
+            return True
+        info = person_units.get(_cert_key(cert))
+        if not info:
+            return False
+        if handlers and info.get("handler") not in handlers:
+            return False
+        if units and info.get("unit_code") not in units:
+            return False
+        return True
 
     tax_certs = {_cert_key(p.get("证件号码")) for p in tax_export_persons}
     tax_certs.discard("")
@@ -141,8 +165,10 @@ def compare_personnel(tax_export_persons, payroll_certs, payroll_personnel, term
     payroll_set = {_cert_key(c) for c in payroll_certs}
     payroll_set.discard("")
 
-    # 增员 = (发薪 ∪ 未发薪工资表 ∪ 合同签署) - 个税端
+    # 增员 = (发薪 ∪ 未发薪工资表 ∪ 合同签署) - 个税端, 再按经办人/结算单元过滤
     add_certs = (payroll_set | unpaid_set | contract_set) - tax_certs
+    add_certs = {c for c in add_certs if _passes_filter(c)}
+    add_certs -= exclude_set
 
     # 疑似离职: 个税端未标记离职(无离职日期)且不在发薪/未发薪名单
     # (个税端已有离职日期的属历史离职, 不参与近期离职判定)
@@ -150,6 +176,7 @@ def compare_personnel(tax_export_persons, payroll_certs, payroll_personnel, term
                     if not str(p.get("离职日期") or "").strip()}
     protected_certs = payroll_set | unpaid_set | contract_set
     suspect_certs = active_certs - protected_certs
+    suspect_certs = {c for c in suspect_certs if _passes_filter(c)}
     departed_certs = {c for c in suspect_certs if c in termination_dates}
     pending_certs = suspect_certs - departed_certs
 

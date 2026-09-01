@@ -22,6 +22,33 @@ def init_db():
         tcp_connect_timeout=10,
     )
     print(f"Database pool created: {dsn}")
+    _ensure_special_unit_table()
+
+
+def _ensure_special_unit_table():
+    """确保特殊结算单元配置表存在 (工资为0不增员的结算单元)。"""
+    try:
+        conn = _pool.acquire()
+        try:
+            with conn.cursor() as cursor:
+                cursor.execute(
+                    """
+                    CREATE TABLE special_unit_config (
+                        unit_code NUMBER(10) PRIMARY KEY,
+                        unit_name VARCHAR2(200),
+                        zero_salary_no_add NUMBER(1) DEFAULT 1,
+                        created_at TIMESTAMP DEFAULT SYSTIMESTAMP
+                    )
+                    """
+                )
+        except oracledb.DatabaseError as e:
+            # ORA-00955: name is already used by an existing object → 表已存在
+            if "ORA-00955" not in str(e):
+                raise
+        finally:
+            _pool.release(conn)
+    except Exception:
+        pass
 
 
 def get_connection():

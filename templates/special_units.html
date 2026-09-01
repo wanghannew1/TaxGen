@@ -1,0 +1,129 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>特殊结算单元配置 - 个税填报服务</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+    <style>
+        body { background: #f5f6fa; }
+        .container { max-width: 1800px; }
+        .card { margin-bottom: 1rem; box-shadow: 0 1px 3px rgba(0,0,0,.1); }
+        #errorBox { display: none; }
+    </style>
+</head>
+<body>
+<nav class="navbar navbar-dark bg-primary">
+    <div class="container" style="max-width: 1800px;">
+        <span class="navbar-brand">个税填报服务</span>
+    </div>
+</nav>
+
+<div class="container py-3" style="max-width: 1800px;">
+    <div class="d-flex gap-2 mb-3 flex-wrap">
+        <a href="/" class="btn btn-outline-primary">报税数据生成</a>
+        <a href="/tax-return" class="btn btn-outline-primary">报税状态统计</a>
+        <a href="/personnel-compare" class="btn btn-success">增减员比对</a>
+        <a href="/special-units" class="btn btn-primary active">特殊结算单元配置</a>
+    </div>
+
+    <div class="card">
+        <div class="card-header"><strong>特殊结算单元配置</strong></div>
+        <div class="card-body">
+            <div class="alert alert-info" style="font-size: 0.9rem;">
+                配置"工资为0不增员"的结算单元：这些结算单元当月发薪多批次合计工资为0时，
+                人员不列入增减员比对结果的增员名单。
+            </div>
+            <div class="row g-2 align-items-end mb-3">
+                <div class="col-md-4">
+                    <label class="form-label">结算单元代码</label>
+                    <input type="number" id="unitCode" class="form-control" placeholder="如 41137">
+                </div>
+                <div class="col-md-4">
+                    <label class="form-label">结算单元名称</label>
+                    <input type="text" id="unitName" class="form-control" placeholder="如 吉林大学第二医院B">
+                </div>
+                <div class="col-md-2">
+                    <button id="btnAdd" class="btn btn-primary w-100">新增配置</button>
+                </div>
+            </div>
+            <div id="errorBox" class="alert alert-danger mt-2"></div>
+            <table class="table table-striped table-hover">
+                <thead>
+                    <tr>
+                        <th>结算单元代码</th>
+                        <th>结算单元名称</th>
+                        <th>工资为0不增员</th>
+                        <th>操作</th>
+                    </tr>
+                </thead>
+                <tbody id="unitList"></tbody>
+            </table>
+            <div id="emptyState" class="text-muted text-center py-3">暂无配置</div>
+        </div>
+    </div>
+</div>
+
+<script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
+<script>
+    const unitCode = document.getElementById('unitCode');
+    const unitName = document.getElementById('unitName');
+    const btnAdd = document.getElementById('btnAdd');
+    const errorBox = document.getElementById('errorBox');
+    const unitList = document.getElementById('unitList');
+    const emptyState = document.getElementById('emptyState');
+
+    function showError(msg) { errorBox.textContent = msg; errorBox.style.display = 'block'; }
+    function hideError() { errorBox.style.display = 'none'; }
+
+    async function loadUnits() {
+        try {
+            const resp = await fetch('/api/special-units');
+            if (!resp.ok) throw new Error('加载失败');
+            const data = await resp.json();
+            const units = data.units || [];
+            emptyState.style.display = units.length === 0 ? 'block' : 'none';
+            unitList.innerHTML = units.map(u => `
+                <tr>
+                    <td>${u.code}</td>
+                    <td>${u.name}</td>
+                    <td><span class="badge bg-success">是</span></td>
+                    <td><button class="btn btn-sm btn-outline-danger" onclick="deleteUnit(${u.code})">删除</button></td>
+                </tr>`).join('');
+        } catch (e) {
+            showError(`加载配置失败: ${e.message}`);
+        }
+    }
+
+    async function deleteUnit(code) {
+        try {
+            const resp = await fetch(`/api/special-units/${code}`, { method: 'DELETE' });
+            const data = await resp.json();
+            if (!resp.ok || data.error) { showError(data.error || '删除失败'); return; }
+            hideError();
+            loadUnits();
+        } catch (e) { showError(`删除失败: ${e.message}`); }
+    }
+
+    btnAdd.addEventListener('click', async function() {
+        hideError();
+        const code = unitCode.value.trim();
+        if (!code) { showError('请填写结算单元代码'); return; }
+        try {
+            const resp = await fetch('/api/special-units', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ unit_code: parseInt(code), unit_name: unitName.value.trim() })
+            });
+            const data = await resp.json();
+            if (!resp.ok || data.error) { showError(data.error || '新增失败'); return; }
+            unitCode.value = '';
+            unitName.value = '';
+            loadUnits();
+        } catch (e) { showError(`新增失败: ${e.message}`); }
+    });
+
+    document.addEventListener('DOMContentLoaded', loadUnits);
+</script>
+</body>
+</html>

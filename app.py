@@ -347,6 +347,66 @@ def page_personnel_compare():
     return render_template("personnel_compare.html")
 
 
+@app.route("/special-units")
+def page_special_units():
+    return render_template("special_units.html")
+
+
+@app.route("/api/special-units", methods=["GET"])
+def api_special_units_list():
+    """获取特殊结算单元配置列表。"""
+    try:
+        from queries import get_special_units
+        conn = get_connection()
+        return jsonify({"units": get_special_units(conn)})
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route("/api/special-units", methods=["POST"])
+def api_special_units_add():
+    """新增特殊结算单元配置。"""
+    try:
+        from queries import add_special_unit
+        data = request.get_json()
+        unit_code = int(data.get("unit_code", 0) or 0)
+        unit_name = str(data.get("unit_name", "") or "")
+        if not unit_code:
+            return jsonify({"error": "请填写结算单元代码"}), 400
+        conn = get_connection()
+        add_special_unit(conn, unit_code, unit_name)
+        return jsonify({"ok": True})
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route("/api/special-units/<int:unit_code>", methods=["DELETE"])
+def api_special_units_delete(unit_code):
+    """删除特殊结算单元配置。"""
+    try:
+        from queries import delete_special_unit
+        conn = get_connection()
+        delete_special_unit(conn, unit_code)
+        return jsonify({"ok": True})
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route("/api/personnel-compare/filters")
+def api_personnel_compare_filters():
+    """查询经办人/结算单元列表 (供筛选下拉框)。"""
+    try:
+        from queries import get_handlers, get_units
+        conn = get_connection()
+        pay_month = int(request.args.get("pay_month", 0) or 0)
+        return jsonify({
+            "handlers": get_handlers(conn, pay_month),
+            "units": get_units(conn, pay_month),
+        })
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
 @app.route("/api/personnel-compare/default-report-month")
 def api_personnel_compare_default_month():
     """查询默认上报发薪月份 (1-15日上月, 16-月末本月)。"""
@@ -404,6 +464,8 @@ def api_personnel_compare():
             return jsonify({"error": "请选择发薪月份"}), 400
         unpaid_month = int(request.form.get("unpaid_salary_month", 0) or 0)
         contract_month = int(request.form.get("contract_month", 0) or 0)
+        filter_handlers = [h for h in request.form.getlist("handler") if h.strip()]
+        filter_units = [int(u) for u in request.form.getlist("unit") if u.strip()]
         deadline = request.form.get("termination_deadline", "").strip()
         deadline_date = None
         if deadline:
@@ -469,6 +531,22 @@ def api_personnel_compare():
         add_rows, departed_rows, pending_rows, stats = compare_personnel(
             tax_export_persons, payroll_certs, payroll_personnel, termination_dates,
             unpaid_persons=unpaid_persons, contract_signed_persons=contract_persons)
+        # 特殊结算单元: 工资为0不增员
+        from queries import get_special_units, get_zero_salary_certs
+        exclude_certs = get_zero_salary_certs(conn, pay_month) if get_special_units(conn) else set()
+        # 经办人/结算单元过滤: 全员比对后按条件筛选
+        person_units = None
+        if filter_handlers or filter_units:
+            from queries import get_person_units
+            all_certs = (payroll_certs | unpaid_persons | contract_persons |
+                         {str(p.get("证件号码") or "").strip().upper() for p in tax_export_persons})
+            person_units = get_person_units(conn, all_certs, pay_months)
+        if exclude_certs or filter_handlers or filter_units:
+            add_rows, departed_rows, pending_rows, stats = compare_personnel(
+                tax_export_persons, payroll_certs, payroll_personnel, termination_dates,
+                unpaid_persons=unpaid_persons, contract_signed_persons=contract_persons,
+                person_units=person_units, filter_handlers=filter_handlers,
+                filter_units=filter_units, exclude_certs=exclude_certs)
         # 补充增员人员详细信息 (未发薪/合同签署人员不在 payroll_personnel 中)
         if stats["add_count"] > len(add_rows):
             from templates_gen.personnel_compare import IDX_证件号码, map_personnel_info_to_row
