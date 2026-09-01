@@ -382,7 +382,9 @@ def api_personnel_compare():
         conn = get_connection()
         payroll_certs = get_payroll_cert_numbers(conn, month)
         payroll_personnel = get_payroll_personnel(conn, month)
-        termination_dates = get_tc90_termination_dates(conn, payroll_certs)
+        tax_certs = {str(p.get("证件号码") or "").strip().upper() for p in tax_export_persons}
+        remove_certs = tax_certs - payroll_certs
+        termination_dates = get_tc90_termination_dates(conn, remove_certs)
         add_rows, remove_rows, stats = compare_personnel(
             tax_export_persons, payroll_certs, payroll_personnel, termination_dates)
         result = generate_compare_excel(add_rows, remove_rows, stats, OUTPUT_DIR, month)
