@@ -11,7 +11,7 @@
 - 14: 是否离职后补发工资, ..., 25: 备注, ..., 50: 职务
 """
 from datetime import datetime
-from typing import List, Optional
+from typing import List
 
 from openpyxl import Workbook
 
