@@ -9,8 +9,6 @@ from templates_gen.normal_salary import generate_normal_salary, generate_tc93_fu
 from templates_gen.labor_service import generate_labor_service
 from templates_gen.annual_bonus import generate_annual_bonus
 from templates_gen.personnel_info import generate_personnel_info
-from templates_gen.personnel_compare import compare_personnel, generate_compare_excel
-from templates_gen.tax_export_parser import parse_tax_export
 from templates_gen.validation import validate_salary_records
 
 app = Flask(__name__)
