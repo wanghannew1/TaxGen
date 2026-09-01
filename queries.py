@@ -483,6 +483,24 @@ def get_merge_warnings(conn, pay_months, combo_set, persons) -> List[dict]:
     return warnings
 
 
+def get_latest_pay_date(conn):
+    """查询最近一笔工资发放的经办日期 (TC8M.AAE036, 已发放状态)。
+
+    返回 (pay_month: int, pay_date: datetime), 无记录时返回 (0, None)。
+    """
+    sql = """
+        SELECT MAX(ATC8G7), MAX(AAE036)
+        FROM TC8M
+        WHERE ATC8M3 = 2 AND ATC8G7 IS NOT NULL
+    """
+    with conn.cursor() as cursor:
+        cursor.execute(sql)
+        row = cursor.fetchone()
+        if not row or row[0] is None:
+            return 0, None
+        return int(row[0]), row[1]
+
+
 def get_payroll_cert_numbers(conn, pay_month: int) -> Set[str]:
     """按发放月份(经办年月)查询全部发薪人员的身份证号集合。
 

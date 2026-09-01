@@ -58,6 +58,15 @@
                         <option value="">不使用（仅比对1次发薪）</option>
                     </select>
                 </div>
+            </div>
+            <div class="row g-2 align-items-end mt-1">
+                <div class="col-md-4">
+                    <label class="form-label">离职时间截止日期（离职日期不能超过此日期）</label>
+                    <input type="date" id="terminationDeadline" class="form-control">
+                </div>
+                <div class="col-md-3 d-flex align-items-end pb-2">
+                    <span class="text-muted" style="font-size: 0.9rem;">最近一笔工资发放日期：<strong id="latestPayDate">查询中...</strong></span>
+                </div>
                 <div class="col-md-2">
                     <button id="btnCompare" class="btn btn-primary w-100">开始比对</button>
                 </div>
@@ -95,6 +104,8 @@
     const exportFile = document.getElementById('exportFile');
     const monthSelect1 = document.getElementById('monthSelect1');
     const monthSelect2 = document.getElementById('monthSelect2');
+    const terminationDeadline = document.getElementById('terminationDeadline');
+    const latestPayDate = document.getElementById('latestPayDate');
     const btnCompare = document.getElementById('btnCompare');
     const loading = document.getElementById('loading');
     const errorBox = document.getElementById('errorBox');
@@ -114,6 +125,13 @@
     }
     function hideError() { errorBox.style.display = 'none'; }
 
+    function formatDate(d) {
+        const y = d.getFullYear();
+        const m = String(d.getMonth() + 1).padStart(2, '0');
+        const day = String(d.getDate()).padStart(2, '0');
+        return `${y}-${m}-${day}`;
+    }
+
     async function loadMonths() {
         try {
             const resp = await fetch('/api/pay-months');
@@ -129,6 +147,21 @@
         }
     }
 
+    async function loadLatestPayDate() {
+        try {
+            const resp = await fetch('/api/personnel-compare/latest-pay-date');
+            if (!resp.ok) throw new Error(`服务器返回错误: ${resp.status}`);
+            const data = await resp.json();
+            if (data.pay_date) {
+                latestPayDate.textContent = `${data.pay_date}（${Math.floor(data.pay_month / 100)}年${data.pay_month % 100}月）`;
+            } else {
+                latestPayDate.textContent = '无记录';
+            }
+        } catch (e) {
+            latestPayDate.textContent = '查询失败';
+        }
+    }
+
     btnCompare.addEventListener('click', async function() {
         hideError();
         resultCard.style.display = 'none';
@@ -139,6 +172,8 @@
         if (monthSelect2.value) months.push(monthSelect2.value);
         if (months.length === 0) { showError('请选择至少 1 个发薪月份'); return; }
         if (months.length > 2) { showError('最多选择 2 个发薪月份'); return; }
+        const deadline = terminationDeadline.value;
+        if (!deadline) { showError('请设置离职时间截止日期'); return; }
 
         btnCompare.disabled = true;
         loading.style.display = 'block';
@@ -146,6 +181,7 @@
             const form = new FormData();
             form.append('file', file);
             months.forEach(m => form.append('months', m));
+            form.append('termination_deadline', deadline);
             const resp = await fetch('/api/personnel-compare/compare', { method: 'POST', body: form });
             const data = await resp.json();
             if (!resp.ok || data.error) { showError(data.error || '比对失败，请稍后重试'); return; }
@@ -172,7 +208,14 @@
         }
     });
 
-    document.addEventListener('DOMContentLoaded', loadMonths);
+    document.addEventListener('DOMContentLoaded', function() {
+        const now = new Date();
+        // 默认截止日期 = 当前时间上个月的最后一天
+        const prevMonthLastDay = new Date(now.getFullYear(), now.getMonth(), 0);
+        terminationDeadline.value = formatDate(prevMonthLastDay);
+        loadMonths();
+        loadLatestPayDate();
+    });
 </script>
 </body>
 </html>

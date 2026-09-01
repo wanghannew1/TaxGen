@@ -349,9 +349,28 @@ def page_personnel_compare():
     return render_template("personnel_compare.html")
 
 
+@app.route("/api/personnel-compare/latest-pay-date")
+def api_personnel_compare_latest_pay_date():
+    """查询最近一笔工资发放日期 (TC8M.AAE036)。"""
+    try:
+        from queries import get_latest_pay_date
+        conn = get_connection()
+        pay_month, pay_date = get_latest_pay_date(conn)
+        return jsonify({
+            "pay_month": pay_month,
+            "pay_date": pay_date.strftime("%Y-%m-%d") if pay_date else None,
+        })
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
 @app.route("/api/personnel-compare/compare", methods=["POST"])
 def api_personnel_compare():
-    """上传个税端导出文件 + 选择最近1~2次发薪月份 → 增减员比对 → 生成 Excel。"""
+    """上传个税端导出文件 + 选择最近1~2次发薪月份 → 增减员比对 → 生成 Excel。
+
+    离职时间截止日期 (termination_deadline, YYYY-MM-DD) 用于过滤 TC90 离职日期:
+    超过截止日期的合同终止日期视为未到期, 归入待确认。
+    """
     try:
         from queries import get_payroll_cert_numbers, get_tc90_termination_dates, get_payroll_personnel
         from templates_gen.personnel_compare import compare_personnel, generate_compare_excel
@@ -366,6 +385,14 @@ def api_personnel_compare():
             return jsonify({"error": "请选择发薪月份"}), 400
         if len(months) > 2:
             return jsonify({"error": "最多选择 2 个发薪月份"}), 400
+        deadline = request.form.get("termination_deadline", "").strip()
+        deadline_date = None
+        if deadline:
+            from datetime import datetime as _dt
+            try:
+                deadline_date = _dt.strptime(deadline, "%Y-%m-%d").date()
+            except ValueError:
+                return jsonify({"error": "离职时间截止日期格式错误 (应为 YYYY-MM-DD)"}), 400
         ext = os.path.splitext(file.filename or "")[1].lower()
         if ext != ".xls":
             return jsonify({"error": "仅支持 .xls 格式的个税端导出文件"}), 400
@@ -400,6 +427,12 @@ def api_personnel_compare():
         }
         suspect_certs = active_certs - payroll_certs
         termination_dates = get_tc90_termination_dates(conn, suspect_certs)
+        # 离职日期超过截止日期的视为合同未到期, 不列为已离职
+        if deadline_date:
+            termination_dates = {
+                c: d for c, d in termination_dates.items()
+                if d.date() <= deadline_date
+            }
         add_rows, departed_rows, pending_rows, stats = compare_personnel(
             tax_export_persons, payroll_certs, payroll_personnel, termination_dates)
         month_label = f"{months[0]}-{months[-1]}" if len(months) > 1 else str(months[0])
