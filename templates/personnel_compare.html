@@ -195,6 +195,7 @@
                 if (opt3) contractMonth.value = m;
             }
         } catch (e) { /* 保持默认空选 */ }
+        loadFilters();
     }
 
     function setDefaultDeadline() {
@@ -289,10 +290,8 @@
     });
 
 document.addEventListener('DOMContentLoaded', function() {
-        loadMonths();
+        loadMonths().then(loadDefaultReportMonth);
         loadLatestPayDate();
-        loadDefaultReportMonth();
-        setTimeout(loadFilters, 1500);
     });
 </script>
 </body>
