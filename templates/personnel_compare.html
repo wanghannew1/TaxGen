@@ -36,11 +36,10 @@
         <div class="card-header"><strong>增减员比对</strong></div>
         <div class="card-body">
             <div class="alert alert-info mb-3" style="font-size: 0.9rem;">
-                上传个税端导出的境内人员信息列表（.xls），选择当月发薪的发放月份，系统按证件号码比对：
-                发薪人员不在个税端的列为<strong>增员</strong>；个税端中<strong>无离职日期</strong>且不在发薪名单的列为
-                <strong>待确认离职人员</strong>；个税端中已有明确<strong>离职日期</strong>的为<strong>离职人员</strong>。
-                生成结果为一个 Excel（增员名单 + 待确认离职人员 + 离职人员三个 Sheet），待确认离职人员的
-                离职日期列自动填充 TC90 合同终止日期供参考。
+                上传个税端导出的境内人员信息列表（.xls），选择最近 <strong>1 次或 2 次</strong>发薪月份，
+                系统按证件号码比对：发薪名单有但个税端没有的列为<strong>增员</strong>；个税端有但最近发薪名单
+                没有的，进一步查询 TC90 合同终止日期——有离职日期的放入<strong>近期离职人员</strong>，
+                无离职日期的放入<strong>待确认近期离职人员</strong>。生成结果为一个 Excel（三个 Sheet）。
             </div>
             <div class="row g-2 align-items-end">
                 <div class="col-md-4">
@@ -48,9 +47,15 @@
                     <input type="file" id="exportFile" class="form-control" accept=".xls">
                 </div>
                 <div class="col-md-3">
-                    <label class="form-label">发放月份</label>
-                    <select id="monthSelect" class="form-select">
+                    <label class="form-label">发薪月份 1（必选）</label>
+                    <select id="monthSelect1" class="form-select">
                         <option value="">请选择月份</option>
+                    </select>
+                </div>
+                <div class="col-md-3">
+                    <label class="form-label">发薪月份 2（可选）</label>
+                    <select id="monthSelect2" class="form-select">
+                        <option value="">不使用（仅比对1次发薪）</option>
                     </select>
                 </div>
                 <div class="col-md-2">
@@ -77,8 +82,8 @@
                 <div class="col-md-3 col-sm-6 stat-card"><div class="stat-info num" id="statTaxTotal">0</div><div class="text-muted">个税端总人数</div></div>
                 <div class="col-md-3 col-sm-6 stat-card"><div class="stat-info num" id="statPayrollTotal">0</div><div class="text-muted">发薪总人数</div></div>
                 <div class="col-md-3 col-sm-6 stat-card"><div class="stat-add num" id="statAddCount">0</div><div class="text-muted">增员人数</div></div>
-                <div class="col-md-3 col-sm-6 stat-card"><div class="stat-remove num" id="statPendingCount">0</div><div class="text-muted">待确认离职人数</div></div>
-                <div class="col-md-3 col-sm-6 stat-card"><div class="stat-info num" id="statDepartedCount">0</div><div class="text-muted">离职人数</div></div>
+                <div class="col-md-3 col-sm-6 stat-card"><div class="stat-remove num" id="statDepartedCount">0</div><div class="text-muted">近期离职人数</div></div>
+                <div class="col-md-3 col-sm-6 stat-card"><div class="stat-info num" id="statPendingCount">0</div><div class="text-muted">待确认近期离职人数</div></div>
             </div>
             <div id="fileInfo" class="text-muted mt-2" style="font-size: 0.85rem;"></div>
         </div>
@@ -88,7 +93,8 @@
 <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
 <script>
     const exportFile = document.getElementById('exportFile');
-    const monthSelect = document.getElementById('monthSelect');
+    const monthSelect1 = document.getElementById('monthSelect1');
+    const monthSelect2 = document.getElementById('monthSelect2');
     const btnCompare = document.getElementById('btnCompare');
     const loading = document.getElementById('loading');
     const errorBox = document.getElementById('errorBox');
@@ -98,8 +104,8 @@
     const statTaxTotal = document.getElementById('statTaxTotal');
     const statPayrollTotal = document.getElementById('statPayrollTotal');
     const statAddCount = document.getElementById('statAddCount');
-    const statPendingCount = document.getElementById('statPendingCount');
     const statDepartedCount = document.getElementById('statDepartedCount');
+    const statPendingCount = document.getElementById('statPendingCount');
     const fileInfo = document.getElementById('fileInfo');
 
     function showError(msg) {
@@ -115,9 +121,10 @@
             const months = await resp.json();
             let options = '<option value="">请选择月份</option>';
             months.forEach(m => { options += `<option value="${m.value}">${m.label}</option>`; });
-            monthSelect.innerHTML = options;
+            monthSelect1.innerHTML = options;
+            monthSelect2.innerHTML = '<option value="">不使用（仅比对1次发薪）</option>' + options.slice('<option value="">请选择月份</option>'.length);
         } catch (e) {
-            monthSelect.innerHTML = '<option value="">加载失败，请刷新重试</option>';
+            monthSelect1.innerHTML = '<option value="">加载失败，请刷新重试</option>';
             showError(`加载月份列表失败: ${e.message}`);
         }
     }
@@ -127,25 +134,32 @@
         resultCard.style.display = 'none';
         const file = exportFile.files[0];
         if (!file) { showError('请先上传个税端导出文件'); return; }
-        const month = monthSelect.value;
-        if (!month) { showError('请选择发放月份'); return; }
+        const months = [];
+        if (monthSelect1.value) months.push(monthSelect1.value);
+        if (monthSelect2.value) months.push(monthSelect2.value);
+        if (months.length === 0) { showError('请选择至少 1 个发薪月份'); return; }
+        if (months.length > 2) { showError('最多选择 2 个发薪月份'); return; }
 
         btnCompare.disabled = true;
         loading.style.display = 'block';
         try {
             const form = new FormData();
             form.append('file', file);
-            form.append('month', month);
+            months.forEach(m => form.append('months', m));
             const resp = await fetch('/api/personnel-compare/compare', { method: 'POST', body: form });
             const data = await resp.json();
             if (!resp.ok || data.error) { showError(data.error || '比对失败，请稍后重试'); return; }
 
-            statMonth.textContent = monthSelect.options[monthSelect.selectedIndex].text;
+            const labels = months.map(m => {
+                const opt = Array.from(monthSelect1.options).find(o => o.value === m) || Array.from(monthSelect2.options).find(o => o.value === m);
+                return opt ? opt.text : m;
+            });
+            statMonth.textContent = labels.join(' + ');
             statTaxTotal.textContent = data.tax_total;
             statPayrollTotal.textContent = data.payroll_total;
             statAddCount.textContent = data.add_count;
-            statPendingCount.textContent = data.pending_count;
             statDepartedCount.textContent = data.departed_count;
+            statPendingCount.textContent = data.pending_count;
             btnDownload.href = data.download_url;
             btnDownload.setAttribute('download', data.file_name);
             fileInfo.textContent = `生成文件: ${data.file_name}`;
