@@ -351,7 +351,7 @@ def page_personnel_compare():
 
 @app.route("/api/personnel-compare/compare", methods=["POST"])
 def api_personnel_compare():
-    """上传个税端导出文件 + 选择发放月份 → 增减员比对 → 生成 Excel。"""
+    """上传个税端导出文件 + 选择最近1~2次发薪月份 → 增减员比对 → 生成 Excel。"""
     try:
         from queries import get_payroll_cert_numbers, get_tc90_termination_dates, get_payroll_personnel
         from templates_gen.personnel_compare import compare_personnel, generate_compare_excel
@@ -360,9 +360,12 @@ def api_personnel_compare():
         file = request.files.get("file")
         if not file:
             return jsonify({"error": "请上传个税端导出文件"}), 400
-        month = int(request.form.get("month", 0) or 0)
-        if not month:
-            return jsonify({"error": "请选择发放月份"}), 400
+        months = [int(m) for m in request.form.getlist("months") if m]
+        months = sorted(set(months))
+        if not months:
+            return jsonify({"error": "请选择发薪月份"}), 400
+        if len(months) > 2:
+            return jsonify({"error": "最多选择 2 个发薪月份"}), 400
         ext = os.path.splitext(file.filename or "")[1].lower()
         if ext != ".xls":
             return jsonify({"error": "仅支持 .xls 格式的个税端导出文件"}), 400
@@ -380,21 +383,31 @@ def api_personnel_compare():
             return jsonify({"error": "导出文件中未解析到有效人员记录"}), 400
 
         conn = get_connection()
-        payroll_certs = get_payroll_cert_numbers(conn, month)
-        payroll_personnel = get_payroll_personnel(conn, month)
-        pending_certs = {
+        payroll_certs = set()
+        payroll_personnel = []
+        seen = set()
+        for m in months:
+            payroll_certs |= get_payroll_cert_numbers(conn, m)
+            for p in get_payroll_personnel(conn, m):
+                if p.身份证 and p.身份证 not in seen:
+                    seen.add(p.身份证)
+                    payroll_personnel.append(p)
+        # 疑似近期离职: 个税端未标记离职(无离职日期)且最近发薪名单无 → 查 TC90 分流
+        active_certs = {
             str(p.get("证件号码") or "").strip().upper()
             for p in tax_export_persons
             if not str(p.get("离职日期") or "").strip()
-        } - payroll_certs
-        termination_dates = get_tc90_termination_dates(conn, pending_certs)
-        add_rows, pending_rows, departed_rows, stats = compare_personnel(
+        }
+        suspect_certs = active_certs - payroll_certs
+        termination_dates = get_tc90_termination_dates(conn, suspect_certs)
+        add_rows, departed_rows, pending_rows, stats = compare_personnel(
             tax_export_persons, payroll_certs, payroll_personnel, termination_dates)
-        result = generate_compare_excel(add_rows, pending_rows, departed_rows, stats, OUTPUT_DIR, month)
+        month_label = f"{months[0]}-{months[-1]}" if len(months) > 1 else str(months[0])
+        result = generate_compare_excel(add_rows, departed_rows, pending_rows, stats, OUTPUT_DIR, month_label)
         return jsonify({
             "add_count": stats["add_count"],
-            "pending_count": stats["pending_count"],
             "departed_count": stats["departed_count"],
+            "pending_count": stats["pending_count"],
             "tax_total": stats["tax_total"],
             "payroll_total": stats["payroll_total"],
             "file_name": os.path.basename(result.file_path),
