@@ -133,7 +133,14 @@ def compare_personnel(tax_export_persons, payroll_certs, payroll_personnel, term
 
     # 增员 = B - A; 减员 = A - B
     add_certs = payroll_set - tax_certs
-    remove_certs = tax_certs - payroll_set
+
+    # 减员仅针对个税端中未标记离职(无离职日期)的人员: 已离职的不再减员
+    remove_certs = set()
+    for p in tax_export_persons:
+        cert = _cert_key(p.get("证件号码"))
+        if cert in tax_certs and not str(p.get("离职日期") or "").strip():
+            remove_certs.add(cert)
+    remove_certs -= payroll_set
 
     add_rows = []
     for person in payroll_personnel:
