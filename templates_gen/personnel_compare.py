@@ -152,7 +152,6 @@ def compare_personnel(tax_export_persons, payroll_certs, payroll_personnel, term
         "remove_count": len(remove_certs),
         "tax_total": len(tax_certs),
         "payroll_total": len(payroll_set),
-        "remove_certs": remove_certs,
     }
     return add_rows, remove_rows, stats
 
