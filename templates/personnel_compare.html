@@ -1,0 +1,159 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>增减员比对 - 个税模板填表工具</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+    <style>
+        body { background: #f5f6fa; }
+        .container { max-width: 1600px; }
+        .card { margin-bottom: 1rem; box-shadow: 0 1px 3px rgba(0,0,0,.1); }
+        .stat-card { text-align: center; padding: 1rem; }
+        .stat-card .num { font-size: 1.8rem; font-weight: 700; }
+        .stat-add { color: #198754; }
+        .stat-remove { color: #dc3545; }
+        .stat-info { color: #0d6efd; }
+        .nav-link.active { font-weight: 600; }
+        .badge-warn { background: #fff3cd; color: #856404; border: 1px solid #ffeeba; border-radius: 4px; padding: 4px 8px; }
+        #errorBox { display: none; }
+    </style>
+</head>
+<body>
+<nav class="navbar navbar-dark bg-primary">
+    <div class="container">
+        <span class="navbar-brand">个税模板填表工具</span>
+        <div class="d-flex">
+            <a href="/" class="nav-link text-white">报税数据生成</a>
+            <a href="/tax-return" class="nav-link text-white">报税状态统计</a>
+            <a href="/personnel-compare" class="nav-link text-white active fw-bold">增减员比对</a>
+        </div>
+    </div>
+</nav>
+
+<div class="container py-3">
+    <div class="card">
+        <div class="card-header"><strong>增减员比对</strong></div>
+        <div class="card-body">
+            <div class="alert alert-info mb-3" style="font-size: 0.9rem;">
+                上传个税端导出的境内人员信息列表（.xls），选择当月发薪的发放月份，系统按证件号码比对：
+                发薪人员不在个税端的列为<strong>增员</strong>，个税端人员不在发薪名单的列为<strong>减员</strong>。
+                生成结果为一个 Excel（增员名单 + 减员名单两个 Sheet），减员名单自动填充 TC90 合同终止日期作为离职日期。
+            </div>
+            <div class="row g-2 align-items-end">
+                <div class="col-md-4">
+                    <label class="form-label">个税端导出文件（境内人员信息列表 .xls）</label>
+                    <input type="file" id="exportFile" class="form-control" accept=".xls">
+                </div>
+                <div class="col-md-3">
+                    <label class="form-label">发放月份</label>
+                    <select id="monthSelect" class="form-select">
+                        <option value="">请选择月份</option>
+                    </select>
+                </div>
+                <div class="col-md-2">
+                    <button id="btnCompare" class="btn btn-primary w-100">开始比对</button>
+                </div>
+            </div>
+            <div id="loading" class="text-center py-4" style="display: none;">
+                <div class="spinner-border text-primary" role="status">
+                    <span class="visually-hidden">比对中...</span>
+                </div>
+                <p class="mt-2">正在比对个税端人员与发薪人员，请稍候...</p>
+            </div>
+            <div id="errorBox" class="alert alert-danger mt-3"></div>
+        </div>
+    </div>
+
+    <div id="resultCard" class="card" style="display: none;">
+        <div class="card-header d-flex justify-content-between align-items-center flex-wrap gap-2">
+            <strong>比对结果（<span id="statMonth"></span>）</strong>
+            <a id="btnDownload" class="btn btn-success btn-sm" href="#" download>下载增减员 Excel</a>
+        </div>
+        <div class="card-body">
+            <div class="row text-center">
+                <div class="col-md-3 col-sm-6 stat-card"><div class="stat-info num" id="statTaxTotal">0</div><div class="text-muted">个税端总人数</div></div>
+                <div class="col-md-3 col-sm-6 stat-card"><div class="stat-info num" id="statPayrollTotal">0</div><div class="text-muted">发薪总人数</div></div>
+                <div class="col-md-3 col-sm-6 stat-card"><div class="stat-add num" id="statAddCount">0</div><div class="text-muted">增员人数</div></div>
+                <div class="col-md-3 col-sm-6 stat-card"><div class="stat-remove num" id="statRemoveCount">0</div><div class="text-muted">减员人数</div></div>
+            </div>
+            <div id="fileInfo" class="text-muted mt-2" style="font-size: 0.85rem;"></div>
+        </div>
+    </div>
+</div>
+
+<script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
+<script>
+    const exportFile = document.getElementById('exportFile');
+    const monthSelect = document.getElementById('monthSelect');
+    const btnCompare = document.getElementById('btnCompare');
+    const loading = document.getElementById('loading');
+    const errorBox = document.getElementById('errorBox');
+    const resultCard = document.getElementById('resultCard');
+    const btnDownload = document.getElementById('btnDownload');
+    const statMonth = document.getElementById('statMonth');
+    const statTaxTotal = document.getElementById('statTaxTotal');
+    const statPayrollTotal = document.getElementById('statPayrollTotal');
+    const statAddCount = document.getElementById('statAddCount');
+    const statRemoveCount = document.getElementById('statRemoveCount');
+    const fileInfo = document.getElementById('fileInfo');
+
+    function showError(msg) {
+        errorBox.textContent = msg;
+        errorBox.style.display = 'block';
+    }
+    function hideError() { errorBox.style.display = 'none'; }
+
+    async function loadMonths() {
+        try {
+            const resp = await fetch('/api/pay-months');
+            if (!resp.ok) throw new Error(`服务器返回错误: ${resp.status}`);
+            const months = await resp.json();
+            let options = '<option value="">请选择月份</option>';
+            months.forEach(m => { options += `<option value="${m.value}">${m.label}</option>`; });
+            monthSelect.innerHTML = options;
+        } catch (e) {
+            monthSelect.innerHTML = '<option value="">加载失败，请刷新重试</option>';
+            showError(`加载月份列表失败: ${e.message}`);
+        }
+    }
+
+    btnCompare.addEventListener('click', async function() {
+        hideError();
+        resultCard.style.display = 'none';
+        const file = exportFile.files[0];
+        if (!file) { showError('请先上传个税端导出文件'); return; }
+        const month = monthSelect.value;
+        if (!month) { showError('请选择发放月份'); return; }
+
+        btnCompare.disabled = true;
+        loading.style.display = 'block';
+        try {
+            const form = new FormData();
+            form.append('file', file);
+            form.append('month', month);
+            const resp = await fetch('/api/personnel-compare/compare', { method: 'POST', body: form });
+            const data = await resp.json();
+            if (!resp.ok || data.error) { showError(data.error || '比对失败，请稍后重试'); return; }
+
+            statMonth.textContent = monthSelect.options[monthSelect.selectedIndex].text;
+            statTaxTotal.textContent = data.tax_total;
+            statPayrollTotal.textContent = data.payroll_total;
+            statAddCount.textContent = data.add_count;
+            statRemoveCount.textContent = data.remove_count;
+            btnDownload.href = data.download_url;
+            btnDownload.setAttribute('download', data.file_name);
+            fileInfo.textContent = `生成文件: ${data.file_name}`;
+            resultCard.style.display = 'block';
+        } catch (e) {
+            showError(`比对失败: ${e.message}`);
+        } finally {
+            btnCompare.disabled = false;
+            loading.style.display = 'none';
+        }
+    });
+
+    document.addEventListener('DOMContentLoaded', loadMonths);
+</script>
+</body>
+</html>
