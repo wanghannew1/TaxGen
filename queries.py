@@ -802,3 +802,29 @@ def get_personnel_by_certs(conn, cert_numbers) -> List[PersonnelInfo]:
                     任职受雇从业日期=start_date,
                 ))
     return people
+
+
+def get_default_report_month(conn) -> int:
+    """计算默认上报发薪月份。
+
+    规则: 系统时间 1-15日 → 上个月; 16日及以后 → 本月 (若已有发薪记录则返回本月,
+    否则回退到最近发薪月份)。报税一般在发薪月过完后半个月内进行。
+    """
+    from datetime import datetime
+    now = datetime.now()
+    if now.day <= 15:
+        last_month = now.replace(day=1)
+        from datetime import timedelta
+        last_month -= timedelta(days=1)
+        default = last_month.year * 100 + last_month.month
+    else:
+        default = now.year * 100 + now.month
+    # 校验默认月份是否已有发薪记录, 无则回退到最近发薪月份
+    with conn.cursor() as cursor:
+        cursor.execute(
+            "SELECT MAX(ATC8G7) FROM TC8M WHERE ATC8M3 = 2 AND ATC8G7 IS NOT NULL")
+        row = cursor.fetchone()
+        latest = int(row[0] or 0) if row else 0
+    if latest and default > latest:
+        return latest
+    return default

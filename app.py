@@ -347,6 +347,17 @@ def page_personnel_compare():
     return render_template("personnel_compare.html")
 
 
+@app.route("/api/personnel-compare/default-report-month")
+def api_personnel_compare_default_month():
+    """查询默认上报发薪月份 (1-15日上月, 16-月末本月)。"""
+    try:
+        from queries import get_default_report_month
+        conn = get_connection()
+        return jsonify({"month": get_default_report_month(conn)})
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
 @app.route("/api/personnel-compare/latest-pay-date")
 def api_personnel_compare_latest_pay_date():
     """查询最近一笔工资发放日期 (TC8M.AAE036)。"""
