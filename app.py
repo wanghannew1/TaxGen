@@ -4,11 +4,13 @@ import os
 from datetime import datetime
 from flask import Flask, render_template, request, jsonify, send_file
 from db import init_db, get_connection, close_db
-from queries import get_available_months, get_salary_records, get_personnel_info, get_suggestions, search_tc8m, get_abnormal_records, get_tc93_all_fields, get_tc93_field_comments, get_merge_warnings, get_pay_months
+from queries import get_available_months, get_salary_records, get_personnel_info, get_suggestions, search_tc8m, get_abnormal_records, get_tc93_all_fields, get_tc93_field_comments, get_merge_warnings, get_pay_months, get_payroll_cert_numbers, get_tc90_termination_dates, get_payroll_personnel
 from templates_gen.normal_salary import generate_normal_salary, generate_tc93_full_sheet, generate_abnormal_sheet
 from templates_gen.labor_service import generate_labor_service
 from templates_gen.annual_bonus import generate_annual_bonus
 from templates_gen.personnel_info import generate_personnel_info
+from templates_gen.personnel_compare import compare_personnel, generate_compare_excel
+from templates_gen.tax_export_parser import parse_tax_export
 from templates_gen.validation import validate_salary_records
 
 app = Flask(__name__)
@@ -341,6 +343,60 @@ def api_tax_return_export():
         return jsonify({"download_url": f"/api/download/{filename}"})
     except Exception as e:
         return jsonify({"error": str(e)}), 500
+
+@app.route("/personnel-compare")
+def page_personnel_compare():
+    return render_template("personnel_compare.html")
+
+
+@app.route("/api/personnel-compare/compare", methods=["POST"])
+def api_personnel_compare():
+    """上传个税端导出文件 + 选择发放月份 → 增减员比对 → 生成 Excel。"""
+    try:
+        from queries import get_payroll_cert_numbers, get_tc90_termination_dates, get_payroll_personnel
+        from templates_gen.personnel_compare import compare_personnel, generate_compare_excel
+        from templates_gen.tax_export_parser import parse_tax_export
+
+        file = request.files.get("file")
+        if not file:
+            return jsonify({"error": "请上传个税端导出文件"}), 400
+        month = int(request.form.get("month", 0) or 0)
+        if not month:
+            return jsonify({"error": "请选择发放月份"}), 400
+        ext = os.path.splitext(file.filename or "")[1].lower()
+        if ext != ".xls":
+            return jsonify({"error": "仅支持 .xls 格式的个税端导出文件"}), 400
+
+        tmp_path = os.path.join(OUTPUT_DIR, "_compare_tmp" + ext)
+        file.save(tmp_path)
+        try:
+            tax_export_persons = parse_tax_export(tmp_path)
+        except Exception as e:
+            return jsonify({"error": f"解析个税端导出文件失败: {e}"}), 400
+        finally:
+            if os.path.exists(tmp_path):
+                os.remove(tmp_path)
+        if not tax_export_persons:
+            return jsonify({"error": "导出文件中未解析到有效人员记录"}), 400
+
+        conn = get_connection()
+        payroll_certs = get_payroll_cert_numbers(conn, month)
+        payroll_personnel = get_payroll_personnel(conn, month)
+        termination_dates = get_tc90_termination_dates(conn, payroll_certs)
+        add_rows, remove_rows, stats = compare_personnel(
+            tax_export_persons, payroll_certs, payroll_personnel, termination_dates)
+        result = generate_compare_excel(add_rows, remove_rows, stats, OUTPUT_DIR, month)
+        return jsonify({
+            "add_count": stats["add_count"],
+            "remove_count": stats["remove_count"],
+            "tax_total": stats["tax_total"],
+            "payroll_total": stats["payroll_total"],
+            "file_name": os.path.basename(result.file_path),
+            "download_url": f"/api/download/{os.path.basename(result.file_path)}",
+        })
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
 
 init_db()
 
