@@ -81,6 +81,7 @@ def map_personnel_info_to_row(person: PersonnelInfo) -> list:
     row[IDX_出生日期] = _normalize_date(person.出生日期)
     row[IDX_任职受雇从业类型] = person.任职类型 or "雇员"
     row[IDX_手机号码] = person.手机号码
+    row[IDX_任职受雇从业日期] = _normalize_date(person.任职受雇从业日期)
     return row
 
 

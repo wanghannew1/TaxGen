@@ -568,6 +568,7 @@ def get_payroll_personnel(conn, pay_month: int) -> List[PersonnelInfo]:
 
     与 get_payroll_cert_numbers 相同的 TC8M 关联口径, 按个人编号去重,
     手机号/出生日期取 MAX 避免同人多行。性别码 1/2 转换为 男/女。
+    任职受雇从业日期取 TC90.ATC90C 合同开始日期 (多行历史合同时取最早)。
     """
     sql = """
         SELECT
@@ -576,12 +577,14 @@ def get_payroll_personnel(conn, pay_month: int) -> List[PersonnelInfo]:
           MAX(ac01.AAC002) AS 身份证,
           MAX(ac01.AAC004) AS 性别,
           MAX(ac01.AAC006) AS 出生日期,
-          MAX(ac01.AAE005) AS 联系电话
+          MAX(ac01.AAE005) AS 联系电话,
+          MIN(t90.ATC90C) AS 任职受雇从业日期
         FROM TC93 t93
         JOIN TC8M m ON m.ATB930 = t93.ATB930
                    AND m.ATC931 = t93.ATC931
                    AND m.ATC937 = t93.ATC937
         LEFT JOIN AC01 ac01 ON t93.AAC001 = ac01.AAC001
+        LEFT JOIN TC90 t90 ON t90.AAC002 = ac01.AAC002
         WHERE m.ATC8G7 = :pay_month
           AND m.ATC8M3 = 2
           AND t93.ATC93G = '1'
@@ -605,6 +608,13 @@ def get_payroll_personnel(conn, pay_month: int) -> List[PersonnelInfo]:
             elif len(id_card) == 18:
                 birthday = f"{id_card[6:10]}-{id_card[10:12]}-{id_card[12:14]}"
             gender = str(row[3] or "")
+            start_date = ""
+            if row[6] is not None:
+                s = row[6]
+                if hasattr(s, "strftime"):
+                    start_date = s.strftime("%Y-%m-%d")
+                else:
+                    start_date = str(s)
             people.append(PersonnelInfo(
                 职工号=str(row[0] or ""),
                 姓名=str(row[1] or ""),
@@ -612,5 +622,6 @@ def get_payroll_personnel(conn, pay_month: int) -> List[PersonnelInfo]:
                 性别=gender_map.get(gender, gender),
                 出生日期=birthday,
                 手机号码=str(row[5] or ""),
+                任职受雇从业日期=start_date,
             ))
     return people
