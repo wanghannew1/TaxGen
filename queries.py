@@ -42,8 +42,9 @@
 """
 
 from dataclasses import dataclass
+from datetime import datetime
 from decimal import Decimal
-from typing import Dict, List
+from typing import Dict, List, Set
 
 from models import MonthOption, PersonnelInfo, SalaryRecord
 
@@ -480,3 +481,118 @@ def get_merge_warnings(conn, pay_months, combo_set, persons) -> List[dict]:
                     "income": float(row[5] or 0),
                 })
     return warnings
+
+
+def get_payroll_cert_numbers(conn, pay_month: int) -> Set[str]:
+    """按发放月份(经办年月)查询全部发薪人员的身份证号集合。
+
+    发放月份 = TC8M.ATC8G7 (经办年月), 且 ATC8M3='2'(已发放);
+    TC93.ATC93G='1' 表示已结算。通过 (ATB930, ATC931, ATC937)
+    三元组关联 TC93 与 TC8M, 左连 AC01 取身份证号。
+    返回统一大写的证件号码集合(处理末位 X), 用于增减员比对。
+    """
+    sql = """
+        SELECT DISTINCT ac01.AAC002
+        FROM TC93 t93
+        JOIN TC8M m ON m.ATB930 = t93.ATB930
+                   AND m.ATC931 = t93.ATC931
+                   AND m.ATC937 = t93.ATC937
+        LEFT JOIN AC01 ac01 ON t93.AAC001 = ac01.AAC001
+        WHERE m.ATC8G7 = :pay_month
+          AND m.ATC8M3 = 2
+          AND t93.ATC93G = '1'
+          AND ac01.AAC002 IS NOT NULL
+    """
+    certs = set()
+    with conn.cursor() as cursor:
+        cursor.execute(sql, {"pay_month": pay_month})
+        for row in cursor.fetchall():
+            cert = str(row[0] or "").strip().upper()
+            if cert:
+                certs.add(cert)
+    return certs
+
+
+def get_tc90_termination_dates(conn, cert_numbers) -> Dict[str, datetime]:
+    """按身份证号批量查询 TC90 合同终止日期 (ATC90D)。
+
+    同一证件号在 TC90 可能有多个历史合同记录, 取 MAX(ATC90D)
+    作为最新合同终止日期。IN 列表分批查询避免 ORA-01795。
+    返回 {证件号(大写): datetime}, 无合同终止日期的证件号不出现。
+    """
+    from datetime import datetime
+    if not cert_numbers:
+        return {}
+    dates: Dict[str, datetime] = {}
+    sql = """
+        SELECT AAC002, MAX(ATC90D)
+        FROM TC90
+        WHERE AAC002 IN ({placeholders})
+          AND ATC90D IS NOT NULL
+        GROUP BY AAC002
+    """
+    cert_list = list(cert_numbers)
+    with conn.cursor() as cursor:
+        for start in range(0, len(cert_list), _IN_BATCH_SIZE):
+            chunk = cert_list[start:start + _IN_BATCH_SIZE]
+            placeholders = ", ".join(f":b{i}" for i in range(len(chunk)))
+            binds = {f"b{i}": c for i, c in enumerate(chunk)}
+            cursor.execute(sql.format(placeholders=placeholders), binds)
+            for row in cursor.fetchall():
+                cert = str(row[0] or "").strip().upper()
+                if cert and row[1] is not None:
+                    dates[cert] = row[1]
+    return dates
+
+
+def get_payroll_personnel(conn, pay_month: int) -> List[PersonnelInfo]:
+    """按发放月份(经办年月)查询全部发薪人员详细信息, 用于增员模板。
+
+    与 get_payroll_cert_numbers 相同的 TC8M 关联口径, 按个人编号去重,
+    手机号/出生日期取 MAX 避免同人多行。性别码 1/2 转换为 男/女。
+    """
+    sql = """
+        SELECT
+          ac01.AAC001,
+          MAX(ac01.AAC003) AS 姓名,
+          MAX(ac01.AAC002) AS 身份证,
+          MAX(ac01.AAC004) AS 性别,
+          MAX(ac01.AAC006) AS 出生日期,
+          MAX(ac01.AAE005) AS 联系电话
+        FROM TC93 t93
+        JOIN TC8M m ON m.ATB930 = t93.ATB930
+                   AND m.ATC931 = t93.ATC931
+                   AND m.ATC937 = t93.ATC937
+        LEFT JOIN AC01 ac01 ON t93.AAC001 = ac01.AAC001
+        WHERE m.ATC8G7 = :pay_month
+          AND m.ATC8M3 = 2
+          AND t93.ATC93G = '1'
+          AND ac01.AAC001 IS NOT NULL
+        GROUP BY ac01.AAC001
+        ORDER BY MAX(ac01.AAC003)
+    """
+    gender_map = {"1": "男", "2": "女"}
+    people = []
+    with conn.cursor() as cursor:
+        cursor.execute(sql, {"pay_month": pay_month})
+        for row in cursor.fetchall():
+            id_card = str(row[2] or "").strip().upper()
+            birthday = ""
+            if row[4] is not None:
+                b = row[4]
+                if hasattr(b, "strftime"):
+                    birthday = b.strftime("%Y-%m-%d")
+                else:
+                    birthday = str(b)
+            elif len(id_card) == 18:
+                birthday = f"{id_card[6:10]}-{id_card[10:12]}-{id_card[12:14]}"
+            gender = str(row[3] or "")
+            people.append(PersonnelInfo(
+                职工号=str(row[0] or ""),
+                姓名=str(row[1] or ""),
+                身份证=id_card,
+                性别=gender_map.get(gender, gender),
+                出生日期=birthday,
+                手机号码=str(row[5] or ""),
+            ))
+    return people
