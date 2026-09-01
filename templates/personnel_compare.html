@@ -37,8 +37,10 @@
         <div class="card-body">
             <div class="alert alert-info mb-3" style="font-size: 0.9rem;">
                 上传个税端导出的境内人员信息列表（.xls），选择当月发薪的发放月份，系统按证件号码比对：
-                发薪人员不在个税端的列为<strong>增员</strong>，个税端人员不在发薪名单的列为<strong>减员</strong>。
-                生成结果为一个 Excel（增员名单 + 减员名单两个 Sheet），减员名单自动填充 TC90 合同终止日期作为离职日期。
+                发薪人员不在个税端的列为<strong>增员</strong>；个税端中<strong>无离职日期</strong>且不在发薪名单的列为
+                <strong>待确认离职人员</strong>；个税端中已有明确<strong>离职日期</strong>的为<strong>离职人员</strong>。
+                生成结果为一个 Excel（增员名单 + 待确认离职人员 + 离职人员三个 Sheet），待确认离职人员的
+                离职日期列自动填充 TC90 合同终止日期供参考。
             </div>
             <div class="row g-2 align-items-end">
                 <div class="col-md-4">
@@ -75,7 +77,8 @@
                 <div class="col-md-3 col-sm-6 stat-card"><div class="stat-info num" id="statTaxTotal">0</div><div class="text-muted">个税端总人数</div></div>
                 <div class="col-md-3 col-sm-6 stat-card"><div class="stat-info num" id="statPayrollTotal">0</div><div class="text-muted">发薪总人数</div></div>
                 <div class="col-md-3 col-sm-6 stat-card"><div class="stat-add num" id="statAddCount">0</div><div class="text-muted">增员人数</div></div>
-                <div class="col-md-3 col-sm-6 stat-card"><div class="stat-remove num" id="statRemoveCount">0</div><div class="text-muted">减员人数</div></div>
+                <div class="col-md-3 col-sm-6 stat-card"><div class="stat-remove num" id="statPendingCount">0</div><div class="text-muted">待确认离职人数</div></div>
+                <div class="col-md-3 col-sm-6 stat-card"><div class="stat-info num" id="statDepartedCount">0</div><div class="text-muted">离职人数</div></div>
             </div>
             <div id="fileInfo" class="text-muted mt-2" style="font-size: 0.85rem;"></div>
         </div>
@@ -95,7 +98,8 @@
     const statTaxTotal = document.getElementById('statTaxTotal');
     const statPayrollTotal = document.getElementById('statPayrollTotal');
     const statAddCount = document.getElementById('statAddCount');
-    const statRemoveCount = document.getElementById('statRemoveCount');
+    const statPendingCount = document.getElementById('statPendingCount');
+    const statDepartedCount = document.getElementById('statDepartedCount');
     const fileInfo = document.getElementById('fileInfo');
 
     function showError(msg) {
@@ -140,7 +144,8 @@
             statTaxTotal.textContent = data.tax_total;
             statPayrollTotal.textContent = data.payroll_total;
             statAddCount.textContent = data.add_count;
-            statRemoveCount.textContent = data.remove_count;
+            statPendingCount.textContent = data.pending_count;
+            statDepartedCount.textContent = data.departed_count;
             btnDownload.href = data.download_url;
             btnDownload.setAttribute('download', data.file_name);
             fileInfo.textContent = `生成文件: ${data.file_name}`;

@@ -120,10 +120,13 @@ def compare_personnel(tax_export_persons, payroll_certs, payroll_personnel, term
         termination_dates: Dict[str, datetime] - 证件号 → TC90 合同终止日期
 
     Returns:
-        (add_rows, remove_rows, stats):
+        (add_rows, pending_rows, departed_rows, stats):
             add_rows: List[list] - 增员 51 列行数据 (来自数据库人员信息)
-            remove_rows: List[list] - 减员 51 列行数据 (来自导出文件+离职日期)
-            stats: dict - {add_count, remove_count, tax_total, payroll_total}
+            pending_rows: List[list] - 待确认离职 51 列行数据 (无离职日期且不在发薪,
+                                       离职日期列填 TC90 合同终止日期供参考)
+            departed_rows: List[list] - 离职人员 51 列行数据 (个税端已有明确离职日期,
+                                        离职日期列用导出文件离职日期)
+            stats: dict - {add_count, pending_count, departed_count, tax_total, payroll_total}
     """
     tax_certs = {_cert_key(p.get("证件号码")) for p in tax_export_persons}
     tax_certs.discard("")
@@ -131,40 +134,53 @@ def compare_personnel(tax_export_persons, payroll_certs, payroll_personnel, term
     payroll_set = {_cert_key(c) for c in payroll_certs}
     payroll_set.discard("")
 
-    # 增员 = B - A; 减员 = A - B
+    # 增员 = B - A
     add_certs = payroll_set - tax_certs
 
-    # 减员仅针对个税端中未标记离职(无离职日期)的人员: 已离职的不再减员
-    remove_certs = set()
+    # 待确认离职: 个税端中无离职日期(未标记离职)且不在发薪名单
+    pending_certs = set()
+    # 离职人员: 个税端中有明确离职日期(已标记离职)
+    departed_certs = set()
     for p in tax_export_persons:
         cert = _cert_key(p.get("证件号码"))
-        if cert in tax_certs and not str(p.get("离职日期") or "").strip():
-            remove_certs.add(cert)
-    remove_certs -= payroll_set
+        if not cert:
+            continue
+        if str(p.get("离职日期") or "").strip():
+            departed_certs.add(cert)
+        elif cert not in payroll_set:
+            pending_certs.add(cert)
 
     add_rows = []
     for person in payroll_personnel:
         if _cert_key(person.身份证) in add_certs:
             add_rows.append(map_personnel_info_to_row(person))
 
-    remove_rows = []
+    pending_rows = []
     for person in tax_export_persons:
         cert = _cert_key(person.get("证件号码"))
-        if cert in remove_certs:
-            remove_rows.append(map_tax_export_to_row(
+        if cert in pending_certs:
+            pending_rows.append(map_tax_export_to_row(
                 person, termination_date=termination_dates.get(cert)))
+
+    departed_rows = []
+    for person in tax_export_persons:
+        cert = _cert_key(person.get("证件号码"))
+        if cert in departed_certs:
+            departed_rows.append(map_tax_export_to_row(
+                person, termination_date=person.get("离职日期")))
 
     stats = {
         "add_count": len(add_certs),
-        "remove_count": len(remove_certs),
+        "pending_count": len(pending_certs),
+        "departed_count": len(departed_certs),
         "tax_total": len(tax_certs),
         "payroll_total": len(payroll_set),
     }
-    return add_rows, remove_rows, stats
+    return add_rows, pending_rows, departed_rows, stats
 
 
-def generate_compare_excel(add_rows, remove_rows, stats, output_dir: str, pay_month: int) -> GenerateResult:
-    """生成增减员比对结果 Excel (双 Sheet: 增员名单 + 减员名单)。"""
+def generate_compare_excel(add_rows, pending_rows, departed_rows, stats, output_dir: str, pay_month: int) -> GenerateResult:
+    """生成增减员比对结果 Excel (三 Sheet: 增员名单 + 待确认离职人员 + 离职人员)。"""
     import os
     from datetime import datetime as _dt
 
@@ -179,16 +195,21 @@ def generate_compare_excel(add_rows, remove_rows, stats, output_dir: str, pay_mo
     for row in add_rows:
         ws_add.append(row)
 
-    ws_remove = wb.create_sheet("减员名单")
-    ws_remove.append(COMPARE_HEADERS)
-    for row in remove_rows:
-        ws_remove.append(row)
+    ws_pending = wb.create_sheet("待确认离职人员")
+    ws_pending.append(COMPARE_HEADERS)
+    for row in pending_rows:
+        ws_pending.append(row)
+
+    ws_departed = wb.create_sheet("离职人员")
+    ws_departed.append(COMPARE_HEADERS)
+    for row in departed_rows:
+        ws_departed.append(row)
 
     wb.save(output_path)
     return GenerateResult(
         file_path=output_path,
         template_type="增减员比对结果",
-        record_count=len(add_rows) + len(remove_rows),
+        record_count=len(add_rows) + len(pending_rows) + len(departed_rows),
         validation_pass=0,
         validation_fail=0,
     )

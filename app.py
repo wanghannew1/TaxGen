@@ -382,18 +382,19 @@ def api_personnel_compare():
         conn = get_connection()
         payroll_certs = get_payroll_cert_numbers(conn, month)
         payroll_personnel = get_payroll_personnel(conn, month)
-        remove_certs = {
+        pending_certs = {
             str(p.get("证件号码") or "").strip().upper()
             for p in tax_export_persons
             if not str(p.get("离职日期") or "").strip()
         } - payroll_certs
-        termination_dates = get_tc90_termination_dates(conn, remove_certs)
-        add_rows, remove_rows, stats = compare_personnel(
+        termination_dates = get_tc90_termination_dates(conn, pending_certs)
+        add_rows, pending_rows, departed_rows, stats = compare_personnel(
             tax_export_persons, payroll_certs, payroll_personnel, termination_dates)
-        result = generate_compare_excel(add_rows, remove_rows, stats, OUTPUT_DIR, month)
+        result = generate_compare_excel(add_rows, pending_rows, departed_rows, stats, OUTPUT_DIR, month)
         return jsonify({
             "add_count": stats["add_count"],
-            "remove_count": stats["remove_count"],
+            "pending_count": stats["pending_count"],
+            "departed_count": stats["departed_count"],
             "tax_total": stats["tax_total"],
             "payroll_total": stats["payroll_total"],
             "file_name": os.path.basename(result.file_path),
