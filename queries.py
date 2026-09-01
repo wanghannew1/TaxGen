@@ -625,3 +625,180 @@ def get_payroll_personnel(conn, pay_month: int) -> List[PersonnelInfo]:
                 任职受雇从业日期=start_date,
             ))
     return people
+
+
+def get_unpaid_salary_persons(conn, salary_months) -> Set[str]:
+    """查询指定所属月份范围内"已做工资单但未发薪"的人员证件号集合。
+
+    口径: TC93 有工资记录, 但 TC8M 无对应已发记录 (ATC8M3=2) 的人员。
+    返回统一大写的证件号码集合, 用于减员排除/增员判断。
+    """
+    if not salary_months:
+        return set()
+    certs = set()
+    sql = """
+        SELECT DISTINCT ac01.AAC002
+        FROM TC93 t93
+        LEFT JOIN TC8M m ON m.ATB930 = t93.ATB930
+                        AND m.ATC931 = t93.ATC931
+                        AND m.ATC937 = t93.ATC937
+                        AND m.ATC8M3 = 2
+        LEFT JOIN AC01 ac01 ON t93.AAC001 = ac01.AAC001
+        WHERE t93.ATC931 IN ({placeholders})
+          AND t93.ATC93G = '1'
+          AND m.ATB930 IS NULL
+          AND ac01.AAC002 IS NOT NULL
+    """
+    months = sorted(set(salary_months))
+    with conn.cursor() as cursor:
+        for start in range(0, len(months), _IN_BATCH_SIZE):
+            chunk = months[start:start + _IN_BATCH_SIZE]
+            placeholders = ", ".join(f":m{i}" for i in range(len(chunk)))
+            binds = {f"m{i}": m for i, m in enumerate(chunk)}
+            cursor.execute(sql.format(placeholders=placeholders), binds)
+            for row in cursor.fetchall():
+                cert = str(row[0] or "").strip().upper()
+                if cert:
+                    certs.add(cert)
+    return certs
+
+
+def get_pay_month_range(selected_month: int, conn) -> List[int]:
+    """计算发薪月份筛选范围: 选中月份 → 最近发薪月份。
+
+    最近发薪月份 = TC8M 最新 ATC8G7 (ATC8M3=2)。
+    选中月份大于等于最近发薪月份时只返回选中月份。
+    """
+    latest = 0
+    with conn.cursor() as cursor:
+        cursor.execute(
+            "SELECT MAX(ATC8G7) FROM TC8M WHERE ATC8M3 = 2 AND ATC8G7 IS NOT NULL")
+        row = cursor.fetchone()
+        latest = int(row[0] or 0) if row else 0
+    if latest and selected_month < latest:
+        months = []
+        y, m = selected_month // 100, selected_month % 100
+        while selected_month <= latest:
+            months.append(selected_month)
+            m += 1
+            if m > 12:
+                y += 1
+                m = 1
+            selected_month = y * 100 + m
+        return months
+    return [selected_month]
+
+
+def get_unpaid_month_range(selected_month: int) -> List[int]:
+    """计算未发薪工资表所属月份范围: 选中月份 → 当前系统月份。
+
+    结束月份取当前系统时间所在月 (如今天 2026-09 → 结束 202609)。
+    """
+    from datetime import datetime
+    now = datetime.now()
+    current_month = now.year * 100 + now.month
+    if selected_month >= current_month:
+        return [selected_month]
+    months = []
+    y, m = selected_month // 100, selected_month % 100
+    cur = selected_month
+    while cur <= current_month:
+        months.append(cur)
+        m += 1
+        if m > 12:
+            y += 1
+            m = 1
+        cur = y * 100 + m
+    return months
+
+
+def get_contract_date_range(selected_month: int, report_month: int):
+    """计算合同签署时间筛选范围。
+
+    开始日期: 选中月份当月1日 (如 202607 → 2026-07-01)
+    结束日期: 上报月份最后一天 (如 202608 → 2026-08-31)
+    返回 (start_date, end_date) 字符串 "YYYY-MM-DD"。
+    """
+    import calendar
+    sy, sm = selected_month // 100, selected_month % 100
+    ry, rm = report_month // 100, report_month % 100
+    start_date = f"{sy:04d}-{sm:02d}-01"
+    last_day = calendar.monthrange(ry, rm)[1]
+    end_date = f"{ry:04d}-{rm:02d}-{last_day:02d}"
+    return start_date, end_date
+
+
+def get_contract_signed_persons(conn, start_date: str, end_date: str) -> Set[str]:
+    """查询合同开始日期 (TC90.ATC90C) 在指定范围内的人员证件号集合。
+
+    返回统一大写的证件号码集合。
+    """
+    certs = set()
+    sql = """
+        SELECT DISTINCT AAC002
+        FROM TC90
+        WHERE ATC90C >= TO_DATE(:start_date, 'YYYY-MM-DD')
+          AND ATC90C <= TO_DATE(:end_date, 'YYYY-MM-DD')
+          AND AAC002 IS NOT NULL
+    """
+    with conn.cursor() as cursor:
+        cursor.execute(sql, {"start_date": start_date, "end_date": end_date})
+        for row in cursor.fetchall():
+            cert = str(row[0] or "").strip().upper()
+            if cert:
+                certs.add(cert)
+    return certs
+
+
+def get_personnel_by_certs(conn, cert_numbers) -> List[PersonnelInfo]:
+    """按证件号集合批量查询人员详细信息 (AC01 为主, TC90 补充任职日期)。
+
+    用于为增员人员(未发薪/合同签署)补充 51 列所需信息。
+    返回 PersonnelInfo 列表, 任职受雇从业日期取 TC90.ATC90C 最早。
+    """
+    if not cert_numbers:
+        return []
+    certs = sorted({str(c).strip().upper() for c in cert_numbers if str(c).strip()})
+    sql = """
+        SELECT
+          ac01.AAC001,
+          ac01.AAC003,
+          ac01.AAC002,
+          ac01.AAC004,
+          ac01.AAC006,
+          ac01.AAE005,
+          MIN(t90.ATC90C) AS 任职日期
+        FROM AC01 ac01
+        LEFT JOIN TC90 t90 ON t90.AAC002 = ac01.AAC002
+        WHERE ac01.AAC002 IN ({placeholders})
+        GROUP BY ac01.AAC001, ac01.AAC003, ac01.AAC002, ac01.AAC004, ac01.AAC006, ac01.AAE005
+    """
+    gender_map = {"1": "男", "2": "女"}
+    people = []
+    with conn.cursor() as cursor:
+        for start in range(0, len(certs), _IN_BATCH_SIZE):
+            chunk = certs[start:start + _IN_BATCH_SIZE]
+            placeholders = ", ".join(f":c{i}" for i in range(len(chunk)))
+            binds = {f"c{i}": c for i, c in enumerate(chunk)}
+            cursor.execute(sql.format(placeholders=placeholders), binds)
+            for row in cursor.fetchall():
+                id_card = str(row[2] or "").strip().upper()
+                birthday = ""
+                if row[4] is not None:
+                    b = row[4]
+                    birthday = b.strftime("%Y-%m-%d") if hasattr(b, "strftime") else str(b)
+                start_date = ""
+                if row[6] is not None:
+                    s = row[6]
+                    start_date = s.strftime("%Y-%m-%d") if hasattr(s, "strftime") else str(s)
+                gender = str(row[3] or "")
+                people.append(PersonnelInfo(
+                    职工号=str(row[0] or ""),
+                    姓名=str(row[1] or ""),
+                    身份证=id_card,
+                    性别=gender_map.get(gender, gender),
+                    出生日期=birthday,
+                    手机号码=str(row[5] or ""),
+                    任职受雇从业日期=start_date,
+                ))
+    return people

@@ -368,21 +368,31 @@ def api_personnel_compare():
 
     离职时间截止日期 (termination_deadline, YYYY-MM-DD) 用于过滤 TC90 离职日期:
     超过截止日期的合同终止日期视为未到期, 归入待确认。
+
+    参数:
+    - file: 个税端导出文件 (.xls)
+    - pay_month: 发薪月份 (选中月份至最近发薪月份自动扩展)
+    - unpaid_salary_month: 未发薪工资表所属月份 (选中月份至当前月自动扩展)
+    - contract_month: 合同签署时间 (选中月份当月1日至上报月份最后一天)
+    - termination_deadline: 离职时间截止日期 (默认最近发薪日期)
     """
     try:
-        from queries import get_payroll_cert_numbers, get_tc90_termination_dates, get_payroll_personnel
+        from queries import (get_payroll_cert_numbers, get_tc90_termination_dates,
+                             get_payroll_personnel, get_unpaid_salary_persons,
+                             get_pay_month_range, get_unpaid_month_range,
+                             get_contract_signed_persons, get_contract_date_range,
+                             get_latest_pay_date, get_personnel_by_certs)
         from templates_gen.personnel_compare import compare_personnel, generate_compare_excel
         from templates_gen.tax_export_parser import parse_tax_export
 
         file = request.files.get("file")
         if not file:
             return jsonify({"error": "请上传个税端导出文件"}), 400
-        months = [int(m) for m in request.form.getlist("months") if m]
-        months = sorted(set(months))
-        if not months:
+        pay_month = int(request.form.get("pay_month", 0) or 0)
+        if not pay_month:
             return jsonify({"error": "请选择发薪月份"}), 400
-        if len(months) > 2:
-            return jsonify({"error": "最多选择 2 个发薪月份"}), 400
+        unpaid_month = int(request.form.get("unpaid_salary_month", 0) or 0)
+        contract_month = int(request.form.get("contract_month", 0) or 0)
         deadline = request.form.get("termination_deadline", "").strip()
         deadline_date = None
         if deadline:
@@ -408,22 +418,36 @@ def api_personnel_compare():
             return jsonify({"error": "导出文件中未解析到有效人员记录"}), 400
 
         conn = get_connection()
+        # 发薪月份范围: 选中月份 → 最近发薪月份
+        pay_months = get_pay_month_range(pay_month, conn)
         payroll_certs = set()
         payroll_personnel = []
         seen = set()
-        for m in months:
+        for m in pay_months:
             payroll_certs |= get_payroll_cert_numbers(conn, m)
             for p in get_payroll_personnel(conn, m):
                 if p.身份证 and p.身份证 not in seen:
                     seen.add(p.身份证)
                     payroll_personnel.append(p)
-        # 疑似近期离职: 个税端未标记离职(无离职日期)且最近发薪名单无 → 查 TC90 分流
+        # 未发薪工资表: 选中所属月份 → 当前月
+        unpaid_persons = set()
+        if unpaid_month:
+            unpaid_months = get_unpaid_month_range(unpaid_month)
+            unpaid_persons = get_unpaid_salary_persons(conn, unpaid_months)
+        # 合同签署: 选中月份当月1日 → 上报月份最后一天
+        contract_persons = set()
+        if contract_month:
+            _, report_pay_date = get_latest_pay_date(conn)
+            start_date, end_date = get_contract_date_range(contract_month, pay_month)
+            contract_persons = get_contract_signed_persons(conn, start_date, end_date)
+        # 疑似近期离职: 个税端未标记离职(无离职日期)且不在发薪/未发薪/合同名单
         active_certs = {
             str(p.get("证件号码") or "").strip().upper()
             for p in tax_export_persons
             if not str(p.get("离职日期") or "").strip()
         }
-        suspect_certs = active_certs - payroll_certs
+        protected = payroll_certs | unpaid_persons | contract_persons
+        suspect_certs = active_certs - protected
         termination_dates = get_tc90_termination_dates(conn, suspect_certs)
         # 离职日期超过截止日期的视为合同未到期, 不列为已离职
         if deadline_date:
@@ -432,8 +456,20 @@ def api_personnel_compare():
                 if d.date() <= deadline_date
             }
         add_rows, departed_rows, pending_rows, stats = compare_personnel(
-            tax_export_persons, payroll_certs, payroll_personnel, termination_dates)
-        month_label = f"{months[0]}-{months[-1]}" if len(months) > 1 else str(months[0])
+            tax_export_persons, payroll_certs, payroll_personnel, termination_dates,
+            unpaid_persons=unpaid_persons, contract_signed_persons=contract_persons)
+        # 补充增员人员详细信息 (未发薪/合同签署人员不在 payroll_personnel 中)
+        if stats["add_count"] > len(add_rows):
+            from templates_gen.personnel_compare import IDX_证件号码, map_personnel_info_to_row
+            tax_cert_set = {str(p.get("证件号码") or "").strip().upper()
+                            for p in tax_export_persons}
+            all_add_certs = (payroll_certs | unpaid_persons | contract_persons) - tax_cert_set
+            have_certs = {r[IDX_证件号码] for r in add_rows}
+            need_certs = all_add_certs - have_certs
+            if need_certs:
+                extra_people = get_personnel_by_certs(conn, need_certs)
+                add_rows.extend(map_personnel_info_to_row(p) for p in extra_people)
+        month_label = str(pay_month)
         result = generate_compare_excel(add_rows, departed_rows, pending_rows, stats, OUTPUT_DIR, month_label)
         return jsonify({
             "add_count": stats["add_count"],

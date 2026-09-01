@@ -111,38 +111,45 @@ def _cert_key(value) -> str:
     return str(value or "").strip().upper()
 
 
-def compare_personnel(tax_export_persons, payroll_certs, payroll_personnel, termination_dates):
+def compare_personnel(tax_export_persons, payroll_certs, payroll_personnel, termination_dates,
+                      unpaid_persons=None, contract_signed_persons=None):
     """增减员比对引擎。
 
     Args:
         tax_export_persons: List[dict] - 个税端导出文件解析结果
-        payroll_certs: Set[str] - 最近 1~2 次发薪人员证件号集合 (已大写, 并集)
+        payroll_certs: Set[str] - 发薪月份范围内发薪人员证件号集合 (已大写, 并集)
         payroll_personnel: List[PersonnelInfo] - 发薪人员详细信息
         termination_dates: Dict[str, datetime] - 证件号 → TC90 合同终止日期
+        unpaid_persons: Set[str] - 未发薪工资表人员证件号集合 (减员排除 + 增员条件②)
+        contract_signed_persons: Set[str] - 合同签署时间范围内人员 (增员条件③)
 
     Returns:
         (add_rows, departed_rows, pending_rows, stats):
-            add_rows: List[list] - 增员 51 列行数据 (发薪有但个税端无)
-            departed_rows: List[list] - 近期离职人员 51 列行数据 (个税端有但发薪无,
-                                       且 TC90 有合同终止日期)
-            pending_rows: List[list] - 待确认近期离职人员 51 列行数据 (个税端有但发薪无,
-                                       且 TC90 无合同终止日期)
+            add_rows: List[list] - 增员 51 列行数据
+            departed_rows: List[list] - 近期离职人员 51 列行数据
+            pending_rows: List[list] - 待确认近期离职人员 51 列行数据
             stats: dict - {add_count, departed_count, pending_count, tax_total, payroll_total}
     """
+    unpaid_set = {_cert_key(c) for c in (unpaid_persons or set())}
+    unpaid_set.discard("")
+    contract_set = {_cert_key(c) for c in (contract_signed_persons or set())}
+    contract_set.discard("")
+
     tax_certs = {_cert_key(p.get("证件号码")) for p in tax_export_persons}
     tax_certs.discard("")
 
     payroll_set = {_cert_key(c) for c in payroll_certs}
     payroll_set.discard("")
 
-    # 增员 = B - A
-    add_certs = payroll_set - tax_certs
+    # 增员 = (发薪 ∪ 未发薪工资表 ∪ 合同签署) - 个税端
+    add_certs = (payroll_set | unpaid_set | contract_set) - tax_certs
 
-    # 疑似离职: 个税端未标记离职(无离职日期)且最近发薪名单无
+    # 疑似离职: 个税端未标记离职(无离职日期)且不在发薪/未发薪名单
     # (个税端已有离职日期的属历史离职, 不参与近期离职判定)
     active_certs = {_cert_key(p.get("证件号码")) for p in tax_export_persons
                     if not str(p.get("离职日期") or "").strip()}
-    suspect_certs = active_certs - payroll_set
+    protected_certs = payroll_set | unpaid_set | contract_set
+    suspect_certs = active_certs - protected_certs
     departed_certs = {c for c in suspect_certs if c in termination_dates}
     pending_certs = suspect_certs - departed_certs
 
