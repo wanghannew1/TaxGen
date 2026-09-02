@@ -154,8 +154,17 @@ def build_verify_row(add_row, cert, params, paid_salary_details, unpaid_salary_d
     Returns:
         51 + len(VERIFY_HEADERS) 列的行数据
     """
-    # 发薪: 发薪月份范围有 TC8M 已发记录
-    paid = [t for t in tc8m_details if t.get("pay_month") in params["pay_months"]]
+    # 发薪: 发薪月份范围有 TC8M 已发记录 (按 所属月-批次 去重)
+    paid = []
+    paid_key_set = set()
+    for t in tc8m_details:
+        if t.get("pay_month") not in params["pay_months"]:
+            continue
+        key = (t.get("salary_month"), t.get("seq"))
+        if key in paid_key_set:
+            continue
+        paid_key_set.add(key)
+        paid.append(t)
     has_paid = bool(paid)
     # 发薪对应的工资明细: 按 (salary_month, seq) 去重匹配
     paid_keys = set()
