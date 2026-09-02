@@ -156,6 +156,21 @@ def api_generate():
             abnormal = get_abnormal_records(conn, month)
         merge_by_person = data.get("merge_by_person", True)
         merge_by_pay_month = bool(data.get("merge_by_pay_month", True))
+        # 特殊结算单元规则: 工资为0不申报 + 完全排除不申报
+        # 配置存 SQLite (config_db), Oracle 只读
+        from config_db import get_zero_salary_unit_codes, get_excluded_unit_codes
+        zero_codes = set(get_zero_salary_unit_codes())
+        excl_codes = set(get_excluded_unit_codes())
+        if zero_codes or excl_codes:
+            def _keep(unit, salary_total):
+                if unit in excl_codes:
+                    return False
+                if unit in zero_codes and (salary_total or 0) == 0:
+                    return False
+                return True
+            records = [r for r in records if _keep(r.结算单元, r.工资总额)]
+            tc93_all = [r for r in tc93_all if _keep(r.get("ATB930"), r.get("ATC93AA"))]
+            abnormal = [r for r in abnormal if _keep(r.get("ATB930"), r.get("ATC93AA"))]
         raw_records = records
         if merge_by_person:
             records = merge_records_by_person(records, by_pay_month=merge_by_pay_month)
