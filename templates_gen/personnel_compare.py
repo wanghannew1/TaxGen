@@ -133,6 +133,11 @@ VERIFY_HEADERS = [
     "发薪经办人",
     "未发薪经办人",
     "合同经办人",
+    "未发薪本期收入",
+    "未发薪基本养老保险费",
+    "未发薪基本医疗保险费",
+    "未发薪失业保险费",
+    "未发薪住房公积金",
 ]
 
 # 明细 Sheet 列头
@@ -229,6 +234,12 @@ def build_verify_row(add_row, cert, params, paid_salary_details, unpaid_salary_d
         paid_handlers,
         unpaid_handlers,
         contract_handlers,
+        # 未发薪收入/三险一金 (仅未发薪部分, 不含发薪)
+        round(sum(r["本期收入"] for r in unpaid), 2),
+        round(sum(r["养老"] for r in unpaid), 2),
+        round(sum(r["医疗"] for r in unpaid), 2),
+        round(sum(r["失业"] for r in unpaid), 2),
+        round(sum(r["公积金"] for r in unpaid), 2),
     ]
 
 
