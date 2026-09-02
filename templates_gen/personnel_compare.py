@@ -181,14 +181,15 @@ def build_verify_row(add_row, cert, params, paid_salary_details, unpaid_salary_d
         paid_key_set.add(key)
         paid.append(t)
     has_paid = bool(paid)
-    # 发薪对应的工资明细: 按 (salary_month, seq) 去重匹配
-    paid_keys = set()
+    # 发薪对应的工资明细: 只取该人 TC8M 已发 (salary_month, seq) 对应的 TC93 记录
+    paid_keys = {(t.get("salary_month"), t.get("seq")) for t in paid}
     paid_salary = []
+    seen_paid = set()
     for r in paid_salary_details:
         key = (r["salary_month"], r["seq"])
-        if key in paid_keys:
+        if key not in paid_keys or key in seen_paid:
             continue
-        paid_keys.add(key)
+        seen_paid.add(key)
         paid_salary.append(r)
     paid_income = sum(r["本期收入"] for r in paid_salary)
     # 未发薪: 所属月份范围有 TC93 记录, 但不在任何发薪月份的 TC8M 已发中
