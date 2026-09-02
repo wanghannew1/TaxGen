@@ -60,6 +60,7 @@ class PersonnelInfo:
     手机号码: str = ""
     任职类型: str = "雇员"
     任职受雇从业日期: str = ""  # TC90.ATC90C 合同开始日期 (YYYY-MM-DD)
+    备注: str = ""  # 结算单元名称 (TC8M.ATB931)
 
 @dataclass
 class MonthOption:

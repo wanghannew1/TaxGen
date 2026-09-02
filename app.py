@@ -532,15 +532,13 @@ def api_personnel_compare():
             tax_export_persons, payroll_certs, payroll_personnel, termination_dates,
             unpaid_persons=unpaid_persons, contract_signed_persons=contract_persons)
         # 特殊结算单元: 工资为0不增员
-        from queries import get_special_units, get_zero_salary_certs
+        from queries import get_special_units, get_zero_salary_certs, get_person_units
         exclude_certs = get_zero_salary_certs(conn, pay_month) if get_special_units(conn) else set()
-        # 经办人/结算单元过滤: 全员比对后按条件筛选
+        # 经办人/结算单元过滤 + 备注(结算单元名称)数据
         person_units = None
-        if filter_handlers or filter_units:
-            from queries import get_person_units
-            all_certs = (payroll_certs | unpaid_persons | contract_persons |
-                         {str(p.get("证件号码") or "").strip().upper() for p in tax_export_persons})
-            person_units = get_person_units(conn, all_certs, pay_months)
+        all_certs = (payroll_certs | unpaid_persons | contract_persons |
+                     {str(p.get("证件号码") or "").strip().upper() for p in tax_export_persons})
+        person_units = get_person_units(conn, all_certs, pay_months)
         if exclude_certs or filter_handlers or filter_units:
             add_rows, departed_rows, pending_rows, stats = compare_personnel(
                 tax_export_persons, payroll_certs, payroll_personnel, termination_dates,
@@ -557,7 +555,12 @@ def api_personnel_compare():
             need_certs = all_add_certs - have_certs
             if need_certs:
                 extra_people = get_personnel_by_certs(conn, need_certs)
-                add_rows.extend(map_personnel_info_to_row(p) for p in extra_people)
+                for p in extra_people:
+                    row = map_personnel_info_to_row(p)
+                    info = (person_units or {}).get(str(p.身份证 or "").strip().upper())
+                    if info and not row[25]:
+                        row[25] = info.get("unit_name", "")
+                    add_rows.append(row)
         month_label = str(pay_month)
         result = generate_compare_excel(add_rows, departed_rows, pending_rows, stats, OUTPUT_DIR, month_label)
         return jsonify({

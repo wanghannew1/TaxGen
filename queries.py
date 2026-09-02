@@ -569,16 +569,18 @@ def get_payroll_personnel(conn, pay_month: int) -> List[PersonnelInfo]:
     与 get_payroll_cert_numbers 相同的 TC8M 关联口径, 按个人编号去重,
     手机号/出生日期取 MAX 避免同人多行。性别码 1/2 转换为 男/女。
     任职受雇从业日期取 TC90.ATC90C 合同开始日期 (多行历史合同时取最早)。
+    按证件号分组取 MAX(工号) 避免同人多行 (同一证件号可能有历史工号)。
     """
     sql = """
         SELECT
-          ac01.AAC001,
+          MAX(ac01.AAC001) AS 工号,
           MAX(ac01.AAC003) AS 姓名,
           MAX(ac01.AAC002) AS 身份证,
           MAX(ac01.AAC004) AS 性别,
           MAX(ac01.AAC006) AS 出生日期,
           MAX(ac01.AAE005) AS 联系电话,
-          MIN(t90.ATC90C) AS 任职受雇从业日期
+          MIN(t90.ATC90C) AS 任职受雇从业日期,
+          MAX(m.ATB931) AS 结算单元名称
         FROM TC93 t93
         JOIN TC8M m ON m.ATB930 = t93.ATB930
                    AND m.ATC931 = t93.ATC931
@@ -588,8 +590,8 @@ def get_payroll_personnel(conn, pay_month: int) -> List[PersonnelInfo]:
         WHERE m.ATC8G7 = :pay_month
           AND m.ATC8M3 = 2
           AND t93.ATC93G = '1'
-          AND ac01.AAC001 IS NOT NULL
-        GROUP BY ac01.AAC001
+          AND ac01.AAC002 IS NOT NULL
+        GROUP BY ac01.AAC002
         ORDER BY MAX(ac01.AAC003)
     """
     gender_map = {"1": "男", "2": "女"}
@@ -623,6 +625,7 @@ def get_payroll_personnel(conn, pay_month: int) -> List[PersonnelInfo]:
                 出生日期=birthday,
                 手机号码=str(row[5] or ""),
                 任职受雇从业日期=start_date,
+                备注=str(row[7] or ""),
             ))
     return people
 
@@ -754,6 +757,7 @@ def get_personnel_by_certs(conn, cert_numbers) -> List[PersonnelInfo]:
     """按证件号集合批量查询人员详细信息 (AC01 为主, TC90 补充任职日期)。
 
     用于为增员人员(未发薪/合同签署)补充 51 列所需信息。
+    按证件号分组取 MAX(工号) 避免同人多行 (同一证件号可能有历史工号)。
     返回 PersonnelInfo 列表, 任职受雇从业日期取 TC90.ATC90C 最早。
     """
     if not cert_numbers:
@@ -761,17 +765,17 @@ def get_personnel_by_certs(conn, cert_numbers) -> List[PersonnelInfo]:
     certs = sorted({str(c).strip().upper() for c in cert_numbers if str(c).strip()})
     sql = """
         SELECT
-          ac01.AAC001,
-          ac01.AAC003,
-          ac01.AAC002,
-          ac01.AAC004,
-          ac01.AAC006,
-          ac01.AAE005,
+          MAX(ac01.AAC001) AS 工号,
+          MAX(ac01.AAC003) AS 姓名,
+          MAX(ac01.AAC002) AS 身份证,
+          MAX(ac01.AAC004) AS 性别,
+          MAX(ac01.AAC006) AS 出生日期,
+          MAX(ac01.AAE005) AS 联系电话,
           MIN(t90.ATC90C) AS 任职日期
         FROM AC01 ac01
         LEFT JOIN TC90 t90 ON t90.AAC002 = ac01.AAC002
         WHERE ac01.AAC002 IN ({placeholders})
-        GROUP BY ac01.AAC001, ac01.AAC003, ac01.AAC002, ac01.AAC004, ac01.AAC006, ac01.AAE005
+        GROUP BY ac01.AAC002
     """
     gender_map = {"1": "男", "2": "女"}
     people = []
@@ -853,9 +857,9 @@ def get_handlers(conn, pay_month: int = 0) -> List[str]:
 
 
 def get_units(conn, pay_month: int = 0) -> List[dict]:
-    """查询结算单元列表 (TC8M.ATB930 + AAB004 名称, 已发放状态)。"""
+    """查询结算单元列表 (TC8M.ATB930 + ATB931 结算单元名称, 已发放状态)。"""
     sql = """
-        SELECT DISTINCT ATB930, AAB004 FROM TC8M
+        SELECT DISTINCT ATB930, ATB931 FROM TC8M
         WHERE ATB930 IS NOT NULL AND ATC8M3 = 2
           {month_cond}
         ORDER BY ATB930
@@ -874,7 +878,7 @@ def get_person_units(conn, cert_numbers, pay_months) -> Dict[str, dict]:
 
     通过 TC8M(经办) JOIN TC93(工资) JOIN AC01(人员) 关联,
     返回 {证件号(大写): {"handler": 经办人, "unit_code": 结算单元代码,
-    "unit_name": 结算单元名称}}。同一人多个结算单元时取 MAX(AAE019)。
+    "unit_name": 结算单元名称(ATB931)}}。同一人多个结算单元时取 MAX(AAE019)。
     """
     if not cert_numbers:
         return {}
@@ -882,7 +886,7 @@ def get_person_units(conn, cert_numbers, pay_months) -> Dict[str, dict]:
     result: Dict[str, dict] = {}
     sql = """
         SELECT ac01.AAC002, MAX(m.AAE019) AS handler,
-               MAX(m.ATB930) AS unit_code, MAX(m.AAB004) AS unit_name
+               MAX(m.ATB930) AS unit_code, MAX(m.ATB931) AS unit_name
         FROM TC8M m
         JOIN TC93 t93 ON t93.ATB930 = m.ATB930
                      AND t93.ATC931 = m.ATC931
