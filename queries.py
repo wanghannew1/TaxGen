@@ -1053,7 +1053,7 @@ def get_excluded_unit_certs(conn, pay_months, unit_codes: List[int],
 def get_person_units_contract(conn, cert_numbers) -> Dict[str, dict]:
     """为仅合同人员(无工资记录)从 TC90 补充结算单元/单位信息。
 
-    结算单元名称: TC90.ATB930 → TC8M.ATB931
+    结算单元名称: TC90.ATC90X (TC90 自带结算单元名称, 无需关联 TC8M)
     单位名称: TC90.AAB004 (降级用)
     返回 {证件号(大写): {"unit_code", "unit_name", "dept_name"}}。
     """
@@ -1063,9 +1063,8 @@ def get_person_units_contract(conn, cert_numbers) -> Dict[str, dict]:
     result: Dict[str, dict] = {}
     sql = """
         SELECT t90.AAC002, MAX(t90.ATB930) AS unit_code,
-               MAX(m.ATB931) AS unit_name, MAX(t90.AAB004) AS dept_name
+               MAX(t90.ATC90X) AS unit_name, MAX(t90.AAB004) AS dept_name
         FROM TC90 t90
-        LEFT JOIN TC8M m ON m.ATB930 = t90.ATB930
         WHERE t90.AAC002 IN ({placeholders})
         GROUP BY t90.AAC002
     """
