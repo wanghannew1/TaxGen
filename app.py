@@ -365,7 +365,7 @@ def api_special_units_list():
 
 @app.route("/api/special-units", methods=["POST"])
 def api_special_units_add():
-    """新增特殊结算单元配置 (exclude_all=完全排除不增员)。"""
+    """新增特殊结算单元配置 (exclude_all=完全排除不增员不报税)。"""
     try:
         from queries import add_special_unit
         data = request.get_json()
@@ -406,7 +406,7 @@ def api_special_units_export():
         wb = Workbook()
         ws = wb.active
         ws.title = "特殊结算单元配置"
-        ws.append(["结算单元代码", "结算单元名称", "工资为0不增员", "完全排除不增员"])
+        ws.append(["结算单元代码", "结算单元名称", "工资为0不增员不报税", "完全排除不增员不报税"])
         for u in units:
             ws.append([u["code"], u["name"], u["zero_salary_no_add"], u["exclude_all"]])
         from datetime import datetime as _dt
@@ -609,7 +609,7 @@ def api_personnel_compare():
         add_rows, departed_rows, pending_rows, stats = compare_personnel(
             tax_export_persons, payroll_certs, payroll_personnel, termination_dates,
             unpaid_persons=unpaid_persons, contract_signed_persons=contract_persons)
-        # 特殊结算单元: 工资为0不增员 + 完全排除单位不增员
+        # 特殊结算单元: 工资为0不增员不报税 + 完全排除不增员不报税
         from queries import get_special_units, get_zero_salary_certs, get_excluded_unit_certs, get_person_units
         exclude_certs = set()
         if get_special_units(conn):

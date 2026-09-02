@@ -26,7 +26,7 @@ def init_db():
 
 
 def _ensure_special_unit_table():
-    """确保特殊结算单元配置表存在 (工资为0不增员 / 完全排除不增员)。"""
+    """确保特殊结算单元配置表存在 (工资为0不增员不报税 / 完全排除不增员不报税)。"""
     try:
         conn = _pool.acquire()
         try:
