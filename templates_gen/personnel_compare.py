@@ -130,6 +130,9 @@ VERIFY_HEADERS = [
     "合同签署增员",
     "合同开始日期",
     "是否零申报",
+    "发薪经办人",
+    "未发薪经办人",
+    "合同经办人",
 ]
 
 # 明细 Sheet 列头
@@ -139,7 +142,7 @@ TC8M_HEADERS = ["证件号码", "姓名", "结算单元代码", "结算单元名
 TC90_HEADERS = ["证件号码", "姓名", "结算单元代码", "结算单元名称", "合同开始日期", "合同终止日期", "单位名称", "经办人"]
 
 
-def build_verify_row(add_row, cert, params, paid_salary_details, unpaid_salary_details, tc8m_details, contract_start):
+def build_verify_row(add_row, cert, params, paid_salary_details, unpaid_salary_details, tc8m_details, contract_start, contract_details=None):
     """为单个增员人员组装增员验证行。
 
     Args:
@@ -150,10 +153,12 @@ def build_verify_row(add_row, cert, params, paid_salary_details, unpaid_salary_d
         unpaid_salary_details: 该人未发薪范围的 TC93 工资记录 (所属月份范围)
         tc8m_details: 该人 TC8M 发放记录列表 (发薪月份范围)
         contract_start: 该人合同开始日期 (或 None)
+        contract_details: 该人 TC90 合同记录列表 (取经办人)
 
     Returns:
         51 + len(VERIFY_HEADERS) 列的行数据
     """
+    contract_details = contract_details or []
     # 发薪: 发薪月份范围有 TC8M 已发记录 (按 所属月-批次 去重)
     paid = []
     paid_key_set = set()
@@ -196,6 +201,14 @@ def build_verify_row(add_row, cert, params, paid_salary_details, unpaid_salary_d
         reasons.append("合同")
     reason_str = "+".join(reasons)
 
+    # 经办人: 发薪取 TC8M 已发记录的 AAE019, 未发薪取 TC93 记录 AAE019,
+    # 合同取 TC90 记录 AAE019 (均去重后分号连接)
+    paid_handlers = "; ".join(sorted({str(t.get("handler") or "") for t in paid if t.get("handler")}))
+    unpaid_handlers = "; ".join(sorted({str(r.get("handler") or "") for r in unpaid if r.get("handler")}))
+    contract_handlers = "; ".join(sorted(
+        {str(c.get("handler") or c.get("经办人") or "") for c in contract_details
+         if c.get("handler") or c.get("经办人")}))
+
     return add_row + [
         reason_str,
         "/".join(str(m) for m in params["pay_months"]),
@@ -213,6 +226,9 @@ def build_verify_row(add_row, cert, params, paid_salary_details, unpaid_salary_d
         "是" if has_contract else "否",
         contract_start or "",
         "是" if zero else "否",
+        paid_handlers,
+        unpaid_handlers,
+        contract_handlers,
     ]
 
 

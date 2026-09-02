@@ -1128,7 +1128,8 @@ def get_salary_details(conn, cert_numbers, salary_months) -> List[dict]:
                NVL(t93.ATC933,0), NVL(t93.ATC93BE,0), NVL(t93.ATC93BD,0),
                NVL(t93.ATC93W21,0), NVL(t93.ATC93W4,0),
                NVL(t93.BAA001,0), NVL(t93.BAA002,0),
-               NVL(t93.BAA003,0), NVL(t93.CAA002,0)
+               NVL(t93.BAA003,0), NVL(t93.CAA002,0),
+               t93.AAE019
         FROM TC93 t93
         LEFT JOIN AC01 ac01 ON t93.AAC001 = ac01.AAC001
         WHERE t93.ATC93G = '1'
@@ -1161,6 +1162,7 @@ def get_salary_details(conn, cert_numbers, salary_months) -> List[dict]:
                     "医疗": round(float(row[12] or 0), 2),
                     "失业": round(float(row[13] or 0), 2),
                     "公积金": round(float(row[14] or 0), 2),
+                    "handler": str(row[15] or ""),
                 })
     return results
 

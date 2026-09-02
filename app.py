@@ -769,6 +769,9 @@ def api_personnel_compare():
         tc8m_by_cert = {}
         for r in tc8m_details:
             tc8m_by_cert.setdefault(r["cert"], []).append(r)
+        tc90_by_cert = {}
+        for r in tc90_details:
+            tc90_by_cert.setdefault(r["cert"], []).append(r)
         verify_rows = []
         for r in add_rows:
             cert = r[IDX_证件号码]
@@ -777,7 +780,8 @@ def api_personnel_compare():
                 paid_salary_by_cert.get(cert, []),
                 salary_by_cert.get(cert, []),
                 tc8m_by_cert.get(cert, []),
-                contract_start_map.get(cert)))
+                contract_start_map.get(cert),
+                contract_details=tc90_by_cert.get(cert, [])))
         tc93_all = []
         seen_tc93 = set()
         for r in paid_salary_details + salary_details:
