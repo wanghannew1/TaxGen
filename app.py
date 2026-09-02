@@ -383,14 +383,36 @@ def api_special_units_add():
 
 @app.route("/api/special-units/<int:unit_code>/mode", methods=["POST"])
 def api_special_units_mode(unit_code):
-    """更新特殊结算单元配置的排除模式。"""
+    """更新特殊结算单元配置的排除模式 (zero_salary_no_add / exclude_all 开关)。"""
     try:
         from queries import update_special_unit
-        data = request.get_json()
-        exclude_all = bool(data.get("exclude_all", False))
+        data = request.get_json() or {}
+        exclude_all = data.get("exclude_all")
+        zero_salary_no_add = data.get("zero_salary_no_add")
         conn = get_connection()
-        update_special_unit(conn, unit_code, exclude_all)
+        update_special_unit(conn, unit_code,
+                            exclude_all=exclude_all if exclude_all is not None else None,
+                            zero_salary_no_add=zero_salary_no_add if zero_salary_no_add is not None else None)
         return jsonify({"ok": True})
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route("/api/special-units/template")
+def api_special_units_template():
+    """下载特殊结算单元配置导入模板 (简化格式: 配置名称+两种模式)。"""
+    try:
+        from openpyxl import Workbook
+        wb = Workbook()
+        ws = wb.active
+        ws.title = "特殊结算单元配置"
+        ws.append(["配置", "工资为0不增员", "完全排除不增员"])
+        ws.append(["（示例）吉林省林业勘察设计研究院", 1, 0])
+        ws.append(["（示例）长春理工大学", 0, 1])
+        from datetime import datetime as _dt
+        filename = f"特殊结算单元配置导入模板_{_dt.now().strftime('%Y%m%d%H%M%S')}.xlsx"
+        wb.save(os.path.join(OUTPUT_DIR, filename))
+        return jsonify({"download_url": f"/api/download/{filename}"})
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
@@ -460,12 +482,26 @@ def api_special_units_import():
             units = []
             skipped = []
             for row in ws.iter_rows(min_row=2, values_only=True):
-                if not row or (row[0] is None and not row[1]):
+                if not row or all(v is None for v in row):
                     continue
-                code = int(row[0]) if row[0] else None
-                name = str(row[1] or "")
-                zero_flag = int(row[2] or 0)
-                exclude_all = int(row[3] or 0)
+                # 兼容两种格式:
+                # 4列: 结算单元代码 | 结算单元名称 | 工资为0不增员不报税 | 完全排除不增员不报税
+                # 3列: 配置(名称或代码) | 工资为0不增员 | 完全排除不增员
+                vals = list(row)
+                while len(vals) < 4:
+                    vals.append(None)
+                if vals[2] is not None or vals[3] is not None:
+                    code_raw = vals[0]
+                    name = str(vals[1] or "")
+                    zero_flag = int(vals[2] or 0)
+                    exclude_all = int(vals[3] or 0)
+                    code = int(code_raw) if str(code_raw or "").strip().isdigit() else None
+                else:
+                    code_raw = vals[0]
+                    name = str(code_raw or "")
+                    zero_flag = int(vals[1] or 0)
+                    exclude_all = int(vals[2] or 0)
+                    code = int(code_raw) if str(code_raw or "").strip().isdigit() else None
                 if not code:
                     # 代码留空时按名称自动匹配
                     codes = lookup_unit_codes_by_name(conn, name)

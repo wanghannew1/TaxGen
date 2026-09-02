@@ -960,12 +960,23 @@ def add_special_unit_full(conn, unit_code: int, unit_name: str = "",
     conn.commit()
 
 
-def update_special_unit(conn, unit_code: int, exclude_all: bool) -> None:
-    """更新特殊结算单元配置的排除模式。"""
+def update_special_unit(conn, unit_code: int, exclude_all: bool = None,
+                        zero_salary_no_add: bool = None) -> None:
+    """更新特殊结算单元配置的排除模式 (传入的字段才更新)。"""
+    sets = []
+    binds = {"c": unit_code}
+    if exclude_all is not None:
+        sets.append("exclude_all = :e")
+        binds["e"] = 1 if exclude_all else 0
+    if zero_salary_no_add is not None:
+        sets.append("zero_salary_no_add = :z")
+        binds["z"] = 1 if zero_salary_no_add else 0
+    if not sets:
+        return
     with conn.cursor() as cursor:
         cursor.execute(
-            "UPDATE special_unit_config SET exclude_all = :e WHERE unit_code = :c",
-            {"e": 1 if exclude_all else 0, "c": unit_code})
+            f"UPDATE special_unit_config SET {', '.join(sets)} WHERE unit_code = :c",
+            binds)
     conn.commit()
 
 
