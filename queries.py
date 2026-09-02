@@ -1039,3 +1039,146 @@ def get_depts(conn, pay_month: int = 0) -> List[str]:
         else:
             cursor.execute(sql.format(month_cond=month_cond))
         return [str(r[0]) for r in cursor.fetchall()]
+
+
+def get_salary_details(conn, cert_numbers, salary_months) -> List[dict]:
+    """按证件号+所属月份批量查询工资明细 (TC93 已结算记录)。
+
+    返回每条记录: {cert, 姓名, 结算单元, 结算单元名称, 所属月份, 批次,
+    应发工资, 本期收入, 养老, 医疗, 失业, 公积金}。
+    本期收入 = 应发 - 补缴及退款保险 - 大病险 - 采暖费 - 独生子女费。
+    """
+    if not cert_numbers:
+        return []
+    certs = sorted({str(c).strip().upper() for c in cert_numbers if str(c).strip()})
+    months = sorted(set(salary_months)) if salary_months else [0]
+    results = []
+    sql = """
+        SELECT ac01.AAC002, t93.AAC003, t93.ATB930, t93.ATB931,
+               t93.ATC931, t93.ATC937,
+               NVL(t93.ATC933,0), NVL(t93.ATC93BE,0), NVL(t93.ATC93BD,0),
+               NVL(t93.ATC93W21,0), NVL(t93.ATC93W4,0),
+               NVL(t93.BAA001,0), NVL(t93.BAA002,0),
+               NVL(t93.BAA003,0), NVL(t93.CAA002,0)
+        FROM TC93 t93
+        LEFT JOIN AC01 ac01 ON t93.AAC001 = ac01.AAC001
+        WHERE t93.ATC93G = '1'
+          AND t93.ATC931 IN ({month_placeholders})
+          AND ac01.AAC002 IN ({cert_placeholders})
+        ORDER BY ac01.AAC002, t93.ATC931, t93.ATC937
+    """
+    with conn.cursor() as cursor:
+        for start in range(0, len(certs), _IN_BATCH_SIZE):
+            chunk = certs[start:start + _IN_BATCH_SIZE]
+            month_ph = ", ".join(f":pm{i}" for i in range(len(months)))
+            cert_ph = ", ".join(f":c{i}" for i in range(len(chunk)))
+            binds = {f"pm{i}": m for i, m in enumerate(months)}
+            binds.update({f"c{i}": c for i, c in enumerate(chunk)})
+            cursor.execute(sql.format(month_placeholders=month_ph,
+                                      cert_placeholders=cert_ph), binds)
+            for row in cursor.fetchall():
+                income = (float(row[6] or 0) - float(row[7] or 0) - float(row[8] or 0)
+                          - float(row[9] or 0) - float(row[10] or 0))
+                results.append({
+                    "cert": str(row[0] or "").strip().upper(),
+                    "姓名": str(row[1] or ""),
+                    "unit_code": int(row[2] or 0),
+                    "unit_name": str(row[3] or ""),
+                    "salary_month": int(row[4] or 0),
+                    "seq": str(row[5] or ""),
+                    "应发工资": round(float(row[6] or 0), 2),
+                    "本期收入": round(income, 2),
+                    "养老": round(float(row[11] or 0), 2),
+                    "医疗": round(float(row[12] or 0), 2),
+                    "失业": round(float(row[13] or 0), 2),
+                    "公积金": round(float(row[14] or 0), 2),
+                })
+    return results
+
+
+def get_tc8m_records(conn, cert_numbers, pay_months) -> List[dict]:
+    """按证件号+发薪月份批量查询发放记录 (TC8M 已发放)。
+
+    返回每条记录: {cert, 姓名, 结算单元, 结算单元名称, 发放月份, 所属月份, 批次, 经办人}。
+    """
+    if not cert_numbers:
+        return []
+    certs = sorted({str(c).strip().upper() for c in cert_numbers if str(c).strip()})
+    months = sorted(set(pay_months)) if pay_months else [0]
+    results = []
+    sql = """
+        SELECT ac01.AAC002, t93.AAC003, m.ATB930, m.ATB931,
+               m.ATC8G7, m.ATC931, m.ATC937, m.AAE019
+        FROM TC8M m
+        JOIN TC93 t93 ON t93.ATB930 = m.ATB930
+                     AND t93.ATC931 = m.ATC931
+                     AND t93.ATC937 = m.ATC937
+        LEFT JOIN AC01 ac01 ON t93.AAC001 = ac01.AAC001
+        WHERE m.ATC8M3 = 2
+          AND m.ATC8G7 IN ({month_placeholders})
+          AND ac01.AAC002 IN ({cert_placeholders})
+        ORDER BY ac01.AAC002, m.ATC8G7
+    """
+    with conn.cursor() as cursor:
+        for start in range(0, len(certs), _IN_BATCH_SIZE):
+            chunk = certs[start:start + _IN_BATCH_SIZE]
+            month_ph = ", ".join(f":pm{i}" for i in range(len(months)))
+            cert_ph = ", ".join(f":c{i}" for i in range(len(chunk)))
+            binds = {f"pm{i}": m for i, m in enumerate(months)}
+            binds.update({f"c{i}": c for i, c in enumerate(chunk)})
+            cursor.execute(sql.format(month_placeholders=month_ph,
+                                      cert_placeholders=cert_ph), binds)
+            for row in cursor.fetchall():
+                results.append({
+                    "cert": str(row[0] or "").strip().upper(),
+                    "姓名": str(row[1] or ""),
+                    "unit_code": int(row[2] or 0),
+                    "unit_name": str(row[3] or ""),
+                    "pay_month": int(row[4] or 0),
+                    "salary_month": int(row[5] or 0),
+                    "seq": str(row[6] or ""),
+                    "handler": str(row[7] or ""),
+                })
+    return results
+
+
+def get_tc90_records(conn, cert_numbers) -> List[dict]:
+    """按证件号批量查询合同记录 (TC90)。
+
+    返回每条记录: {cert, 姓名, 结算单元, 结算单元名称, 合同开始日期, 合同终止日期,
+    单位名称, 经办人}。
+    """
+    if not cert_numbers:
+        return []
+    certs = sorted({str(c).strip().upper() for c in cert_numbers if str(c).strip()})
+    results = []
+    sql = """
+        SELECT t90.AAC002, t90.AAC003, t90.ATB930, m.ATB931,
+               t90.ATC90C, t90.ATC90D, t90.AAB004, t90.AAE019
+        FROM TC90 t90
+        LEFT JOIN TC8M m ON m.ATB930 = t90.ATB930
+        WHERE t90.AAC002 IN ({placeholders})
+        ORDER BY t90.AAC002, t90.ATC90C
+    """
+    with conn.cursor() as cursor:
+        for start in range(0, len(certs), _IN_BATCH_SIZE):
+            chunk = certs[start:start + _IN_BATCH_SIZE]
+            placeholders = ", ".join(f":c{i}" for i in range(len(chunk)))
+            binds = {f"c{i}": c for i, c in enumerate(chunk)}
+            cursor.execute(sql.format(placeholders=placeholders), binds)
+            for row in cursor.fetchall():
+                def _d(v):
+                    if v is None:
+                        return ""
+                    return v.strftime("%Y-%m-%d") if hasattr(v, "strftime") else str(v)
+                results.append({
+                    "cert": str(row[0] or "").strip().upper(),
+                    "姓名": str(row[1] or ""),
+                    "unit_code": int(row[2] or 0),
+                    "unit_name": str(row[3] or ""),
+                    "合同开始日期": _d(row[4]),
+                    "合同终止日期": _d(row[5]),
+                    "单位名称": str(row[6] or ""),
+                    "经办人": str(row[7] or ""),
+                })
+    return results

@@ -112,6 +112,101 @@ def _cert_key(value) -> str:
     return str(value or "").strip().upper()
 
 
+# 增员验证附加列 (51 列之后追加)
+VERIFY_HEADERS = [
+    "增员原因",
+    "发薪月份范围",
+    "发薪月份有薪资",
+    "发薪薪资明细(结算单元-所属月-批次)",
+    "发薪本期收入",
+    "发薪养老",
+    "发薪医疗",
+    "发薪失业",
+    "发薪公积金",
+    "未发薪所属月份范围",
+    "有未发薪工资表",
+    "未发薪明细(结算单元-所属月-批次)",
+    "合同签署时间范围",
+    "合同签署增员",
+    "合同开始日期",
+    "是否零申报",
+]
+
+# 明细 Sheet 列头
+TC93_HEADERS = ["证件号码", "姓名", "结算单元代码", "结算单元名称", "所属月份", "批次",
+                "应发工资", "本期收入", "养老", "医疗", "失业", "公积金"]
+TC8M_HEADERS = ["证件号码", "姓名", "结算单元代码", "结算单元名称", "发放月份", "所属月份", "批次", "经办人"]
+TC90_HEADERS = ["证件号码", "姓名", "结算单元代码", "结算单元名称", "合同开始日期", "合同终止日期", "单位名称", "经办人"]
+
+
+def build_verify_row(add_row, cert, params, paid_salary_details, unpaid_salary_details, tc8m_details, contract_start):
+    """为单个增员人员组装增员验证行。
+
+    Args:
+        add_row: 51 列增员行 (作为前 51 列)
+        cert: 证件号码
+        params: {pay_months, unpaid_months, contract_month}
+        paid_salary_details: 该人发薪对应的 TC93 工资记录 (按发薪记录所属月份)
+        unpaid_salary_details: 该人未发薪范围的 TC93 工资记录 (所属月份范围)
+        tc8m_details: 该人 TC8M 发放记录列表 (发薪月份范围)
+        contract_start: 该人合同开始日期 (或 None)
+
+    Returns:
+        51 + len(VERIFY_HEADERS) 列的行数据
+    """
+    # 发薪: 发薪月份范围有 TC8M 已发记录
+    paid = [t for t in tc8m_details if t.get("pay_month") in params["pay_months"]]
+    has_paid = bool(paid)
+    # 发薪对应的工资明细: 按 (salary_month, seq) 去重匹配
+    paid_keys = set()
+    paid_salary = []
+    for r in paid_salary_details:
+        key = (r["salary_month"], r["seq"])
+        if key in paid_keys:
+            continue
+        paid_keys.add(key)
+        paid_salary.append(r)
+    paid_income = sum(r["本期收入"] for r in paid_salary)
+    # 未发薪: 所属月份范围有 TC93 记录, 但不在任何发薪月份的 TC8M 已发中
+    paid_set = {(t.get("salary_month"), t.get("seq")) for t in tc8m_details}
+    unpaid = [r for r in unpaid_salary_details
+              if r.get("salary_month") in params["unpaid_months"]
+              and (r["salary_month"], r["seq"]) not in paid_set]
+    has_unpaid = bool(unpaid)
+    # 合同签署: 无发薪且无未发薪, 但合同开始日期在合同签署时间范围
+    has_contract = bool(contract_start) and not has_paid and not has_unpaid
+    # 零申报: 发薪月份无薪资 (未发薪/合同签署均属零申报)
+    zero = not has_paid
+
+    reasons = []
+    if has_paid:
+        reasons.append("发薪")
+    if has_unpaid:
+        reasons.append("未发薪")
+    if has_contract:
+        reasons.append("合同")
+    reason_str = "+".join(reasons)
+
+    return add_row + [
+        reason_str,
+        "/".join(str(m) for m in params["pay_months"]),
+        "是" if has_paid else "否",
+        "; ".join(f"{t['unit_name'] or t['unit_code']}-{t['salary_month']}-{t['seq']}" for t in paid),
+        round(paid_income, 2),
+        round(sum(r["养老"] for r in paid_salary), 2),
+        round(sum(r["医疗"] for r in paid_salary), 2),
+        round(sum(r["失业"] for r in paid_salary), 2),
+        round(sum(r["公积金"] for r in paid_salary), 2),
+        "/".join(str(m) for m in params["unpaid_months"]),
+        "是" if has_unpaid else "否",
+        "; ".join(f"{r['unit_name'] or r['unit_code']}-{r['salary_month']}-{r['seq']}" for r in unpaid),
+        str(params["contract_month"] or ""),
+        "是" if has_contract else "否",
+        contract_start or "",
+        "是" if zero else "否",
+    ]
+
+
 def compare_personnel(tax_export_persons, payroll_certs, payroll_personnel, termination_dates,
                       unpaid_persons=None, contract_signed_persons=None,
                       person_units=None, filter_handlers=None, filter_units=None,
@@ -214,8 +309,13 @@ def compare_personnel(tax_export_persons, payroll_certs, payroll_personnel, term
     return add_rows, departed_rows, pending_rows, stats
 
 
-def generate_compare_excel(add_rows, departed_rows, pending_rows, stats, output_dir: str, pay_month: int) -> GenerateResult:
-    """生成增减员比对结果 Excel (三 Sheet: 增员名单 + 近期离职人员 + 待确认近期离职人员)。"""
+def generate_compare_excel(add_rows, departed_rows, pending_rows, stats, output_dir: str, pay_month: int,
+                           verify_rows=None, tc93_rows=None, tc8m_rows=None, tc90_rows=None) -> GenerateResult:
+    """生成增减员比对结果 Excel。
+
+    基础三 Sheet: 增员名单 + 近期离职人员 + 待确认近期离职人员。
+    可选附加 Sheet: 增员验证 (51列+验证列), TC93工资明细, TC8M发放明细, TC90合同明细。
+    """
     import os
     from datetime import datetime as _dt
 
@@ -239,6 +339,30 @@ def generate_compare_excel(add_rows, departed_rows, pending_rows, stats, output_
     ws_pending.append(COMPARE_HEADERS)
     for row in pending_rows:
         ws_pending.append(row)
+
+    if verify_rows is not None:
+        ws_verify = wb.create_sheet("增员验证")
+        ws_verify.append(COMPARE_HEADERS + VERIFY_HEADERS)
+        for row in verify_rows:
+            ws_verify.append(row)
+
+    if tc93_rows:
+        ws_tc93 = wb.create_sheet("TC93工资明细")
+        ws_tc93.append(TC93_HEADERS)
+        for row in tc93_rows:
+            ws_tc93.append(row)
+
+    if tc8m_rows:
+        ws_tc8m = wb.create_sheet("TC8M发放明细")
+        ws_tc8m.append(TC8M_HEADERS)
+        for row in tc8m_rows:
+            ws_tc8m.append(row)
+
+    if tc90_rows:
+        ws_tc90 = wb.create_sheet("TC90合同明细")
+        ws_tc90.append(TC90_HEADERS)
+        for row in tc90_rows:
+            ws_tc90.append(row)
 
     wb.save(output_path)
     return GenerateResult(

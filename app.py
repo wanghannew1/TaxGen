@@ -579,8 +579,84 @@ def api_personnel_compare():
                         elif info.get("dept_name"):
                             row[25] = f"单位名称（非结算单元名称）：{info['dept_name']}"
                     add_rows.append(row)
+        # 增员验证 Sheet: 为每个增员人员组装验证行 + TC93/TC8M/TC90 明细
+        from queries import get_salary_details, get_tc8m_records, get_tc90_records
+        from templates_gen.personnel_compare import (IDX_证件号码, build_verify_row,
+                                                     map_personnel_info_to_row as _map_row)
+        add_certs_final = {r[IDX_证件号码] for r in add_rows}
+        unpaid_months = get_unpaid_month_range(unpaid_month) if unpaid_month else []
+        verify_params = {
+            "pay_months": pay_months,
+            "unpaid_months": unpaid_months,
+            "contract_month": contract_month or 0,
+        }
+        salary_details = get_salary_details(conn, add_certs_final,
+                                            sorted(set(pay_months + unpaid_months)))
+        tc8m_details = get_tc8m_records(conn, add_certs_final, pay_months)
+        tc90_details = get_tc90_records(conn, add_certs_final)
+        # 发薪工资明细: 按 TC8M 发薪记录的所属月份范围查询 (可能早于发薪月份)
+        paid_salary_months = sorted({r["salary_month"] for r in tc8m_details
+                                     if r.get("salary_month")})
+        paid_salary_details = get_salary_details(conn, add_certs_final, paid_salary_months) if paid_salary_months else []
+        # 合同开始日期: 取 TC90 最早的 ATC90C
+        contract_start_map = {}
+        for r in tc90_details:
+            cert = r["cert"]
+            if cert not in contract_start_map or (r["合同开始日期"] and r["合同开始日期"] < contract_start_map[cert]):
+                contract_start_map[cert] = r["合同开始日期"]
+        salary_by_cert = {}
+        for r in salary_details:
+            salary_by_cert.setdefault(r["cert"], []).append(r)
+        paid_salary_by_cert = {}
+        for r in paid_salary_details:
+            paid_salary_by_cert.setdefault(r["cert"], []).append(r)
+        tc8m_by_cert = {}
+        for r in tc8m_details:
+            tc8m_by_cert.setdefault(r["cert"], []).append(r)
+        verify_rows = []
+        for r in add_rows:
+            cert = r[IDX_证件号码]
+            verify_rows.append(build_verify_row(
+                r, cert, verify_params,
+                paid_salary_by_cert.get(cert, []),
+                salary_by_cert.get(cert, []),
+                tc8m_by_cert.get(cert, []),
+                contract_start_map.get(cert)))
+        tc93_all = []
+        seen_tc93 = set()
+        for r in paid_salary_details + salary_details:
+            key = (r["cert"], r["salary_month"], r["seq"])
+            if key in seen_tc93:
+                continue
+            seen_tc93.add(key)
+            tc93_all.append(r)
+        tc93_rows = [[r["cert"], r["姓名"], r["unit_code"], r["unit_name"], r["salary_month"], r["seq"],
+                      r["应发工资"], r["本期收入"], r["养老"], r["医疗"], r["失业"], r["公积金"]]
+                     for r in tc93_all]
+        tc8m_all = []
+        seen_tc8m = set()
+        for r in tc8m_details:
+            key = (r["cert"], r["salary_month"], r["seq"])
+            if key in seen_tc8m:
+                continue
+            seen_tc8m.add(key)
+            tc8m_all.append(r)
+        tc8m_rows = [[r["cert"], r["姓名"], r["unit_code"], r["unit_name"], r["pay_month"],
+                      r["salary_month"], r["seq"], r["handler"]] for r in tc8m_all]
+        # TC90 每人最多 2 条 (按合同开始日期倒序取最近)
+        tc90_by_cert = {}
+        for r in tc90_details:
+            tc90_by_cert.setdefault(r["cert"], []).append(r)
+        tc90_rows = []
+        for cert, recs in tc90_by_cert.items():
+            recs_sorted = sorted(recs, key=lambda x: x["合同开始日期"], reverse=True)
+            for r in recs_sorted[:2]:
+                tc90_rows.append([r["cert"], r["姓名"], r["unit_code"], r["unit_name"],
+                                  r["合同开始日期"], r["合同终止日期"], r["单位名称"], r["经办人"]])
         month_label = str(pay_month)
-        result = generate_compare_excel(add_rows, departed_rows, pending_rows, stats, OUTPUT_DIR, month_label)
+        result = generate_compare_excel(add_rows, departed_rows, pending_rows, stats, OUTPUT_DIR, month_label,
+                                        verify_rows=verify_rows, tc93_rows=tc93_rows,
+                                        tc8m_rows=tc8m_rows, tc90_rows=tc90_rows)
         return jsonify({
             "add_count": stats["add_count"],
             "departed_count": stats["departed_count"],
