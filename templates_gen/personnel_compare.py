@@ -114,7 +114,9 @@ def _cert_key(value) -> str:
 
 # 增员验证附加列 (51 列之后追加)
 VERIFY_HEADERS = [
+    # 公共
     "增员原因",
+    # 发薪块
     "发薪月份范围",
     "发薪月份有薪资",
     "发薪薪资明细(结算单元-所属月-批次)",
@@ -123,21 +125,24 @@ VERIFY_HEADERS = [
     "发薪医疗",
     "发薪失业",
     "发薪公积金",
+    "发薪经办人",
+    # 未发薪块
     "未发薪所属月份范围",
     "有未发薪工资表",
     "未发薪明细(结算单元-所属月-批次)",
-    "合同签署时间范围",
-    "合同签署增员",
-    "合同开始日期",
-    "是否零申报",
-    "发薪经办人",
-    "未发薪经办人",
-    "合同经办人",
     "未发薪本期收入",
     "未发薪基本养老保险费",
     "未发薪基本医疗保险费",
     "未发薪失业保险费",
     "未发薪住房公积金",
+    "未发薪经办人",
+    # 合同块
+    "合同签署时间范围",
+    "合同签署增员",
+    "合同开始日期",
+    "合同经办人",
+    # 公共
+    "是否零申报",
 ]
 
 # 明细 Sheet 列头
@@ -216,6 +221,7 @@ def build_verify_row(add_row, cert, params, paid_salary_details, unpaid_salary_d
 
     return add_row + [
         reason_str,
+        # 发薪块
         "/".join(str(m) for m in params["pay_months"]),
         "是" if has_paid else "否",
         "; ".join(f"{t['unit_name'] or t['unit_code']}-{t['salary_month']}-{t['seq']}" for t in paid),
@@ -224,22 +230,24 @@ def build_verify_row(add_row, cert, params, paid_salary_details, unpaid_salary_d
         round(sum(r["医疗"] for r in paid_salary), 2),
         round(sum(r["失业"] for r in paid_salary), 2),
         round(sum(r["公积金"] for r in paid_salary), 2),
+        paid_handlers,
+        # 未发薪块
         "/".join(str(m) for m in params["unpaid_months"]),
         "是" if has_unpaid else "否",
         "; ".join(f"{r['unit_name'] or r['unit_code']}-{r['salary_month']}-{r['seq']}" for r in unpaid),
-        str(params["contract_month"] or ""),
-        "是" if has_contract else "否",
-        contract_start or "",
-        "是" if zero else "否",
-        paid_handlers,
-        unpaid_handlers,
-        contract_handlers,
-        # 未发薪收入/三险一金 (仅未发薪部分, 不含发薪)
         round(sum(r["本期收入"] for r in unpaid), 2),
         round(sum(r["养老"] for r in unpaid), 2),
         round(sum(r["医疗"] for r in unpaid), 2),
         round(sum(r["失业"] for r in unpaid), 2),
         round(sum(r["公积金"] for r in unpaid), 2),
+        unpaid_handlers,
+        # 合同块
+        str(params["contract_month"] or ""),
+        "是" if has_contract else "否",
+        contract_start or "",
+        contract_handlers,
+        # 公共
+        "是" if zero else "否",
     ]
 
 
