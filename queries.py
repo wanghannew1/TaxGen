@@ -928,38 +928,39 @@ def get_person_units(conn, cert_numbers, pay_months) -> Dict[str, dict]:
     return result
 
 
-def get_zero_salary_certs(conn, pay_month: int, unit_codes: List[int]) -> Set[str]:
-    """查询指定发薪月份合计工资为0的结算单元中的人员证件号集合。
+def get_zero_salary_certs(conn, pay_month: int, unit_codes: List[int],
+                          relevant_months: List[int] = None) -> Set[str]:
+    """查询指定结算单元中工资总额(ATC93AA)为0的人员证件号集合。
 
-    用途: 特殊结算单元(如二院)当月多批次合计工资为0时, 这些人员不增员。
-    unit_codes: 从 config_db 读取的 "工资为0不增员不报税" 结算单元代码列表
-                (config 数据存 SQLite, 不读取 Oracle 配置表)。
+    用途: 特殊结算单元(如二院)当月合计工资为0时, 这些人员不增员不报税。
+    同时覆盖已发(TC8M)与未发薪(TC93 有记录但 TC8M 未发)两种情况。
+    relevant_months: 排除范围 (发薪月份 + 未发薪月份), 默认仅 pay_month。
+    unit_codes: 从 config_db 读取的 "工资为0不增员不报税" 结算单元代码列表。
     """
     if not unit_codes:
         return set()
+    months = sorted(set(relevant_months or [pay_month]))
     certs = set()
     sql = """
         SELECT DISTINCT ac01.AAC002
         FROM TC93 t93
-        JOIN TC8M m ON m.ATB930 = t93.ATB930
-                   AND m.ATC931 = t93.ATC931
-                   AND m.ATC937 = t93.ATC937
         LEFT JOIN AC01 ac01 ON t93.AAC001 = ac01.AAC001
-        WHERE m.ATC8G7 = :pay_month
-          AND m.ATC8M3 = 2
-          AND t93.ATC93G = '1'
+        WHERE t93.ATC93G = '1'
           AND ac01.AAC002 IS NOT NULL
-          AND t93.ATB930 IN ({placeholders})
+          AND t93.ATC931 IN ({month_placeholders})
+          AND t93.ATB930 IN ({unit_placeholders})
           AND NVL(t93.ATC93AA, 0) = 0
     """
     codes = sorted(set(unit_codes))
     with conn.cursor() as cursor:
         for start in range(0, len(codes), _IN_BATCH_SIZE):
             chunk = codes[start:start + _IN_BATCH_SIZE]
-            placeholders = ", ".join(f":u{i}" for i in range(len(chunk)))
-            binds = {"pay_month": pay_month}
+            month_ph = ", ".join(f":pm{i}" for i in range(len(months)))
+            unit_ph = ", ".join(f":u{i}" for i in range(len(chunk)))
+            binds = {f"pm{i}": m for i, m in enumerate(months)}
             binds.update({f"u{i}": c for i, c in enumerate(chunk)})
-            cursor.execute(sql.format(placeholders=placeholders), binds)
+            cursor.execute(sql.format(month_placeholders=month_ph,
+                                      unit_placeholders=unit_ph), binds)
             for row in cursor.fetchall():
                 cert = str(row[0] or "").strip().upper()
                 if cert:

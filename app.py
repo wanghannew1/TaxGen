@@ -686,7 +686,10 @@ def api_personnel_compare():
         zero_codes = get_zero_salary_unit_codes()
         excl_codes = get_excluded_unit_codes()
         if zero_codes:
-            exclude_certs |= get_zero_salary_certs(conn, pay_month, zero_codes)
+            relevant_months_zero = sorted(set(pay_months) | set(
+                get_unpaid_month_range(unpaid_month) if unpaid_month else []))
+            exclude_certs |= get_zero_salary_certs(conn, pay_month, zero_codes,
+                                                   relevant_months=relevant_months_zero)
         if excl_codes:
             relevant_months = sorted(set(pay_months) | set(
                 get_unpaid_month_range(unpaid_month) if unpaid_month else []))
