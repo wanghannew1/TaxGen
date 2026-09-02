@@ -362,6 +362,11 @@ def page_personnel_compare():
     return render_template("personnel_compare.html")
 
 
+@app.route("/payroll-records")
+def page_payroll_records():
+    return render_template("payroll_records.html")
+
+
 @app.route("/special-units")
 def page_special_units():
     return render_template("special_units.html")

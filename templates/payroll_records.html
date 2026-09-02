@@ -1,0 +1,149 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>工资发放情况查询 - 个税填报服务</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+    <style>
+        body { background: #f5f6fa; }
+        .container { max-width: 1800px; }
+        .card { margin-bottom: 1rem; box-shadow: 0 1px 3px rgba(0,0,0,.1); }
+        #errorBox { display: none; }
+        .table-responsive { max-height: 600px; overflow-y: auto; }
+        .sticky-top { background: #fff; }
+    </style>
+</head>
+<body>
+<nav class="navbar navbar-dark bg-primary">
+    <div class="container" style="max-width: 1800px;">
+        <span class="navbar-brand">个税填报服务</span>
+    </div>
+</nav>
+
+<div class="container py-3" style="max-width: 1800px;">
+    <div class="d-flex gap-2 mb-3 flex-wrap">
+        <a href="/" class="btn btn-outline-primary">报税数据生成</a>
+        <a href="/tax-return" class="btn btn-outline-primary">报税状态统计</a>
+        <a href="/payroll-records" class="btn btn-primary active">工资发放情况查询</a>
+        <a href="/personnel-compare" class="btn btn-outline-success">增减员比对</a>
+        <a href="/special-units" class="btn btn-outline-primary">特殊结算单元配置</a>
+    </div>
+
+    <div class="card">
+        <div class="card-header"><strong>工资发放情况查询</strong></div>
+        <div class="card-body">
+            <div class="row g-2 align-items-end mb-3">
+                <div class="col-md-3">
+                    <label class="form-label">发薪月份（起始）</label>
+                    <select id="prStart" class="form-select">
+                        <option value="">请选择月份</option>
+                    </select>
+                </div>
+                <div class="col-md-3">
+                    <label class="form-label">发薪月份（结束）</label>
+                    <select id="prEnd" class="form-select">
+                        <option value="">同起始</option>
+                    </select>
+                </div>
+                <div class="col-md-2">
+                    <button id="btnPayrollQuery" class="btn btn-primary w-100">查询</button>
+                </div>
+            </div>
+            <div id="prSummary" class="alert alert-info mb-2" style="display:none; font-size:0.9rem;"></div>
+            <div id="errorBox" class="alert alert-danger mt-2"></div>
+            <div class="table-responsive">
+                <table class="table table-sm table-striped table-hover" id="prTable">
+                    <thead class="sticky-top" style="background:#fff;">
+                        <tr>
+                            <th>序号</th>
+                            <th>结算单元代码</th>
+                            <th>结算单元名称</th>
+                            <th>单位名称</th>
+                            <th>发放月份</th>
+                            <th>所属月份</th>
+                            <th>批次</th>
+                            <th>发放人数</th>
+                            <th>发放总额</th>
+                            <th>状态</th>
+                            <th>经办人</th>
+                            <th>经办日期</th>
+                            <th>确认经办人</th>
+                            <th>确认日期</th>
+                            <th>发放经办人</th>
+                            <th>发放日期</th>
+                        </tr>
+                    </thead>
+                    <tbody></tbody>
+                </table>
+            </div>
+        </div>
+    </div>
+</div>
+
+<script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
+<script>
+    const prStart = document.getElementById('prStart');
+    const prEnd = document.getElementById('prEnd');
+    const btnQuery = document.getElementById('btnPayrollQuery');
+    const errorBox = document.getElementById('errorBox');
+    const prSummary = document.getElementById('prSummary');
+
+    function showError(msg) { errorBox.textContent = msg; errorBox.style.display = 'block'; }
+    function hideError() { errorBox.style.display = 'none'; }
+
+    async function loadMonths() {
+        try {
+            const resp = await fetch('/api/pay-months');
+            if (!resp.ok) throw new Error('加载月份失败');
+            const months = await resp.json();
+            let options = '<option value="">请选择月份</option>';
+            months.forEach(m => { options += `<option value="${m.value}">${m.label}</option>`; });
+            prStart.innerHTML = options;
+            prEnd.innerHTML = '<option value="">同起始</option>' + options.slice('<option value="">请选择月份</option>'.length);
+        } catch (e) { showError(`加载月份失败: ${e.message}`); }
+    }
+
+    btnQuery.addEventListener('click', async function() {
+        hideError();
+        const start = prStart.value;
+        const end = prEnd.value || start;
+        if (!start) { showError('请选择发薪月份(起始)'); return; }
+        btnQuery.disabled = true;
+        try {
+            const resp = await fetch(`/api/payroll-records?start=${start}&end=${end}`);
+            const data = await resp.json();
+            if (!resp.ok || data.error) { showError(data.error || '查询失败'); return; }
+            const tbody = document.querySelector('#prTable tbody');
+            tbody.innerHTML = data.records.map((r, i) => `
+                <tr>
+                    <td>${i + 1}</td>
+                    <td>${r.unit_code}</td>
+                    <td>${r.unit_name}</td>
+                    <td>${r.dept_name}</td>
+                    <td>${r.pay_month}</td>
+                    <td>${r.salary_month}</td>
+                    <td>${r.seq}</td>
+                    <td>${r.person_count}</td>
+                    <td>${r.total_amount.toLocaleString('zh-CN', {minimumFractionDigits: 2})}</td>
+                    <td>${r.status}</td>
+                    <td>${r.handler}</td>
+                    <td>${r.handle_date}</td>
+                    <td>${r.confirm_handler}</td>
+                    <td>${r.confirm_date}</td>
+                    <td>${r.pay_handler}</td>
+                    <td>${r.pay_date}</td>
+                </tr>`).join('');
+            prSummary.style.display = 'block';
+            prSummary.textContent = `共 ${data.count} 笔发放记录（发薪月份 ${start} ~ ${end}）`;
+        } catch (e) {
+            showError(`查询失败: ${e.message}`);
+        } finally {
+            btnQuery.disabled = false;
+        }
+    });
+
+    document.addEventListener('DOMContentLoaded', loadMonths);
+</script>
+</body>
+</html>
