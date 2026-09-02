@@ -735,6 +735,8 @@ def api_personnel_compare():
                         elif info.get("dept_name"):
                             row[25] = f"单位名称（非结算单元名称）：{info['dept_name']}"
                     add_rows.append(row)
+        # 增员名单/验证按备注(结算单元)排序, 相同结算单元相邻
+        add_rows.sort(key=lambda r: str(r[25] or ""))
         # 增员验证 Sheet: 为每个增员人员组装验证行 + TC93/TC8M/TC90 明细
         from queries import get_salary_details, get_tc8m_records, get_tc90_records
         from templates_gen.personnel_compare import (IDX_证件号码, build_verify_row,
