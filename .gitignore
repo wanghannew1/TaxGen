@@ -20,3 +20,7 @@ Material/**/*.log
 Material/**/*.xls
 Material/**/*.xlsx
 Material/**/*.Zone.Identifier
+
+# 运行时数据库 (SQLite 配置/回盘数据, 不入库)
+config.db
+tax_return.db

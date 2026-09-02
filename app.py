@@ -354,28 +354,26 @@ def page_special_units():
 
 @app.route("/api/special-units", methods=["GET"])
 def api_special_units_list():
-    """获取特殊结算单元配置列表。"""
+    """获取特殊结算单元配置列表 (SQLite config_db)。"""
     try:
-        from queries import get_special_units
-        conn = get_connection()
-        return jsonify({"units": get_special_units(conn)})
+        from config_db import get_special_units
+        return jsonify({"units": get_special_units()})
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
 
 @app.route("/api/special-units", methods=["POST"])
 def api_special_units_add():
-    """新增特殊结算单元配置 (exclude_all=完全排除不增员不报税)。"""
+    """新增特殊结算单元配置 (exclude_all=完全排除不增员不报税, SQLite config_db)。"""
     try:
-        from queries import add_special_unit
+        from config_db import add_special_unit
         data = request.get_json()
         unit_code = int(data.get("unit_code", 0) or 0)
         unit_name = str(data.get("unit_name", "") or "")
         exclude_all = bool(data.get("exclude_all", False))
         if not unit_code:
             return jsonify({"error": "请填写结算单元代码"}), 400
-        conn = get_connection()
-        add_special_unit(conn, unit_code, unit_name, exclude_all=exclude_all)
+        add_special_unit(unit_code, unit_name, exclude_all=exclude_all)
         return jsonify({"ok": True})
     except Exception as e:
         return jsonify({"error": str(e)}), 500
@@ -383,14 +381,13 @@ def api_special_units_add():
 
 @app.route("/api/special-units/<int:unit_code>/mode", methods=["POST"])
 def api_special_units_mode(unit_code):
-    """更新特殊结算单元配置的排除模式 (zero_salary_no_add / exclude_all 开关)。"""
+    """更新特殊结算单元配置的排除模式 (zero_salary_no_add / exclude_all 开关, SQLite)。"""
     try:
-        from queries import update_special_unit
+        from config_db import update_special_unit
         data = request.get_json() or {}
         exclude_all = data.get("exclude_all")
         zero_salary_no_add = data.get("zero_salary_no_add")
-        conn = get_connection()
-        update_special_unit(conn, unit_code,
+        update_special_unit(unit_code,
                             exclude_all=exclude_all if exclude_all is not None else None,
                             zero_salary_no_add=zero_salary_no_add if zero_salary_no_add is not None else None)
         return jsonify({"ok": True})
@@ -441,12 +438,11 @@ def api_special_units_unit_list_export():
 
 @app.route("/api/special-units/export")
 def api_special_units_export():
-    """导出特殊结算单元配置为 Excel。"""
+    """导出特殊结算单元配置为 Excel (SQLite config_db)。"""
     try:
         from openpyxl import Workbook
-        from queries import get_special_units
-        conn = get_connection()
-        units = get_special_units(conn)
+        from config_db import get_special_units
+        units = get_special_units()
         wb = Workbook()
         ws = wb.active
         ws.title = "特殊结算单元配置"
@@ -469,7 +465,8 @@ def api_special_units_import():
     """
     try:
         from openpyxl import load_workbook
-        from queries import delete_special_unit, lookup_unit_codes_by_name
+        from config_db import delete_special_unit, add_special_unit_full
+        from queries import lookup_unit_codes_by_name
         file = request.files.get("file")
         if not file:
             return jsonify({"error": "请上传配置文件"}), 400
@@ -515,10 +512,9 @@ def api_special_units_import():
         finally:
             if os.path.exists(tmp_path):
                 os.remove(tmp_path)
-        delete_special_unit(conn, None)  # 清空 (用特殊值 None 触发全部删除)
+        delete_special_unit(None)  # 清空 (SQLite 全部删除)
         for u in units:
-            from queries import add_special_unit_full
-            add_special_unit_full(conn, u["code"], u["name"],
+            add_special_unit_full(u["code"], u["name"],
                                   zero_salary_no_add=u["zero_salary_no_add"],
                                   exclude_all=u["exclude_all"])
         resp = {"ok": True, "count": len(units)}
@@ -531,11 +527,10 @@ def api_special_units_import():
 
 @app.route("/api/special-units/<int:unit_code>", methods=["DELETE"])
 def api_special_units_delete(unit_code):
-    """删除特殊结算单元配置。"""
+    """删除特殊结算单元配置 (SQLite)。"""
     try:
-        from queries import delete_special_unit
-        conn = get_connection()
-        delete_special_unit(conn, unit_code)
+        from config_db import delete_special_unit
+        delete_special_unit(unit_code)
         return jsonify({"ok": True})
     except Exception as e:
         return jsonify({"error": str(e)}), 500
@@ -683,11 +678,16 @@ def api_personnel_compare():
             tax_export_persons, payroll_certs, payroll_personnel, termination_dates,
             unpaid_persons=unpaid_persons, contract_signed_persons=contract_persons)
         # 特殊结算单元: 工资为0不增员不报税 + 完全排除不增员不报税
-        from queries import get_special_units, get_zero_salary_certs, get_excluded_unit_certs, get_person_units
+        # 配置存 SQLite (config_db), Oracle 只读
+        from config_db import get_zero_salary_unit_codes, get_excluded_unit_codes
+        from queries import get_zero_salary_certs, get_excluded_unit_certs, get_person_units
         exclude_certs = set()
-        if get_special_units(conn):
-            exclude_certs |= get_zero_salary_certs(conn, pay_month)
-            exclude_certs |= get_excluded_unit_certs(conn, pay_months)
+        zero_codes = get_zero_salary_unit_codes()
+        excl_codes = get_excluded_unit_codes()
+        if zero_codes:
+            exclude_certs |= get_zero_salary_certs(conn, pay_month, zero_codes)
+        if excl_codes:
+            exclude_certs |= get_excluded_unit_certs(conn, pay_months, excl_codes)
         # 经办人/结算单元/单位过滤 + 备注(结算单元名称)数据
         tax_cert_set = {str(p.get("证件号码") or "").strip().upper()
                         for p in tax_export_persons}
@@ -823,6 +823,10 @@ def api_personnel_compare():
 
 
 init_db()
+
+# 初始化自建 SQLite 配置库 (Oracle 只读, 配置数据不入 Oracle)
+import config_db as _config_db
+_config_db.init_db()
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=5000, debug=os.getenv("FLASK_DEBUG", "0") == "1")

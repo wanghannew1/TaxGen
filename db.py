@@ -5,6 +5,10 @@ from config import DB_CONFIG
 # target database is Oracle 11g, which thin mode does not support - DPY-3010)
 ORACLE_CLIENT_LIB_DIR = '/opt/oracle/instantclient_23_4'
 
+# ⚠️ 安全规则: Oracle (工资业务库) 只允许只读访问。
+# 禁止在本模块创建/修改任何 Oracle 表或数据。
+# 应用自身的配置数据一律存入自建 SQLite (config_db.py → config.db)。
+
 _pool = None
 
 
@@ -22,42 +26,6 @@ def init_db():
         tcp_connect_timeout=10,
     )
     print(f"Database pool created: {dsn}")
-    _ensure_special_unit_table()
-
-
-def _ensure_special_unit_table():
-    """确保特殊结算单元配置表存在 (工资为0不增员不报税 / 完全排除不增员不报税)。"""
-    try:
-        conn = _pool.acquire()
-        try:
-            with conn.cursor() as cursor:
-                cursor.execute(
-                    """
-                    CREATE TABLE special_unit_config (
-                        unit_code NUMBER(10) PRIMARY KEY,
-                        unit_name VARCHAR2(200),
-                        zero_salary_no_add NUMBER(1) DEFAULT 1,
-                        exclude_all NUMBER(1) DEFAULT 0,
-                        created_at TIMESTAMP DEFAULT SYSTIMESTAMP
-                    )
-                    """
-                )
-        except oracledb.DatabaseError as e:
-            # ORA-00955: name is already used by an existing object → 表已存在
-            if "ORA-00955" not in str(e):
-                raise
-            # 兼容旧表: 补充 exclude_all 列
-            try:
-                with conn.cursor() as cursor:
-                    cursor.execute("ALTER TABLE special_unit_config ADD (exclude_all NUMBER(1) DEFAULT 0)")
-            except oracledb.DatabaseError as e2:
-                # ORA-01430: 列已存在 → 忽略
-                if "ORA-01430" not in str(e2):
-                    raise
-        finally:
-            _pool.release(conn)
-    except Exception:
-        pass
 
 
 def get_connection():
