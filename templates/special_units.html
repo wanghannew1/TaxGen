@@ -69,6 +69,7 @@
             <table class="table table-striped table-hover">
                 <thead>
                     <tr>
+                        <th style="width:50px;">序号</th>
                         <th>结算单元代码</th>
                         <th>结算单元名称</th>
                         <th>工资为0不增员不报税</th>
@@ -109,8 +110,9 @@
             const data = await resp.json();
             const units = data.units || [];
             emptyState.style.display = units.length === 0 ? 'block' : 'none';
-            unitList.innerHTML = units.map(u => `
+            unitList.innerHTML = units.map((u, i) => `
                 <tr>
+                    <td>${i + 1}</td>
                     <td>${u.code}</td>
                     <td>${u.name}</td>
                     <td>
