@@ -1318,3 +1318,61 @@ def lookup_unit_codes_by_name(conn, unit_name: str) -> List[int]:
             "SELECT DISTINCT ATB930 FROM TB93 WHERE ATB931 = :n AND ATB930 IS NOT NULL",
             {"n": unit_name})
         return [int(r[0]) for r in cursor.fetchall()]
+
+
+def get_payroll_records(conn, start_month: int, end_month: int) -> List[dict]:
+    """按经办年月(发放月份)范围查询已发放工资记录 (TC8M, ATC8M3=2)。
+
+    返回每条发放记录: {结算单元代码, 结算单元名称, 单位名称, 发放月份, 所属月份,
+    批次, 发放人数, 发放总额, 状态, 经办人, 经办日期, 确认经办人, 确认日期,
+    发放经办人, 发放日期}。
+    """
+    if not start_month or not end_month:
+        return []
+    months = list(range(start_month, end_month + 1))
+    results = []
+    sql = """
+        SELECT m.ATB930, m.ATB931, m.AAB004, m.ATC8G7, m.ATC931, m.ATC937,
+               m.ATC8M1, m.ATC8M2, m.ATC8M3,
+               m.AAE019, m.AAE036,
+               m.AAE119, m.AAE136,
+               m.AAE219, m.AAE236
+        FROM TC8M m
+        WHERE m.ATC8G7 IN ({placeholders})
+          AND m.ATC8M3 = 2
+        ORDER BY m.ATC8G7 DESC, m.ATB930, m.ATC931 DESC, m.ATC937
+    """
+    with conn.cursor() as cursor:
+        for start in range(0, len(months), _IN_BATCH_SIZE):
+            chunk = months[start:start + _IN_BATCH_SIZE]
+            placeholders = ", ".join(f":m{i}" for i in range(len(chunk)))
+            binds = {f"m{i}": m for i, m in enumerate(chunk)}
+            cursor.execute(sql.format(placeholders=placeholders), binds)
+            for row in cursor.fetchall():
+                def _d(v):
+                    if v is None:
+                        return ""
+                    if hasattr(v, "strftime"):
+                        if v.hour == 0 and v.minute == 0 and v.second == 0:
+                            return v.strftime("%Y-%m-%d")
+                        return v.strftime("%Y-%m-%d %H:%M:%S")
+                    return str(v)
+                status_map = {"0": "待确认", "1": "确认可发放", "2": "已发放"}
+                results.append({
+                    "unit_code": int(row[0] or 0),
+                    "unit_name": str(row[1] or ""),
+                    "dept_name": str(row[2] or ""),
+                    "pay_month": int(row[3] or 0),
+                    "salary_month": int(row[4] or 0),
+                    "seq": str(row[5] or ""),
+                    "person_count": int(row[6] or 0),
+                    "total_amount": round(float(row[7] or 0), 2),
+                    "status": status_map.get(str(row[8] or ""), str(row[8] or "")),
+                    "handler": str(row[9] or ""),
+                    "handle_date": _d(row[10]),
+                    "confirm_handler": str(row[11] or ""),
+                    "confirm_date": _d(row[12]),
+                    "pay_handler": str(row[13] or ""),
+                    "pay_date": _d(row[14]),
+                })
+    return results

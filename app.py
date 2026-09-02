@@ -537,6 +537,24 @@ def api_special_units_delete(unit_code):
         return jsonify({"error": str(e)}), 500
 
 
+@app.route("/api/payroll-records")
+def api_payroll_records():
+    """查询工资发放情况 (TC8M, 按经办年月范围, 已发放)。"""
+    try:
+        from queries import get_payroll_records
+        start = int(request.args.get("start", 0) or 0)
+        end = int(request.args.get("end", 0) or 0)
+        if not start or not end:
+            return jsonify({"error": "请选择发薪月份(起始)和(结束)"}), 400
+        if end < start:
+            return jsonify({"error": "发薪月份(结束)不能早于(起始)"}), 400
+        conn = get_connection()
+        records = get_payroll_records(conn, start, end)
+        return jsonify({"records": records, "count": len(records)})
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
 @app.route("/api/personnel-compare/filters")
 def api_personnel_compare_filters():
     """查询经办人/结算单元/单位列表 (供筛选下拉框)。"""
