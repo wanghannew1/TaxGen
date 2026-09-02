@@ -84,25 +84,28 @@
             </div>
             <div class="row g-2 align-items-end mt-1">
                 <div class="col-md-3">
-                    <label class="form-label">经办人过滤（可选，多选）</label>
-                    <select id="handlerFilter" class="form-select" multiple size="4">
+                    <label class="form-label">经办人过滤（不选 = 全部，可搜索多选）</label>
+                    <input type="text" id="handlerSearch" class="form-control form-control-sm mb-1" placeholder="搜索经办人...">
+                    <select id="handlerFilter" class="form-select" multiple size="8">
                         <option value="">全部经办人</option>
                     </select>
                 </div>
                 <div class="col-md-3">
-                    <label class="form-label">结算单元过滤（可选，多选）</label>
-                    <select id="unitFilter" class="form-select" multiple size="4">
+                    <label class="form-label">结算单元过滤（不选 = 全部，可搜索多选）</label>
+                    <input type="text" id="unitSearch" class="form-control form-control-sm mb-1" placeholder="搜索结算单元...">
+                    <select id="unitFilter" class="form-select" multiple size="8">
                         <option value="">全部结算单元</option>
                     </select>
                 </div>
                 <div class="col-md-3">
-                    <label class="form-label">单位名称过滤（可选，多选）</label>
-                    <select id="deptFilter" class="form-select" multiple size="4">
+                    <label class="form-label">单位名称过滤（不选 = 全部，可搜索多选）</label>
+                    <input type="text" id="deptSearch" class="form-control form-control-sm mb-1" placeholder="搜索单位名称...">
+                    <select id="deptFilter" class="form-select" multiple size="8">
                         <option value="">全部单位</option>
                     </select>
                 </div>
                 <div class="col-md-3 d-flex align-items-end pb-1">
-                    <span class="text-muted" style="font-size: 0.85rem;">按住 Ctrl 多选。筛选后仅显示所选经办人/结算单元/单位的增减员数据（每个业务员只看自己的）。</span>
+                    <span class="text-muted" style="font-size: 0.85rem;">按住 Ctrl 多选。<strong>都不选 = 不过滤（显示全部）</strong>。筛选后仅显示所选经办人/结算单元/单位的增减员数据（每个业务员只看自己的）。</span>
                 </div>
             </div>
             <div id="loading" class="text-center py-4" style="display: none;">
@@ -143,6 +146,9 @@
     const handlerFilter = document.getElementById('handlerFilter');
     const unitFilter = document.getElementById('unitFilter');
     const deptFilter = document.getElementById('deptFilter');
+    const handlerSearch = document.getElementById('handlerSearch');
+    const unitSearch = document.getElementById('unitSearch');
+    const deptSearch = document.getElementById('deptSearch');
     const latestPayDate = document.getElementById('latestPayDate');
     const btnCompare = document.getElementById('btnCompare');
     const loading = document.getElementById('loading');
@@ -257,6 +263,20 @@
                 data.depts.map(d => `<option value="${d}">${d}</option>`).join('');
         } catch (e) { /* 静默失败 */ }
     }
+
+    function filterOptions(searchEl, selectEl) {
+        const kw = searchEl.value.trim().toLowerCase();
+        const selected = Array.from(selectEl.selectedOptions).map(o => o.value);
+        Array.from(selectEl.options).forEach(o => {
+            const show = !kw || o.text.toLowerCase().includes(kw);
+            o.hidden = !show;
+            o.selected = selected.includes(o.value) && show;
+        });
+    }
+
+    handlerSearch.addEventListener('input', () => filterOptions(handlerSearch, handlerFilter));
+    unitSearch.addEventListener('input', () => filterOptions(unitSearch, unitFilter));
+    deptSearch.addEventListener('input', () => filterOptions(deptSearch, deptFilter));
 
     payMonth.addEventListener('change', loadFilters);
 
