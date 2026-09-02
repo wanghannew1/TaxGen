@@ -857,19 +857,23 @@ def get_handlers(conn, pay_month: int = 0) -> List[str]:
 
 
 def get_units(conn, pay_month: int = 0) -> List[dict]:
-    """查询结算单元列表 (TC8M.ATB930 + ATB931 结算单元名称, 已发放状态)。"""
+    """查询结算单元列表 (TB93 结算单元信息表全量; 指定月份时限定 TC8M 已发放)。"""
+    if pay_month:
+        sql = """
+            SELECT DISTINCT ATB930, ATB931 FROM TC8M
+            WHERE ATB930 IS NOT NULL AND ATC8M3 = 2 AND ATC8G7 = :pay_month
+            ORDER BY ATB930
+        """
+        with conn.cursor() as cursor:
+            cursor.execute(sql, {"pay_month": pay_month})
+            return [{"code": int(r[0]), "name": str(r[1] or "")} for r in cursor.fetchall()]
     sql = """
-        SELECT DISTINCT ATB930, ATB931 FROM TC8M
-        WHERE ATB930 IS NOT NULL AND ATC8M3 = 2
-          {month_cond}
+        SELECT DISTINCT ATB930, ATB931 FROM TB93
+        WHERE ATB930 IS NOT NULL AND ATB931 IS NOT NULL
         ORDER BY ATB930
     """
-    month_cond = "AND ATC8G7 = :pay_month" if pay_month else ""
     with conn.cursor() as cursor:
-        if pay_month:
-            cursor.execute(sql.format(month_cond=month_cond), {"pay_month": pay_month})
-        else:
-            cursor.execute(sql.format(month_cond=month_cond))
+        cursor.execute(sql)
         return [{"code": int(r[0]), "name": str(r[1] or "")} for r in cursor.fetchall()]
 
 
@@ -1274,7 +1278,7 @@ def get_tc90_records(conn, cert_numbers) -> List[dict]:
 
 
 def lookup_unit_codes_by_name(conn, unit_name: str) -> List[int]:
-    """按结算单元名称 (ATB931) 查询结算单元代码 (ATB930)。
+    """按结算单元名称 (TB93.ATB931) 查询结算单元代码 (TB93.ATB930)。
 
     返回全部匹配的代码 (名称可能对应多个代码), 无匹配返回空列表。
     """
@@ -1282,6 +1286,6 @@ def lookup_unit_codes_by_name(conn, unit_name: str) -> List[int]:
         return []
     with conn.cursor() as cursor:
         cursor.execute(
-            "SELECT DISTINCT ATB930 FROM TC8M WHERE ATB931 = :n AND ATB930 IS NOT NULL",
+            "SELECT DISTINCT ATB930 FROM TB93 WHERE ATB931 = :n AND ATB930 IS NOT NULL",
             {"n": unit_name})
         return [int(r[0]) for r in cursor.fetchall()]
