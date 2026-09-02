@@ -816,6 +816,48 @@ def api_personnel_compare():
                 tc8m_by_cert.get(cert, []),
                 contract_start_map.get(cert),
                 contract_details=tc90_by_cert.get(cert, [])))
+        # 减员验证 Sheet: 为近期离职/待确认离职人员组装验证行
+        from templates_gen.personnel_compare import build_remove_verify_row
+        remove_all = [(r, "近期离职") for r in departed_rows] + [(r, "待确认近期离职") for r in pending_rows]
+        remove_certs = {r[IDX_证件号码] for r, _ in remove_all}
+        remove_verify_rows = []
+        if remove_certs:
+            remove_salary = get_salary_details(conn, remove_certs,
+                                               sorted(set(pay_months + unpaid_months)))
+            remove_tc8m = get_tc8m_records(conn, remove_certs, pay_months)
+            remove_tc90 = get_tc90_records(conn, remove_certs)
+            remove_salary_by_cert = {}
+            for r in remove_salary:
+                remove_salary_by_cert.setdefault(r["cert"], []).append(r)
+            remove_tc8m_by_cert = {}
+            for r in remove_tc8m:
+                remove_tc8m_by_cert.setdefault(r["cert"], []).append(r)
+            remove_tc90_by_cert = {}
+            for r in remove_tc90:
+                remove_tc90_by_cert.setdefault(r["cert"], []).append(r)
+            remove_contract_start = {}
+            remove_contract_end = {}
+            for r in remove_tc90:
+                c = r["cert"]
+                if c not in remove_contract_start or (r["合同开始日期"] and r["合同开始日期"] < remove_contract_start[c]):
+                    remove_contract_start[c] = r["合同开始日期"]
+            # 离职日期: 用已按截止日期过滤的 termination_dates (判定口径)
+            # 待确认人员 (无有效终止日期) 离职日期为空
+            for c, dt in termination_dates.items():
+                if c in remove_contract_end:
+                    remove_contract_end[c] = max(remove_contract_end[c], dt)
+                else:
+                    remove_contract_end[c] = dt
+            for row, rtype in remove_all:
+                cert = row[IDX_证件号码]
+                remove_verify_rows.append(build_remove_verify_row(
+                    row, cert, rtype, verify_params,
+                    [],  # 减员无发薪记录
+                    remove_salary_by_cert.get(cert, []),
+                    remove_tc8m_by_cert.get(cert, []),
+                    remove_contract_start.get(cert),
+                    remove_contract_end.get(cert),
+                    contract_details=remove_tc90_by_cert.get(cert, [])))
         tc93_all = []
         seen_tc93 = set()
         for r in paid_salary_details + salary_details:
@@ -850,7 +892,8 @@ def api_personnel_compare():
         month_label = f"{pay_month_start}-{pay_month_end}" if pay_month_end != pay_month_start else str(pay_month_start)
         result = generate_compare_excel(add_rows, departed_rows, pending_rows, stats, OUTPUT_DIR, month_label,
                                         verify_rows=verify_rows, tc93_rows=tc93_rows,
-                                        tc8m_rows=tc8m_rows, tc90_rows=tc90_rows)
+                                        tc8m_rows=tc8m_rows, tc90_rows=tc90_rows,
+                                        remove_verify_rows=remove_verify_rows)
         return jsonify({
             "add_count": stats["add_count"],
             "departed_count": stats["departed_count"],

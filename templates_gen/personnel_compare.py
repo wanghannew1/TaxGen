@@ -145,6 +145,22 @@ VERIFY_HEADERS = [
     "是否零申报",
 ]
 
+# 减员验证附加列 (51 列之后追加)
+REMOVE_VERIFY_HEADERS = [
+    "减员类型",
+    "发薪月份范围",
+    "发薪月份有薪资",
+    "发薪薪资明细(结算单元-所属月-批次)",
+    "未发薪所属月份范围",
+    "有未发薪工资表",
+    "未发薪明细(结算单元-所属月-批次)",
+    "合同签署时间范围",
+    "合同签署增员",
+    "合同开始日期",
+    "合同终止日期(离职日期)",
+    "合同经办人",
+]
+
 # 明细 Sheet 列头
 TC93_HEADERS = ["证件号码", "姓名", "结算单元代码", "结算单元名称", "所属月份", "批次",
                 "应发工资", "本期收入", "养老", "医疗", "失业", "公积金"]
@@ -256,6 +272,61 @@ def build_verify_row(add_row, cert, params, paid_salary_details, unpaid_salary_d
     ]
 
 
+def build_remove_verify_row(remove_row, cert, remove_type, params,
+                            paid_salary_details, unpaid_salary_details, tc8m_details,
+                            contract_start, contract_end_dt, contract_details=None):
+    """为单个减员人员组装减员验证行。
+
+    减员人员应不在发薪/未发薪/当期合同签署名单中, 各来源块验证列应为否/空,
+    用于确认减员判断正确。TC90 合同信息为减员判断依据。
+
+    Args:
+        remove_row: 51 列减员行 (来自个税端导出, 作为前 51 列)
+        cert: 证件号码
+        remove_type: 减员类型 (近期离职/待确认近期离职)
+        params: {pay_months, unpaid_months, contract_start, contract_end}
+        paid_salary_details: 该人 TC93 发薪工资记录 (验证用, 应为空)
+        unpaid_salary_details: 该人 TC93 未发薪记录 (验证用, 应为空)
+        tc8m_details: 该人 TC8M 发放记录 (验证用, 应为空)
+        contract_start: 该人合同开始日期 (TC90 最早 ATC90C)
+        contract_end_dt: 该人合同终止日期 (TC90 ATC90D, 即离职日期)
+        contract_details: 该人 TC90 合同记录列表 (取经办人)
+
+    Returns:
+        51 + len(REMOVE_VERIFY_HEADERS) 列的行数据
+    """
+    contract_details = contract_details or []
+    # 减员人员应无发薪/未发薪记录 (验证其不在保护名单)
+    has_paid = bool(tc8m_details)
+    has_unpaid = bool(unpaid_salary_details)
+    paid_detail = "; ".join(
+        f"{t['unit_name'] or t['unit_code']}-{t['salary_month']}-{t['seq']}" for t in tc8m_details)
+    unpaid_detail = "; ".join(
+        f"{r['unit_name'] or r['unit_code']}-{r['salary_month']}-{r['seq']}" for r in unpaid_salary_details)
+    contract_handlers = "; ".join(sorted(
+        {str(c.get("handler") or c.get("经办人") or "") for c in contract_details
+         if c.get("handler") or c.get("经办人")}))
+
+    contract_time = ""
+    if params.get("contract_start") or params.get("contract_end"):
+        contract_time = f"{params.get('contract_start')} ~ {params.get('contract_end')}"
+
+    return remove_row + [
+        remove_type,
+        "/".join(str(m) for m in params["pay_months"]),
+        "是" if has_paid else "否",
+        paid_detail,
+        "/".join(str(m) for m in params["unpaid_months"]),
+        "是" if has_unpaid else "否",
+        unpaid_detail,
+        contract_time,
+        "否",
+        contract_start or "",
+        contract_end_dt.strftime("%Y-%m-%d") if hasattr(contract_end_dt, "strftime") else (contract_end_dt or ""),
+        contract_handlers,
+    ]
+
+
 def compare_personnel(tax_export_persons, payroll_certs, payroll_personnel, termination_dates,
                       unpaid_persons=None, contract_signed_persons=None,
                       person_units=None, filter_handlers=None, filter_units=None,
@@ -359,11 +430,12 @@ def compare_personnel(tax_export_persons, payroll_certs, payroll_personnel, term
 
 
 def generate_compare_excel(add_rows, departed_rows, pending_rows, stats, output_dir: str, pay_month: int,
-                           verify_rows=None, tc93_rows=None, tc8m_rows=None, tc90_rows=None) -> GenerateResult:
+                           verify_rows=None, tc93_rows=None, tc8m_rows=None, tc90_rows=None,
+                           remove_verify_rows=None) -> GenerateResult:
     """生成增减员比对结果 Excel。
 
     基础三 Sheet: 增员名单 + 近期离职人员 + 待确认近期离职人员。
-    可选附加 Sheet: 增员验证 (51列+验证列), TC93工资明细, TC8M发放明细, TC90合同明细。
+    可选附加 Sheet: 增员验证 (51列+验证列), 减员验证, TC93工资明细, TC8M发放明细, TC90合同明细。
     """
     import os
     from datetime import datetime as _dt
@@ -394,6 +466,12 @@ def generate_compare_excel(add_rows, departed_rows, pending_rows, stats, output_
         ws_verify.append(COMPARE_HEADERS + VERIFY_HEADERS)
         for row in verify_rows:
             ws_verify.append(row)
+
+    if remove_verify_rows is not None:
+        ws_remove_verify = wb.create_sheet("减员验证")
+        ws_remove_verify.append(COMPARE_HEADERS + REMOVE_VERIFY_HEADERS)
+        for row in remove_verify_rows:
+            ws_remove_verify.append(row)
 
     if tc93_rows:
         ws_tc93 = wb.create_sheet("TC93工资明细")
