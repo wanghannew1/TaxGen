@@ -54,11 +54,15 @@
                     <button id="btnAdd" class="btn btn-primary w-100">新增配置</button>
                 </div>
             </div>
-            <div class="d-flex gap-2 mb-2">
+            <div class="d-flex gap-2 mb-2 flex-wrap">
+                <button id="btnUnitList" class="btn btn-outline-info btn-sm">下载结算单元代码对照表</button>
                 <button id="btnExport" class="btn btn-outline-success btn-sm">导出配置 Excel</button>
                 <button id="btnImport" class="btn btn-outline-primary btn-sm">导入配置 Excel</button>
                 <input type="file" id="importFile" accept=".xlsx" style="display:none">
                 <span id="importMsg" class="text-muted align-self-center" style="font-size:0.85rem;"></span>
+            </div>
+            <div class="text-muted mb-2" style="font-size: 0.85rem;">
+                导入提示：结算单元代码可留空，系统将按结算单元名称自动匹配（名称需与对照表完全一致）。
             </div>
             <div id="errorBox" class="alert alert-danger mt-2"></div>
             <table class="table table-striped table-hover">
@@ -86,6 +90,7 @@
     const btnAdd = document.getElementById('btnAdd');
     const btnExport = document.getElementById('btnExport');
     const btnImport = document.getElementById('btnImport');
+    const btnUnitList = document.getElementById('btnUnitList');
     const importFile = document.getElementById('importFile');
     const importMsg = document.getElementById('importMsg');
     const errorBox = document.getElementById('errorBox');
@@ -171,6 +176,16 @@
         } catch (e) { showError(`导出失败: ${e.message}`); }
     });
 
+    btnUnitList.addEventListener('click', async function() {
+        hideError();
+        try {
+            const resp = await fetch('/api/special-units/unit-list-export');
+            const data = await resp.json();
+            if (!resp.ok || data.error) { showError(data.error || '下载失败'); return; }
+            window.location.href = data.download_url;
+        } catch (e) { showError(`下载失败: ${e.message}`); }
+    });
+
     btnImport.addEventListener('click', () => importFile.click());
     importFile.addEventListener('change', async function() {
         const file = importFile.files[0];
@@ -183,7 +198,7 @@
             const resp = await fetch('/api/special-units/import', { method: 'POST', body: form });
             const data = await resp.json();
             if (!resp.ok || data.error) { showError(data.error || '导入失败'); importMsg.textContent = ''; return; }
-            importMsg.textContent = `已导入 ${data.count} 条配置`;
+            importMsg.textContent = `已导入 ${data.count} 条配置` + (data.skipped && data.skipped.length ? `；跳过 ${data.skipped.length} 条: ${data.skipped.join('、')}` : '');
             importFile.value = '';
             loadUnits();
         } catch (e) { showError(`导入失败: ${e.message}`); importMsg.textContent = ''; }

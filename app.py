@@ -395,6 +395,28 @@ def api_special_units_mode(unit_code):
         return jsonify({"error": str(e)}), 500
 
 
+@app.route("/api/special-units/unit-list-export")
+def api_special_units_unit_list_export():
+    """导出结算单元代码-名称对照表 (供填写导入配置用)。"""
+    try:
+        from openpyxl import Workbook
+        from queries import get_units
+        conn = get_connection()
+        units = get_units(conn)  # 全部结算单元
+        wb = Workbook()
+        ws = wb.active
+        ws.title = "结算单元对照表"
+        ws.append(["结算单元代码", "结算单元名称"])
+        for u in units:
+            ws.append([u["code"], u["name"]])
+        from datetime import datetime as _dt
+        filename = f"结算单元对照表_{_dt.now().strftime('%Y%m%d%H%M%S')}.xlsx"
+        wb.save(os.path.join(OUTPUT_DIR, filename))
+        return jsonify({"download_url": f"/api/download/{filename}", "count": len(units)})
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
 @app.route("/api/special-units/export")
 def api_special_units_export():
     """导出特殊结算单元配置为 Excel。"""
@@ -419,39 +441,54 @@ def api_special_units_export():
 
 @app.route("/api/special-units/import", methods=["POST"])
 def api_special_units_import():
-    """从 Excel 导入特殊结算单元配置 (覆盖式)。"""
+    """从 Excel 导入特殊结算单元配置 (覆盖式)。
+
+    结算单元代码可留空, 按结算单元名称自动匹配; 名称匹配不到或多个时跳过并提示。
+    """
     try:
         from openpyxl import load_workbook
-        from queries import delete_special_unit
+        from queries import delete_special_unit, lookup_unit_codes_by_name
         file = request.files.get("file")
         if not file:
             return jsonify({"error": "请上传配置文件"}), 400
         tmp_path = os.path.join(OUTPUT_DIR, "_special_units_tmp.xlsx")
         file.save(tmp_path)
+        conn = get_connection()
         try:
             wb = load_workbook(tmp_path, data_only=True)
             ws = wb.active
             units = []
+            skipped = []
             for row in ws.iter_rows(min_row=2, values_only=True):
-                if not row or row[0] is None:
+                if not row or (row[0] is None and not row[1]):
                     continue
-                code = int(row[0])
+                code = int(row[0]) if row[0] else None
                 name = str(row[1] or "")
                 zero_flag = int(row[2] or 0)
                 exclude_all = int(row[3] or 0)
+                if not code:
+                    # 代码留空时按名称自动匹配
+                    codes = lookup_unit_codes_by_name(conn, name)
+                    if len(codes) == 1:
+                        code = codes[0]
+                    else:
+                        skipped.append(f"{name}(匹配到{len(codes)}个代码)")
+                        continue
                 units.append({"code": code, "name": name,
                               "zero_salary_no_add": zero_flag, "exclude_all": exclude_all})
         finally:
             if os.path.exists(tmp_path):
                 os.remove(tmp_path)
-        conn = get_connection()
         delete_special_unit(conn, None)  # 清空 (用特殊值 None 触发全部删除)
         for u in units:
             from queries import add_special_unit_full
             add_special_unit_full(conn, u["code"], u["name"],
                                   zero_salary_no_add=u["zero_salary_no_add"],
                                   exclude_all=u["exclude_all"])
-        return jsonify({"ok": True, "count": len(units)})
+        resp = {"ok": True, "count": len(units)}
+        if skipped:
+            resp["skipped"] = skipped
+        return jsonify(resp)
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 

@@ -1271,3 +1271,17 @@ def get_tc90_records(conn, cert_numbers) -> List[dict]:
                     "经办人": str(row[7] or ""),
                 })
     return results
+
+
+def lookup_unit_codes_by_name(conn, unit_name: str) -> List[int]:
+    """按结算单元名称 (ATB931) 查询结算单元代码 (ATB930)。
+
+    返回全部匹配的代码 (名称可能对应多个代码), 无匹配返回空列表。
+    """
+    if not unit_name:
+        return []
+    with conn.cursor() as cursor:
+        cursor.execute(
+            "SELECT DISTINCT ATB930 FROM TC8M WHERE ATB931 = :n AND ATB930 IS NOT NULL",
+            {"n": unit_name})
+        return [int(r[0]) for r in cursor.fetchall()]
