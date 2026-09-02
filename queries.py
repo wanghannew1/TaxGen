@@ -946,6 +946,16 @@ def add_special_unit(conn, unit_code: int, unit_name: str = "", exclude_all: boo
     conn.commit()
 
 
+def add_special_unit_full(conn, unit_code: int, unit_name: str = "",
+                          zero_salary_no_add: int = 1, exclude_all: int = 0) -> None:
+    """新增特殊结算单元配置 (完整模式参数, 用于导入)。"""
+    with conn.cursor() as cursor:
+        cursor.execute(
+            "INSERT INTO special_unit_config (unit_code, unit_name, zero_salary_no_add, exclude_all) VALUES (:c, :n, :z, :e)",
+            {"c": unit_code, "n": unit_name, "z": zero_salary_no_add, "e": exclude_all})
+    conn.commit()
+
+
 def update_special_unit(conn, unit_code: int, exclude_all: bool) -> None:
     """更新特殊结算单元配置的排除模式。"""
     with conn.cursor() as cursor:

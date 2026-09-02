@@ -422,7 +422,7 @@ def api_special_units_import():
     """从 Excel 导入特殊结算单元配置 (覆盖式)。"""
     try:
         from openpyxl import load_workbook
-        from queries import add_special_unit, delete_special_unit
+        from queries import delete_special_unit
         file = request.files.get("file")
         if not file:
             return jsonify({"error": "请上传配置文件"}), 400
@@ -447,7 +447,10 @@ def api_special_units_import():
         conn = get_connection()
         delete_special_unit(conn, None)  # 清空 (用特殊值 None 触发全部删除)
         for u in units:
-            add_special_unit(conn, u["code"], u["name"], exclude_all=bool(u["exclude_all"]))
+            from queries import add_special_unit_full
+            add_special_unit_full(conn, u["code"], u["name"],
+                                  zero_salary_no_add=u["zero_salary_no_add"],
+                                  exclude_all=u["exclude_all"])
         return jsonify({"ok": True, "count": len(units)})
     except Exception as e:
         return jsonify({"error": str(e)}), 500
