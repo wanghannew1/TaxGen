@@ -818,6 +818,7 @@ def api_personnel_compare():
                 contract_details=tc90_by_cert.get(cert, [])))
         # 减员验证 Sheet: 为近期离职/待确认离职人员组装验证行
         from templates_gen.personnel_compare import build_remove_verify_row
+        from queries import get_last_pay_records
         remove_all = [(r, "近期离职") for r in departed_rows] + [(r, "待确认近期离职") for r in pending_rows]
         remove_certs = {r[IDX_证件号码] for r, _ in remove_all}
         remove_verify_rows = []
@@ -826,6 +827,7 @@ def api_personnel_compare():
                                                sorted(set(pay_months + unpaid_months)))
             remove_tc8m = get_tc8m_records(conn, remove_certs, pay_months)
             remove_tc90 = get_tc90_records(conn, remove_certs)
+            remove_last_pay = get_last_pay_records(conn, remove_certs)
             remove_salary_by_cert = {}
             for r in remove_salary:
                 remove_salary_by_cert.setdefault(r["cert"], []).append(r)
@@ -835,6 +837,11 @@ def api_personnel_compare():
             remove_tc90_by_cert = {}
             for r in remove_tc90:
                 remove_tc90_by_cert.setdefault(r["cert"], []).append(r)
+            tax_person_by_cert = {}
+            for p in tax_export_persons:
+                pc = str(p.get("证件号码") or "").strip().upper()
+                if pc:
+                    tax_person_by_cert.setdefault(pc, p)
             remove_contract_start = {}
             remove_contract_end = {}
             for r in remove_tc90:
@@ -857,7 +864,9 @@ def api_personnel_compare():
                     remove_tc8m_by_cert.get(cert, []),
                     remove_contract_start.get(cert),
                     remove_contract_end.get(cert),
-                    contract_details=remove_tc90_by_cert.get(cert, [])))
+                    contract_details=remove_tc90_by_cert.get(cert, []),
+                    tax_person=tax_person_by_cert.get(cert, {}),
+                    last_pay=remove_last_pay.get(cert)))
         tc93_all = []
         seen_tc93 = set()
         for r in paid_salary_details + salary_details:

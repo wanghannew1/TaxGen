@@ -148,16 +148,33 @@ VERIFY_HEADERS = [
 # 减员验证附加列 (51 列之后追加)
 REMOVE_VERIFY_HEADERS = [
     "减员类型",
+    # 个税端信息
+    "个税端姓名",
+    "个税端证件类型",
+    "个税端证件号码",
+    "个税端报送状态",
+    "身份验证状态",
+    "任职受雇从业日期(个税端)",
+    "任职受雇从业类型",
+    "个税端离职日期",
+    "其他情况说明",
+    "备注",
+    "更新时间",
+    "手机号码",
+    # 发薪块
     "发薪月份范围",
     "发薪月份有薪资",
     "发薪薪资明细(结算单元-所属月-批次)",
+    "最后一次发薪(结算单元-所属月-批次)",
+    # 未发薪块
     "未发薪所属月份范围",
     "有未发薪工资表",
     "未发薪明细(结算单元-所属月-批次)",
+    # 合同块 (Oracle)
     "合同签署时间范围",
     "合同签署增员",
-    "合同开始日期",
-    "合同终止日期(离职日期)",
+    "合同开始日期(Oracle)",
+    "离职日期(Oracle)",
     "合同经办人",
 ]
 
@@ -274,7 +291,8 @@ def build_verify_row(add_row, cert, params, paid_salary_details, unpaid_salary_d
 
 def build_remove_verify_row(remove_row, cert, remove_type, params,
                             paid_salary_details, unpaid_salary_details, tc8m_details,
-                            contract_start, contract_end_dt, contract_details=None):
+                            contract_start, contract_end_dt, contract_details=None,
+                            tax_person=None, last_pay=None):
     """为单个减员人员组装减员验证行。
 
     减员人员应不在发薪/未发薪/当期合同签署名单中, 各来源块验证列应为否/空,
@@ -291,11 +309,14 @@ def build_remove_verify_row(remove_row, cert, remove_type, params,
         contract_start: 该人合同开始日期 (TC90 最早 ATC90C)
         contract_end_dt: 该人合同终止日期 (TC90 ATC90D, 即离职日期)
         contract_details: 该人 TC90 合同记录列表 (取经办人)
+        tax_person: 个税端导出原始记录 dict (报送状态/身份验证/任职/更新时间等)
+        last_pay: 该人最近一次发薪记录 dict {unit_name, salary_month, seq, pay_month}
 
     Returns:
         51 + len(REMOVE_VERIFY_HEADERS) 列的行数据
     """
     contract_details = contract_details or []
+    tax_person = tax_person or {}
     # 减员人员应无发薪/未发薪记录 (验证其不在保护名单)
     has_paid = bool(tc8m_details)
     has_unpaid = bool(unpaid_salary_details)
@@ -306,6 +327,9 @@ def build_remove_verify_row(remove_row, cert, remove_type, params,
     contract_handlers = "; ".join(sorted(
         {str(c.get("handler") or c.get("经办人") or "") for c in contract_details
          if c.get("handler") or c.get("经办人")}))
+    last_pay_detail = ""
+    if last_pay:
+        last_pay_detail = f"{last_pay.get('unit_name', '')}-{last_pay.get('salary_month', '')}-{last_pay.get('seq', '')}"
 
     contract_time = ""
     if params.get("contract_start") or params.get("contract_end"):
@@ -313,12 +337,29 @@ def build_remove_verify_row(remove_row, cert, remove_type, params,
 
     return remove_row + [
         remove_type,
+        # 个税端信息
+        str(tax_person.get("姓名") or ""),
+        str(tax_person.get("证件类型") or ""),
+        str(tax_person.get("证件号码") or ""),
+        str(tax_person.get("报送状态") or ""),
+        str(tax_person.get("身份验证状态") or ""),
+        str(tax_person.get("任职受雇从业日期") or ""),
+        str(tax_person.get("任职受雇从业类型") or ""),
+        str(tax_person.get("离职日期") or ""),
+        str(tax_person.get("其他情况说明") or ""),
+        str(tax_person.get("备注") or ""),
+        str(tax_person.get("更新时间") or ""),
+        str(tax_person.get("手机号码") or ""),
+        # 发薪块
         "/".join(str(m) for m in params["pay_months"]),
         "是" if has_paid else "否",
         paid_detail,
+        last_pay_detail,
+        # 未发薪块
         "/".join(str(m) for m in params["unpaid_months"]),
         "是" if has_unpaid else "否",
         unpaid_detail,
+        # 合同块 (Oracle)
         contract_time,
         "否",
         contract_start or "",

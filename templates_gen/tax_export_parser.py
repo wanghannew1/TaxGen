@@ -23,12 +23,16 @@ COL_证件号码 = 3
 COL_性别 = 4
 COL_出生日期 = 5
 COL_报送状态 = 7
+COL_身份验证状态 = 8
 COL_手机号码 = 9
 COL_任职受雇从业日期 = 10
 COL_离职日期 = 11
 COL_是否扣除减除费用 = 14
 COL_任职受雇从业类型 = 35
+COL_其他情况说明 = 37
 COL_国籍 = 38
+COL_备注 = 42
+COL_更新时间 = 51
 
 
 def _normalize_cell(value, wb=None):
@@ -85,12 +89,16 @@ def parse_tax_export(filepath: str) -> List[Dict[str, str]]:
             "性别": _normalize_cell(sh.cell_value(r, COL_性别), wb),
             "出生日期": _normalize_cell(sh.cell_value(r, COL_出生日期), wb),
             "报送状态": _normalize_cell(sh.cell_value(r, COL_报送状态), wb),
+            "身份验证状态": _normalize_cell(sh.cell_value(r, COL_身份验证状态), wb),
             "手机号码": _normalize_cell(sh.cell_value(r, COL_手机号码), wb),
             "任职受雇从业日期": _normalize_cell(sh.cell_value(r, COL_任职受雇从业日期), wb),
             "离职日期": _normalize_cell(sh.cell_value(r, COL_离职日期), wb),
             "是否扣除减除费用": _normalize_cell(sh.cell_value(r, COL_是否扣除减除费用), wb),
             "任职受雇从业类型": _normalize_cell(sh.cell_value(r, COL_任职受雇从业类型), wb),
+            "其他情况说明": _normalize_cell(sh.cell_value(r, COL_其他情况说明), wb),
             "国籍": _normalize_cell(sh.cell_value(r, COL_国籍), wb),
+            "备注": _normalize_cell(sh.cell_value(r, COL_备注), wb),
+            "更新时间": _normalize_cell(sh.cell_value(r, COL_更新时间), wb),
         })
     return persons
 

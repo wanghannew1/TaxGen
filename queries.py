@@ -1376,3 +1376,48 @@ def get_payroll_records(conn, start_month: int, end_month: int) -> List[dict]:
                     "pay_date": _d(row[14]),
                 })
     return results
+
+
+def get_last_pay_records(conn, cert_numbers) -> Dict[str, dict]:
+    """查询每个人最近一次发薪记录 (TC8M, 按 ATC8G7 最大)。
+
+    返回 {证件号(大写): {"unit_name", "salary_month", "seq", "pay_month"}}。
+    """
+    if not cert_numbers:
+        return {}
+    certs = sorted({str(c).strip().upper() for c in cert_numbers if str(c).strip()})
+    result: Dict[str, dict] = {}
+    sql = """
+        SELECT ac01.AAC002, m.ATB931, m.ATC931, m.ATC937, m.ATC8G7
+        FROM TC8M m
+        JOIN TC93 t93 ON t93.ATB930 = m.ATB930
+                     AND t93.ATC931 = m.ATC931
+                     AND t93.ATC937 = m.ATC937
+        LEFT JOIN AC01 ac01 ON t93.AAC001 = ac01.AAC001
+        WHERE m.ATC8M3 = 2
+          AND m.ATC8G7 = (
+              SELECT MAX(m2.ATC8G7) FROM TC8M m2
+              JOIN TC93 t932 ON t932.ATB930 = m2.ATB930
+                            AND t932.ATC931 = m2.ATC931
+                            AND t932.ATC937 = m2.ATC937
+              LEFT JOIN AC01 ac012 ON t932.AAC001 = ac012.AAC001
+              WHERE ac012.AAC002 = ac01.AAC002 AND m2.ATC8M3 = 2
+          )
+          AND ac01.AAC002 IN ({placeholders})
+    """
+    with conn.cursor() as cursor:
+        for start in range(0, len(certs), _IN_BATCH_SIZE):
+            chunk = certs[start:start + _IN_BATCH_SIZE]
+            placeholders = ", ".join(f":c{i}" for i in range(len(chunk)))
+            binds = {f"c{i}": c for i, c in enumerate(chunk)}
+            cursor.execute(sql.format(placeholders=placeholders), binds)
+            for row in cursor.fetchall():
+                cert = str(row[0] or "").strip().upper()
+                if cert:
+                    result[cert] = {
+                        "unit_name": str(row[1] or ""),
+                        "salary_month": int(row[2] or 0),
+                        "seq": str(row[3] or ""),
+                        "pay_month": int(row[4] or 0),
+                    }
+    return result
