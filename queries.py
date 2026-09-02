@@ -928,44 +928,60 @@ def get_person_units(conn, cert_numbers, pay_months) -> Dict[str, dict]:
     return result
 
 
-def get_zero_salary_certs(conn, pay_month: int, unit_codes: List[int],
-                          relevant_months: List[int] = None) -> Set[str]:
-    """查询指定结算单元中工资总额(ATC93AA)为0的人员证件号集合。
+def get_zero_salary_certs(conn, pay_months, unpaid_months, unit_codes) -> Set[str]:
+    """查询"工资为0不增员不报税"人员证件号集合。
 
-    用途: 特殊结算单元(如二院)当月合计工资为0时, 这些人员不增员不报税。
-    同时覆盖已发(TC8M)与未发薪(TC93 有记录但 TC8M 未发)两种情况。
-    relevant_months: 排除范围 (发薪月份 + 未发薪月份), 默认仅 pay_month。
+    规则 (按人汇总本期收入, 报税公式与 templates_gen/formulas.py 一致):
+    - 发薪: 发薪月份范围(TC8M已发)内所有工资单本期收入合计为0 → 不增员
+    - 未发薪: 未发薪所属月份范围内所有未发薪工资单本期收入合计为0 → 不增员
+    - 发薪+未发薪: 全部工资单本期收入合计为0 → 不增员
+    汇总实现: 相关工资单 = 发薪记录(按 TC8M 已发关联, 所属月可能早于发放月)
+              ∪ 未发薪记录(所属月 IN unpaid_months);
+              该人相关工资单本期收入合计==0 则排除。
     unit_codes: 从 config_db 读取的 "工资为0不增员不报税" 结算单元代码列表。
     """
     if not unit_codes:
         return set()
-    months = sorted(set(relevant_months or [pay_month]))
-    certs = set()
-    sql = """
-        SELECT DISTINCT ac01.AAC002
+    codes = sorted(set(unit_codes))
+    pay_ms = sorted(set(pay_months or []))
+    unpaid_ms = sorted(set(unpaid_months or []))
+    sql = f"""
+        SELECT ac01.AAC002,
+               NVL(t93.ATC93AA,0) AS 工资总额, NVL(t93.ATC936,0) AS 本次免税,
+               NVL(t93.ATC93BD,0) AS 大病险, NVL(t93.ATC93BE,0) AS 补缴退款,
+               NVL(t93.ATC93X3,0) AS 交纳现金, NVL(t93.ATC93E,0) AS 个人欠款
         FROM TC93 t93
         LEFT JOIN AC01 ac01 ON t93.AAC001 = ac01.AAC001
         WHERE t93.ATC93G = '1'
           AND ac01.AAC002 IS NOT NULL
-          AND t93.ATC931 IN ({month_placeholders})
-          AND t93.ATB930 IN ({unit_placeholders})
-          AND NVL(t93.ATC93AA, 0) = 0
+          AND t93.ATB930 IN ({{unit_ph}})
+          AND (
+              {('EXISTS (SELECT 1 FROM TC8M m WHERE m.ATB930=t93.ATB930 '
+                'AND m.ATC931=t93.ATC931 AND m.ATC937=t93.ATC937 '
+                'AND m.ATC8M3=2 AND m.ATC8G7 IN (' + ', '.join(f':pm{i}' for i in range(len(pay_ms))) + '))'
+                if pay_ms else '1=0')}
+              {f'OR t93.ATC931 IN ({", ".join(f":um{i}" for i in range(len(unpaid_ms)))})' if unpaid_ms else ''}
+          )
     """
-    codes = sorted(set(unit_codes))
+    income_by_cert = {}
     with conn.cursor() as cursor:
         for start in range(0, len(codes), _IN_BATCH_SIZE):
             chunk = codes[start:start + _IN_BATCH_SIZE]
-            month_ph = ", ".join(f":pm{i}" for i in range(len(months)))
             unit_ph = ", ".join(f":u{i}" for i in range(len(chunk)))
-            binds = {f"pm{i}": m for i, m in enumerate(months)}
-            binds.update({f"u{i}": c for i, c in enumerate(chunk)})
-            cursor.execute(sql.format(month_placeholders=month_ph,
-                                      unit_placeholders=unit_ph), binds)
+            binds = {f"u{i}": c for i, c in enumerate(chunk)}
+            binds.update({f"pm{i}": m for i, m in enumerate(pay_ms)})
+            binds.update({f"um{i}": m for i, m in enumerate(unpaid_ms)})
+            cursor.execute(sql.format(unit_ph=unit_ph), binds)
             for row in cursor.fetchall():
                 cert = str(row[0] or "").strip().upper()
-                if cert:
-                    certs.add(cert)
-    return certs
+                if not cert:
+                    continue
+                # 报税口径公式: 本期收入 = 工资总额 - 本次免税 - 大病险 - 补缴退款 + 交纳现金 - 个人欠款
+                income = (float(row[1] or 0) - float(row[2] or 0) - float(row[3] or 0)
+                          - float(row[4] or 0) + float(row[5] or 0) - float(row[6] or 0))
+                income = max(0.0, round(income, 2))
+                income_by_cert[cert] = income_by_cert.get(cert, 0.0) + income
+    return {c for c, inc in income_by_cert.items() if inc == 0}
 
 
 def get_excluded_unit_certs(conn, pay_months, unit_codes: List[int],
