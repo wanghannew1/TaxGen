@@ -39,8 +39,8 @@
         <div class="card-header"><strong>增减员比对</strong></div>
         <div class="card-body">
             <div class="alert alert-info mb-3" style="font-size: 0.9rem;">
-                上传个税端导出的境内人员信息列表（.xls），选择发薪月份（自动扩展至最近发薪月份）、
-                未发薪工资表所属月份（自动扩展至当前月）、合同签署时间（选中月份至上报月份）。
+                上传个税端导出的境内人员信息列表（.xls），显式选择发薪月份时间段（起始~结束）和
+                未发薪工资表所属月份时间段（起始~结束），可选按经办时间精确过滤发薪记录。
                 系统按证件号码比对：发薪/未发薪/合同签署名单有但个税端没有的列为<strong>增员</strong>；
                 个税端有但不在上述名单的，进一步查询 TC90 合同终止日期——有离职日期的放入
                 <strong>近期离职人员</strong>，无离职日期的放入<strong>待确认近期离职人员</strong>。
@@ -51,35 +51,63 @@
                     <label class="form-label">个税端导出文件（境内人员信息列表 .xls）</label>
                     <input type="file" id="exportFile" class="form-control" accept=".xls">
                 </div>
-                <div class="col-md-3">
-                    <label class="form-label">发薪月份（必选，自动扩展至最近发薪月份）</label>
-                    <select id="payMonth" class="form-select">
+                <div class="col-md-2">
+                    <label class="form-label">发薪月份（起始，必选）</label>
+                    <select id="payMonthStart" class="form-select">
                         <option value="">请选择月份</option>
                     </select>
                 </div>
-                <div class="col-md-3">
-                    <label class="form-label">未发薪工资表所属月份（自动扩展至当前月）</label>
-                    <select id="unpaidMonth" class="form-select">
+                <div class="col-md-2">
+                    <label class="form-label">发薪月份（结束）</label>
+                    <select id="payMonthEnd" class="form-select">
+                        <option value="">同起始</option>
+                    </select>
+                </div>
+                <div class="col-md-2">
+                    <label class="form-label">未发薪所属月份（起始）</label>
+                    <select id="unpaidMonthStart" class="form-select">
                         <option value="">不使用</option>
+                    </select>
+                </div>
+                <div class="col-md-2">
+                    <label class="form-label">未发薪所属月份（结束）</label>
+                    <select id="unpaidMonthEnd" class="form-select">
+                        <option value="">同起始</option>
                     </select>
                 </div>
             </div>
             <div class="row g-2 align-items-end mt-1">
-                <div class="col-md-3">
-                    <label class="form-label">合同签署时间（选中月份至上报月份）</label>
+                <div class="col-md-2">
+                    <label class="form-label">合同签署时间</label>
                     <select id="contractMonth" class="form-select">
                         <option value="">不使用</option>
                     </select>
                 </div>
-                <div class="col-md-3">
-                    <label class="form-label">离职时间截止日期（默认 = 最近发薪日期，离职日期不能超过）</label>
+                <div class="col-md-2">
+                    <label class="form-label">离职时间截止日期（默认 = 最近发薪日期）</label>
                     <input type="date" id="terminationDeadline" class="form-control">
                 </div>
-                <div class="col-md-3 d-flex align-items-end pb-2">
+                <div class="col-md-2 d-flex align-items-end pb-2">
                     <span class="text-muted" style="font-size: 0.9rem;">最近一笔工资发放日期：<strong id="latestPayDate">查询中...</strong></span>
                 </div>
                 <div class="col-md-2">
                     <button id="btnCompare" class="btn btn-primary w-100">开始比对</button>
+                </div>
+            </div>
+            <div class="row g-2 align-items-end mt-1">
+                <div class="col-md-12">
+                    <div class="form-check">
+                        <input class="form-check-input" type="checkbox" id="enablePayTime">
+                        <label class="form-check-label" for="enablePayTime">启用发薪经办时间精确过滤（默认关闭，精确到时分秒）</label>
+                    </div>
+                </div>
+                <div class="col-md-4" id="payStartTimeBox" style="display:none;">
+                    <label class="form-label">发薪经办时间（起始）</label>
+                    <input type="datetime-local" id="payStartTime" class="form-control">
+                </div>
+                <div class="col-md-4" id="payEndTimeBox" style="display:none;">
+                    <label class="form-label">发薪经办时间（结束）</label>
+                    <input type="datetime-local" id="payEndTime" class="form-control">
                 </div>
             </div>
             <div class="row g-2 align-items-end mt-1">
@@ -139,9 +167,16 @@
 <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
 <script>
     const exportFile = document.getElementById('exportFile');
-    const payMonth = document.getElementById('payMonth');
-    const unpaidMonth = document.getElementById('unpaidMonth');
+    const payMonthStart = document.getElementById('payMonthStart');
+    const payMonthEnd = document.getElementById('payMonthEnd');
+    const unpaidMonthStart = document.getElementById('unpaidMonthStart');
+    const unpaidMonthEnd = document.getElementById('unpaidMonthEnd');
     const contractMonth = document.getElementById('contractMonth');
+    const enablePayTime = document.getElementById('enablePayTime');
+    const payStartTime = document.getElementById('payStartTime');
+    const payEndTime = document.getElementById('payEndTime');
+    const payStartTimeBox = document.getElementById('payStartTimeBox');
+    const payEndTimeBox = document.getElementById('payEndTimeBox');
     const terminationDeadline = document.getElementById('terminationDeadline');
     const handlerFilter = document.getElementById('handlerFilter');
     const unitFilter = document.getElementById('unitFilter');
@@ -183,11 +218,13 @@
             const months = await resp.json();
             let options = '<option value="">请选择月份</option>';
             months.forEach(m => { options += `<option value="${m.value}">${m.label}</option>`; });
-            payMonth.innerHTML = options;
-            unpaidMonth.innerHTML = '<option value="">不使用</option>' + options.slice('<option value="">请选择月份</option>'.length);
+            payMonthStart.innerHTML = options;
+            payMonthEnd.innerHTML = '<option value="">同起始</option>' + options.slice('<option value="">请选择月份</option>'.length);
+            unpaidMonthStart.innerHTML = '<option value="">不使用</option>' + options.slice('<option value="">请选择月份</option>'.length);
+            unpaidMonthEnd.innerHTML = '<option value="">同起始</option>' + options.slice('<option value="">请选择月份</option>'.length);
             contractMonth.innerHTML = '<option value="">不使用</option>' + options.slice('<option value="">请选择月份</option>'.length);
         } catch (e) {
-            payMonth.innerHTML = '<option value="">加载失败，请刷新重试</option>';
+            payMonthStart.innerHTML = '<option value="">加载失败，请刷新重试</option>';
             showError(`加载月份列表失败: ${e.message}`);
         }
     }
@@ -200,12 +237,25 @@
             const data = await resp.json();
             if (data.month) {
                 const m = String(data.month);
-                const opt = Array.from(payMonth.options).find(o => o.value === m);
-                if (opt) payMonth.value = m;
-                const opt2 = Array.from(unpaidMonth.options).find(o => o.value === m);
-                if (opt2) unpaidMonth.value = m;
+                // 发薪: 起始=默认上报月, 结束=同起始
+                const opt = Array.from(payMonthStart.options).find(o => o.value === m);
+                if (opt) {
+                    payMonthStart.value = m;
+                    payMonthEnd.value = m;
+                }
+                // 未发薪: 起始=默认上报月, 结束=同起始
+                const opt2 = Array.from(unpaidMonthStart.options).find(o => o.value === m);
+                if (opt2) {
+                    unpaidMonthStart.value = m;
+                    unpaidMonthEnd.value = m;
+                }
                 const opt3 = Array.from(contractMonth.options).find(o => o.value === m);
                 if (opt3) contractMonth.value = m;
+                // 经办时间默认值: 起始月第一天 00:00 ~ 结束月最后一天 23:59
+                const y = Math.floor(m / 100), mo = m % 100;
+                payStartTime.value = `${y}-${String(mo).padStart(2, '0')}-01T00:00`;
+                const lastDay = new Date(y, mo, 0).getDate();
+                payEndTime.value = `${y}-${String(mo).padStart(2, '0')}-${String(lastDay).padStart(2, '0')}T23:59`;
             }
         } catch (e) { /* 保持默认空选 */ }
         loadFilters();
@@ -244,7 +294,7 @@
     }
 
     async function loadFilters() {
-        const m = payMonth.value;
+        const m = payMonthStart.value;
         if (!m) {
             handlerFilter.innerHTML = '<option value="">全部经办人</option>';
             unitFilter.innerHTML = '<option value="">全部结算单元</option>';
@@ -264,6 +314,11 @@
         } catch (e) { /* 静默失败 */ }
     }
 
+    enablePayTime.addEventListener('change', function() {
+        payStartTimeBox.style.display = this.checked ? 'block' : 'none';
+        payEndTimeBox.style.display = this.checked ? 'block' : 'none';
+    });
+
     function filterOptions(searchEl, selectEl) {
         const kw = searchEl.value.trim().toLowerCase();
         const selected = Array.from(selectEl.selectedOptions).map(o => o.value);
@@ -278,14 +333,41 @@
     unitSearch.addEventListener('input', () => filterOptions(unitSearch, unitFilter));
     deptSearch.addEventListener('input', () => filterOptions(deptSearch, deptFilter));
 
-    payMonth.addEventListener('change', loadFilters);
+    payMonthStart.addEventListener('change', function() {
+        // 结束默认跟随起始
+        if (!payMonthEnd.value || payMonthEnd.value === payMonthStart.value) {
+            payMonthEnd.value = payMonthStart.value;
+        }
+        loadFilters();
+    });
+    payMonthEnd.addEventListener('change', function() {
+        if (payMonthEnd.value && payMonthStart.value && payMonthEnd.value < payMonthStart.value) {
+            showError('发薪月份(结束)不能早于(起始)');
+            payMonthEnd.value = payMonthStart.value;
+            return;
+        }
+        hideError();
+    });
+    unpaidMonthStart.addEventListener('change', function() {
+        if (!unpaidMonthEnd.value || unpaidMonthEnd.value === unpaidMonthStart.value) {
+            unpaidMonthEnd.value = unpaidMonthStart.value;
+        }
+    });
+    unpaidMonthEnd.addEventListener('change', function() {
+        if (unpaidMonthEnd.value && unpaidMonthStart.value && unpaidMonthEnd.value < unpaidMonthStart.value) {
+            showError('未发薪所属月份(结束)不能早于(起始)');
+            unpaidMonthEnd.value = unpaidMonthStart.value;
+            return;
+        }
+        hideError();
+    });
 
     btnCompare.addEventListener('click', async function() {
         hideError();
         resultCard.style.display = 'none';
         const file = exportFile.files[0];
         if (!file) { showError('请先上传个税端导出文件'); return; }
-        if (!payMonth.value) { showError('请选择发薪月份'); return; }
+        if (!payMonthStart.value) { showError('请选择发薪月份(起始)'); return; }
         const deadline = terminationDeadline.value;
         if (!deadline) { showError('请设置离职时间截止日期'); return; }
 
@@ -294,10 +376,20 @@
         try {
             const form = new FormData();
             form.append('file', file);
-            form.append('pay_month', payMonth.value);
-            if (unpaidMonth.value) form.append('unpaid_salary_month', unpaidMonth.value);
+            form.append('pay_month_start', payMonthStart.value);
+            form.append('pay_month_end', payMonthEnd.value || payMonthStart.value);
+            if (unpaidMonthStart.value) {
+                form.append('unpaid_month_start', unpaidMonthStart.value);
+                form.append('unpaid_month_end', unpaidMonthEnd.value || unpaidMonthStart.value);
+            }
             if (contractMonth.value) form.append('contract_month', contractMonth.value);
             form.append('termination_deadline', deadline);
+            if (enablePayTime.checked) {
+                if (!payStartTime.value) { showError('请填写发薪经办时间(起始)'); btnCompare.disabled = false; loading.style.display = 'none'; return; }
+                if (!payEndTime.value) { showError('请填写发薪经办时间(结束)'); btnCompare.disabled = false; loading.style.display = 'none'; return; }
+                form.append('pay_start_time', payStartTime.value);
+                form.append('pay_end_time', payEndTime.value);
+            }
             Array.from(handlerFilter.selectedOptions).forEach(o => { if (o.value) form.append('handler', o.value); });
             Array.from(unitFilter.selectedOptions).forEach(o => { if (o.value) form.append('unit', o.value); });
             Array.from(deptFilter.selectedOptions).forEach(o => { if (o.value) form.append('dept', o.value); });
@@ -305,7 +397,7 @@
             const data = await resp.json();
             if (!resp.ok || data.error) { showError(data.error || '比对失败，请稍后重试'); return; }
 
-            const label = payMonth.options[payMonth.selectedIndex] ? payMonth.options[payMonth.selectedIndex].text : payMonth.value;
+            const label = payMonthStart.options[payMonthStart.selectedIndex] ? payMonthStart.options[payMonthStart.selectedIndex].text : payMonthStart.value;
             statMonth.textContent = label;
             statTaxTotal.textContent = data.tax_total;
             statPayrollTotal.textContent = data.payroll_total;

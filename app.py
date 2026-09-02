@@ -588,9 +588,10 @@ def api_personnel_compare():
 
     参数:
     - file: 个税端导出文件 (.xls)
-    - pay_month: 发薪月份 (选中月份至最近发薪月份自动扩展)
-    - unpaid_salary_month: 未发薪工资表所属月份 (选中月份至当前月自动扩展)
-    - contract_month: 合同签署时间 (选中月份当月1日至上报月份最后一天)
+    - pay_month_start/pay_month_end: 发薪月份时间段 (显式起止)
+    - unpaid_month_start/unpaid_month_end: 未发薪工资表所属月份时间段 (显式起止)
+    - pay_start_time/pay_end_time: 可选发薪经办时间 (精确到时分秒, 默认关闭)
+    - contract_month: 合同签署时间 (选中月份当月1日至起始发薪月份最后一天)
     - termination_deadline: 离职时间截止日期 (默认最近发薪日期)
     """
     try:
@@ -605,18 +606,29 @@ def api_personnel_compare():
         file = request.files.get("file")
         if not file:
             return jsonify({"error": "请上传个税端导出文件"}), 400
-        pay_month = int(request.form.get("pay_month", 0) or 0)
-        if not pay_month:
-            return jsonify({"error": "请选择发薪月份"}), 400
-        unpaid_month = int(request.form.get("unpaid_salary_month", 0) or 0)
+        pay_month_start = int(request.form.get("pay_month_start", 0) or 0)
+        if not pay_month_start:
+            return jsonify({"error": "请选择发薪月份(起始)"}), 400
+        pay_month_end = int(request.form.get("pay_month_end", 0) or pay_month_start)
+        if pay_month_end < pay_month_start:
+            return jsonify({"error": "发薪月份(结束)不能早于(起始)"}), 400
+        unpaid_month_start = int(request.form.get("unpaid_month_start", 0) or 0)
+        unpaid_month_end = int(request.form.get("unpaid_month_end", 0) or unpaid_month_start)
+        if unpaid_month_start and unpaid_month_end < unpaid_month_start:
+            return jsonify({"error": "未发薪所属月份(结束)不能早于(起始)"}), 400
         contract_month = int(request.form.get("contract_month", 0) or 0)
+        # 可选经办时间过滤 (精确到时分秒, 默认关闭)
+        pay_start_time = request.form.get("pay_start_time", "").strip()
+        pay_end_time = request.form.get("pay_end_time", "").strip()
+        from datetime import datetime as _dt
+        pay_start_dt = _dt.strptime(pay_start_time, "%Y-%m-%dT%H:%M") if pay_start_time else None
+        pay_end_dt = _dt.strptime(pay_end_time, "%Y-%m-%dT%H:%M") if pay_end_time else None
         filter_handlers = [h for h in request.form.getlist("handler") if h.strip()]
         filter_units = [int(u) for u in request.form.getlist("unit") if u.strip()]
         filter_depts = [d for d in request.form.getlist("dept") if d.strip()]
         deadline = request.form.get("termination_deadline", "").strip()
         deadline_date = None
         if deadline:
-            from datetime import datetime as _dt
             try:
                 deadline_date = _dt.strptime(deadline, "%Y-%m-%d").date()
             except ValueError:
@@ -638,27 +650,27 @@ def api_personnel_compare():
             return jsonify({"error": "导出文件中未解析到有效人员记录"}), 400
 
         conn = get_connection()
-        # 发薪月份范围: 选中月份 → 最近发薪月份
-        pay_months = get_pay_month_range(pay_month, conn)
+        # 发薪月份范围: 用户显式选择 [起始, 结束]
+        pay_months = list(range(pay_month_start, pay_month_end + 1))
         payroll_certs = set()
         payroll_personnel = []
         seen = set()
         for m in pay_months:
-            payroll_certs |= get_payroll_cert_numbers(conn, m)
-            for p in get_payroll_personnel(conn, m):
+            payroll_certs |= get_payroll_cert_numbers(conn, m, start_time=pay_start_dt, end_time=pay_end_dt)
+            for p in get_payroll_personnel(conn, m, start_time=pay_start_dt, end_time=pay_end_dt):
                 if p.身份证 and p.身份证 not in seen:
                     seen.add(p.身份证)
                     payroll_personnel.append(p)
-        # 未发薪工资表: 选中所属月份 → 当前月
+        # 未发薪工资表: 用户显式选择 [起始, 结束]
         unpaid_persons = set()
-        if unpaid_month:
-            unpaid_months = get_unpaid_month_range(unpaid_month)
+        unpaid_months = []
+        if unpaid_month_start:
+            unpaid_months = list(range(unpaid_month_start, unpaid_month_end + 1))
             unpaid_persons = get_unpaid_salary_persons(conn, unpaid_months)
-        # 合同签署: 选中月份当月1日 → 上报月份最后一天
+        # 合同签署: 选中月份当月1日 → 起始发薪月份最后一天
         contract_persons = set()
         if contract_month:
-            _, report_pay_date = get_latest_pay_date(conn)
-            start_date, end_date = get_contract_date_range(contract_month, pay_month)
+            start_date, end_date = get_contract_date_range(contract_month, pay_month_start)
             contract_persons = get_contract_signed_persons(conn, start_date, end_date)
         # 疑似近期离职: 个税端未标记离职(无离职日期)且不在发薪/未发薪/合同名单
         active_certs = {
@@ -686,11 +698,9 @@ def api_personnel_compare():
         zero_codes = get_zero_salary_unit_codes()
         excl_codes = get_excluded_unit_codes()
         if zero_codes:
-            unpaid_ms = get_unpaid_month_range(unpaid_month) if unpaid_month else []
-            exclude_certs |= get_zero_salary_certs(conn, pay_months, unpaid_ms, zero_codes)
+            exclude_certs |= get_zero_salary_certs(conn, pay_months, unpaid_months, zero_codes)
         if excl_codes:
-            relevant_months = sorted(set(pay_months) | set(
-                get_unpaid_month_range(unpaid_month) if unpaid_month else []))
+            relevant_months = sorted(set(pay_months) | set(unpaid_months))
             exclude_certs |= get_excluded_unit_certs(conn, pay_months, excl_codes,
                                                      relevant_months=relevant_months)
         # 经办人/结算单元/单位过滤 + 备注(结算单元名称)数据
@@ -743,7 +753,6 @@ def api_personnel_compare():
         from templates_gen.personnel_compare import (IDX_证件号码, build_verify_row,
                                                      map_personnel_info_to_row as _map_row)
         add_certs_final = {r[IDX_证件号码] for r in add_rows}
-        unpaid_months = get_unpaid_month_range(unpaid_month) if unpaid_month else []
         verify_params = {
             "pay_months": pay_months,
             "unpaid_months": unpaid_months,
@@ -816,7 +825,7 @@ def api_personnel_compare():
             for r in recs_sorted[:2]:
                 tc90_rows.append([r["cert"], r["姓名"], r["unit_code"], r["unit_name"],
                                   r["合同开始日期"], r["合同终止日期"], r["单位名称"], r["经办人"]])
-        month_label = str(pay_month)
+        month_label = f"{pay_month_start}-{pay_month_end}" if pay_month_end != pay_month_start else str(pay_month_start)
         result = generate_compare_excel(add_rows, departed_rows, pending_rows, stats, OUTPUT_DIR, month_label,
                                         verify_rows=verify_rows, tc93_rows=tc93_rows,
                                         tc8m_rows=tc8m_rows, tc90_rows=tc90_rows)

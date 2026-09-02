@@ -501,12 +501,13 @@ def get_latest_pay_date(conn):
         return int(row[0]), row[1]
 
 
-def get_payroll_cert_numbers(conn, pay_month: int) -> Set[str]:
+def get_payroll_cert_numbers(conn, pay_month: int, start_time=None, end_time=None) -> Set[str]:
     """按发放月份(经办年月)查询全部发薪人员的身份证号集合。
 
     发放月份 = TC8M.ATC8G7 (经办年月), 且 ATC8M3='2'(已发放);
     TC93.ATC93G='1' 表示已结算。通过 (ATB930, ATC931, ATC937)
     三元组关联 TC93 与 TC8M, 左连 AC01 取身份证号。
+    start_time/end_time: 可选, 按 TC8M.AAE036 经办时间精确过滤 (时分秒)。
     返回统一大写的证件号码集合(处理末位 X), 用于增减员比对。
     """
     sql = """
@@ -520,10 +521,19 @@ def get_payroll_cert_numbers(conn, pay_month: int) -> Set[str]:
           AND m.ATC8M3 = 2
           AND t93.ATC93G = '1'
           AND ac01.AAC002 IS NOT NULL
+          {time_cond}
     """
+    binds = {"pay_month": pay_month}
+    time_cond = ""
+    if start_time:
+        time_cond += " AND m.AAE036 >= :start_time"
+        binds["start_time"] = start_time
+    if end_time:
+        time_cond += " AND m.AAE036 <= :end_time"
+        binds["end_time"] = end_time
     certs = set()
     with conn.cursor() as cursor:
-        cursor.execute(sql, {"pay_month": pay_month})
+        cursor.execute(sql.format(time_cond=time_cond), binds)
         for row in cursor.fetchall():
             cert = str(row[0] or "").strip().upper()
             if cert:
@@ -563,13 +573,14 @@ def get_tc90_termination_dates(conn, cert_numbers) -> Dict[str, datetime]:
     return dates
 
 
-def get_payroll_personnel(conn, pay_month: int) -> List[PersonnelInfo]:
+def get_payroll_personnel(conn, pay_month: int, start_time=None, end_time=None) -> List[PersonnelInfo]:
     """按发放月份(经办年月)查询全部发薪人员详细信息, 用于增员模板。
 
     与 get_payroll_cert_numbers 相同的 TC8M 关联口径, 按个人编号去重,
     手机号/出生日期取 MAX 避免同人多行。性别码 1/2 转换为 男/女。
     任职受雇从业日期取 TC90.ATC90C 合同开始日期 (多行历史合同时取最早)。
     按证件号分组取 MAX(工号) 避免同人多行 (同一证件号可能有历史工号)。
+    start_time/end_time: 可选, 按 TC8M.AAE036 经办时间精确过滤 (时分秒)。
     """
     sql = """
         SELECT
@@ -591,13 +602,22 @@ def get_payroll_personnel(conn, pay_month: int) -> List[PersonnelInfo]:
           AND m.ATC8M3 = 2
           AND t93.ATC93G = '1'
           AND ac01.AAC002 IS NOT NULL
+          {time_cond}
         GROUP BY ac01.AAC002
         ORDER BY MAX(ac01.AAC003)
     """
+    binds = {"pay_month": pay_month}
+    time_cond = ""
+    if start_time:
+        time_cond += " AND m.AAE036 >= :start_time"
+        binds["start_time"] = start_time
+    if end_time:
+        time_cond += " AND m.AAE036 <= :end_time"
+        binds["end_time"] = end_time
     gender_map = {"1": "男", "2": "女"}
     people = []
     with conn.cursor() as cursor:
-        cursor.execute(sql, {"pay_month": pay_month})
+        cursor.execute(sql.format(time_cond=time_cond), binds)
         for row in cursor.fetchall():
             id_card = str(row[2] or "").strip().upper()
             birthday = ""
