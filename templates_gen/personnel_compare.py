@@ -158,7 +158,7 @@ def build_verify_row(add_row, cert, params, paid_salary_details, unpaid_salary_d
     Args:
         add_row: 51 列增员行 (作为前 51 列)
         cert: 证件号码
-        params: {pay_months, unpaid_months, contract_month}
+        params: {pay_months, unpaid_months, contract_start, contract_end}
         paid_salary_details: 该人发薪对应的 TC93 工资记录 (按发薪记录所属月份)
         unpaid_salary_details: 该人未发薪范围的 TC93 工资记录 (所属月份范围)
         tc8m_details: 该人 TC8M 发放记录列表 (发薪月份范围)
@@ -220,6 +220,10 @@ def build_verify_row(add_row, cert, params, paid_salary_details, unpaid_salary_d
         {str(c.get("handler") or c.get("经办人") or "") for c in contract_details
          if c.get("handler") or c.get("经办人")}))
 
+    contract_time = ""
+    if params.get("contract_start") or params.get("contract_end"):
+        contract_time = f"{params.get('contract_start')} ~ {params.get('contract_end')}"
+
     return add_row + [
         reason_str,
         # 发薪块
@@ -243,7 +247,7 @@ def build_verify_row(add_row, cert, params, paid_salary_details, unpaid_salary_d
         round(sum(r["公积金"] for r in unpaid), 2),
         unpaid_handlers,
         # 合同块
-        str(params["contract_month"] or ""),
+        contract_time,
         "是" if has_contract else "否",
         contract_start or "",
         contract_handlers,

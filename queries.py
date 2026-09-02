@@ -751,21 +751,31 @@ def get_contract_date_range(selected_month: int, report_month: int):
     return start_date, end_date
 
 
-def get_contract_signed_persons(conn, start_date: str, end_date: str) -> Set[str]:
-    """查询合同开始日期 (TC90.ATC90C) 在指定范围内的人员证件号集合。
+def get_contract_signed_persons(conn, start_dt, end_dt) -> Set[str]:
+    """查询合同开始日期 (TC90.ATC90C) 在指定时间范围内的人员证件号集合。
 
+    start_dt/end_dt: datetime 对象, 精确到时分秒 (None 表示不限该端)。
     返回统一大写的证件号码集合。
     """
+    if start_dt is None and end_dt is None:
+        return set()
     certs = set()
     sql = """
         SELECT DISTINCT AAC002
         FROM TC90
-        WHERE ATC90C >= TO_DATE(:start_date, 'YYYY-MM-DD')
-          AND ATC90C <= TO_DATE(:end_date, 'YYYY-MM-DD')
-          AND AAC002 IS NOT NULL
+        WHERE AAC002 IS NOT NULL
+          {cond}
     """
+    cond = ""
+    binds = {}
+    if start_dt is not None:
+        cond += " AND ATC90C >= TO_DATE(:start_dt, 'YYYY-MM-DD HH24:MI:SS')"
+        binds["start_dt"] = start_dt.strftime("%Y-%m-%d %H:%M:%S")
+    if end_dt is not None:
+        cond += " AND ATC90C <= TO_DATE(:end_dt, 'YYYY-MM-DD HH24:MI:SS')"
+        binds["end_dt"] = end_dt.strftime("%Y-%m-%d %H:%M:%S")
     with conn.cursor() as cursor:
-        cursor.execute(sql, {"start_date": start_date, "end_date": end_date})
+        cursor.execute(sql.format(cond=cond), binds)
         for row in cursor.fetchall():
             cert = str(row[0] or "").strip().upper()
             if cert:

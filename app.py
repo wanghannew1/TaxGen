@@ -591,7 +591,7 @@ def api_personnel_compare():
     - pay_month_start/pay_month_end: 发薪月份时间段 (显式起止)
     - unpaid_month_start/unpaid_month_end: 未发薪工资表所属月份时间段 (显式起止)
     - pay_start_time/pay_end_time: 可选发薪经办时间 (精确到时分秒, 默认关闭)
-    - contract_month: 合同签署时间 (选中月份当月1日至起始发薪月份最后一天)
+    - contract_start_time/contract_end_time: 合同签署时间范围 (精确到时分秒, 可选)
     - termination_deadline: 离职时间截止日期 (默认最近发薪日期)
     """
     try:
@@ -616,7 +616,11 @@ def api_personnel_compare():
         unpaid_month_end = int(request.form.get("unpaid_month_end", 0) or unpaid_month_start)
         if unpaid_month_start and unpaid_month_end < unpaid_month_start:
             return jsonify({"error": "未发薪所属月份(结束)不能早于(起始)"}), 400
-        contract_month = int(request.form.get("contract_month", 0) or 0)
+        contract_start_time = request.form.get("contract_start_time", "").strip()
+        contract_end_time = request.form.get("contract_end_time", "").strip()
+        from datetime import datetime as _dt
+        contract_start_dt = _dt.strptime(contract_start_time, "%Y-%m-%dT%H:%M") if contract_start_time else None
+        contract_end_dt = _dt.strptime(contract_end_time, "%Y-%m-%dT%H:%M") if contract_end_time else None
         # 可选经办时间过滤 (精确到时分秒, 默认关闭)
         pay_start_time = request.form.get("pay_start_time", "").strip()
         pay_end_time = request.form.get("pay_end_time", "").strip()
@@ -667,11 +671,10 @@ def api_personnel_compare():
         if unpaid_month_start:
             unpaid_months = list(range(unpaid_month_start, unpaid_month_end + 1))
             unpaid_persons = get_unpaid_salary_persons(conn, unpaid_months)
-        # 合同签署: 选中月份当月1日 → 起始发薪月份最后一天
+        # 合同签署: 合同开始日期在起始~结束时间范围内 (精确到时分秒)
         contract_persons = set()
-        if contract_month:
-            start_date, end_date = get_contract_date_range(contract_month, pay_month_start)
-            contract_persons = get_contract_signed_persons(conn, start_date, end_date)
+        if contract_start_dt or contract_end_dt:
+            contract_persons = get_contract_signed_persons(conn, contract_start_dt, contract_end_dt)
         # 疑似近期离职: 个税端未标记离职(无离职日期)且不在发薪/未发薪/合同名单
         active_certs = {
             str(p.get("证件号码") or "").strip().upper()
@@ -756,7 +759,8 @@ def api_personnel_compare():
         verify_params = {
             "pay_months": pay_months,
             "unpaid_months": unpaid_months,
-            "contract_month": contract_month or 0,
+            "contract_start": contract_start_dt.strftime("%Y-%m-%d %H:%M") if contract_start_dt else "",
+            "contract_end": contract_end_dt.strftime("%Y-%m-%d %H:%M") if contract_end_dt else "",
         }
         salary_details = get_salary_details(conn, add_certs_final,
                                             sorted(set(pay_months + unpaid_months)))

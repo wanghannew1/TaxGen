@@ -78,10 +78,12 @@
             </div>
             <div class="row g-2 align-items-end mt-1">
                 <div class="col-md-2">
-                    <label class="form-label">合同签署时间</label>
-                    <select id="contractMonth" class="form-select">
-                        <option value="">不使用</option>
-                    </select>
+                    <label class="form-label">合同签署时间（起始，可选）</label>
+                    <input type="datetime-local" id="contractStartTime" class="form-control">
+                </div>
+                <div class="col-md-2">
+                    <label class="form-label">合同签署时间（结束）</label>
+                    <input type="datetime-local" id="contractEndTime" class="form-control">
                 </div>
                 <div class="col-md-2">
                     <label class="form-label">离职时间截止日期（默认 = 最近发薪日期）</label>
@@ -171,7 +173,8 @@
     const payMonthEnd = document.getElementById('payMonthEnd');
     const unpaidMonthStart = document.getElementById('unpaidMonthStart');
     const unpaidMonthEnd = document.getElementById('unpaidMonthEnd');
-    const contractMonth = document.getElementById('contractMonth');
+    const contractStartTime = document.getElementById('contractStartTime');
+    const contractEndTime = document.getElementById('contractEndTime');
     const enablePayTime = document.getElementById('enablePayTime');
     const payStartTime = document.getElementById('payStartTime');
     const payEndTime = document.getElementById('payEndTime');
@@ -222,7 +225,6 @@
             payMonthEnd.innerHTML = '<option value="">同起始</option>' + options.slice('<option value="">请选择月份</option>'.length);
             unpaidMonthStart.innerHTML = '<option value="">不使用</option>' + options.slice('<option value="">请选择月份</option>'.length);
             unpaidMonthEnd.innerHTML = '<option value="">同起始</option>' + options.slice('<option value="">请选择月份</option>'.length);
-            contractMonth.innerHTML = '<option value="">不使用</option>' + options.slice('<option value="">请选择月份</option>'.length);
         } catch (e) {
             payMonthStart.innerHTML = '<option value="">加载失败，请刷新重试</option>';
             showError(`加载月份列表失败: ${e.message}`);
@@ -249,12 +251,18 @@
                     unpaidMonthStart.value = m;
                     unpaidMonthEnd.value = m;
                 }
-                const opt3 = Array.from(contractMonth.options).find(o => o.value === m);
-                if (opt3) contractMonth.value = m;
-                // 经办时间默认值: 起始月第一天 00:00 ~ 结束月最后一天 23:59
+                const opt3 = Array.from(unpaidMonthStart.options).find(o => o.value === m);
+                if (opt3) {
+                    unpaidMonthStart.value = m;
+                    unpaidMonthEnd.value = m;
+                }
+                // 合同签署时间默认值: 起始月第一天 00:00 ~ 最后一天 23:59
                 const y = Math.floor(m / 100), mo = m % 100;
-                payStartTime.value = `${y}-${String(mo).padStart(2, '0')}-01T00:00`;
                 const lastDay = new Date(y, mo, 0).getDate();
+                contractStartTime.value = `${y}-${String(mo).padStart(2, '0')}-01T00:00`;
+                contractEndTime.value = `${y}-${String(mo).padStart(2, '0')}-${String(lastDay).padStart(2, '0')}T23:59`;
+                // 经办时间默认值: 起始月第一天 00:00 ~ 结束月最后一天 23:59
+                payStartTime.value = `${y}-${String(mo).padStart(2, '0')}-01T00:00`;
                 payEndTime.value = `${y}-${String(mo).padStart(2, '0')}-${String(lastDay).padStart(2, '0')}T23:59`;
             }
         } catch (e) { /* 保持默认空选 */ }
@@ -382,7 +390,8 @@
                 form.append('unpaid_month_start', unpaidMonthStart.value);
                 form.append('unpaid_month_end', unpaidMonthEnd.value || unpaidMonthStart.value);
             }
-            if (contractMonth.value) form.append('contract_month', contractMonth.value);
+            if (contractStartTime.value) form.append('contract_start_time', contractStartTime.value);
+            if (contractEndTime.value) form.append('contract_end_time', contractEndTime.value);
             form.append('termination_deadline', deadline);
             if (enablePayTime.checked) {
                 if (!payStartTime.value) { showError('请填写发薪经办时间(起始)'); btnCompare.disabled = false; loading.style.display = 'none'; return; }
