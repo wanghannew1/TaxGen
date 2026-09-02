@@ -967,32 +967,39 @@ def get_zero_salary_certs(conn, pay_month: int, unit_codes: List[int]) -> Set[st
     return certs
 
 
-def get_excluded_unit_certs(conn, pay_months, unit_codes: List[int]) -> Set[str]:
+def get_excluded_unit_certs(conn, pay_months, unit_codes: List[int],
+                            relevant_months: List[int] = None) -> Set[str]:
     """查询完全排除单位 (exclude_all=1) 中应排除的人员证件号。
 
     规则: 仅在排除结算单元有记录的人员才排除 (该单位不论是否发工资都不增员)。
-    例外: 若员工同时在排除单位与未排除单位都有记录, 保留增员
-          (排除单位部分不报税, 未排除单位部分正常报税)。
-    范围: TC93 工资记录 (不限月份) ∪ TC90 合同记录。
+    例外: 若员工在当期 (relevant_months 范围内) 同时有排除单位与未排除单位记录,
+          保留增员 (排除单位部分不报税, 未排除单位部分正常报税)。
+    历史记录 (非当期) 不构成跨单位例外。
+    范围: TC93 工资记录 (当期) ∪ TC90 合同记录。
     unit_codes: 从 config_db 读取的 "完全排除不增员不报税" 结算单元代码列表。
     """
     if not pay_months or not unit_codes:
         return set()
+    # 跨单位例外只认当期相关月份 (发薪月份+未发薪月份范围)
+    months = sorted(set(relevant_months or pay_months))
+    month_ph = ", ".join(f":m{i}" for i in range(len(months)))
+    month_binds = {f"m{i}": m for i, m in enumerate(months)}
     certs = set()
     codes = sorted(set(unit_codes))
-    sql = """
+    sql = f"""
         SELECT DISTINCT ac01.AAC002
         FROM TC93 t93
         LEFT JOIN AC01 ac01 ON t93.AAC001 = ac01.AAC001
         WHERE t93.ATC93G = '1'
           AND ac01.AAC002 IS NOT NULL
-          AND t93.ATB930 IN ({ph1})
+          AND t93.ATB930 IN ({{ph1}})
           AND NOT EXISTS (
               SELECT 1 FROM TC93 t93b
               LEFT JOIN AC01 ac01b ON t93b.AAC001 = ac01b.AAC001
               WHERE t93b.ATC93G = '1'
                 AND ac01b.AAC002 = ac01.AAC002
-                AND t93b.ATB930 NOT IN ({ph2})
+                AND t93b.ATC931 IN ({month_ph})
+                AND t93b.ATB930 NOT IN ({{ph2}})
           )
     """
     with conn.cursor() as cursor:
@@ -1002,23 +1009,31 @@ def get_excluded_unit_certs(conn, pay_months, unit_codes: List[int]) -> Set[str]
             ph2 = ", ".join(f":b{i}" for i in range(len(chunk)))
             binds = {f"a{i}": c for i, c in enumerate(chunk)}
             binds.update({f"b{i}": c for i, c in enumerate(chunk)})
+            binds.update(month_binds)
             cursor.execute(sql.format(ph1=ph1, ph2=ph2), binds)
             for row in cursor.fetchall():
                 cert = str(row[0] or "").strip().upper()
                 if cert:
                     certs.add(cert)
-    # 补充 TC90 合同单位 (无工资记录但有合同), 同样应用跨单位例外
-    sql90 = """
+    # 补充 TC90 合同单位 (无工资记录但有合同), 同样应用跨单位例外 (按合同起止时间过滤)
+    sql90 = f"""
         SELECT DISTINCT t90.AAC002
         FROM TC90 t90
         WHERE t90.AAC002 IS NOT NULL
-          AND t90.ATB930 IN ({ph1})
+          AND t90.ATB930 IN ({{ph1}})
           AND NOT EXISTS (
               SELECT 1 FROM TC90 t90b
               WHERE t90b.AAC002 = t90.AAC002
-                AND t90b.ATB930 NOT IN ({ph2})
+                AND t90b.ATB930 NOT IN ({{ph2}})
+                AND t90b.ATC90C IS NOT NULL
+                AND t90b.ATC90D IS NOT NULL
+                AND NOT (t90b.ATC90D < TO_DATE(:min_m, 'YYYYMMDD') OR t90b.ATC90C > TO_DATE(:max_m, 'YYYYMMDD'))
           )
     """
+    import calendar
+    min_m = f"{min(months)}01"
+    last_day = calendar.monthrange(max(months) // 100, max(months) % 100)[1]
+    max_m = f"{max(months)}{last_day:02d}"
     with conn.cursor() as cursor:
         for start in range(0, len(codes), _IN_BATCH_SIZE):
             chunk = codes[start:start + _IN_BATCH_SIZE]
@@ -1026,6 +1041,7 @@ def get_excluded_unit_certs(conn, pay_months, unit_codes: List[int]) -> Set[str]
             ph2 = ", ".join(f":b{i}" for i in range(len(chunk)))
             binds = {f"a{i}": c for i, c in enumerate(chunk)}
             binds.update({f"b{i}": c for i, c in enumerate(chunk)})
+            binds.update({"min_m": min_m, "max_m": max_m})
             cursor.execute(sql90.format(ph1=ph1, ph2=ph2), binds)
             for row in cursor.fetchall():
                 cert = str(row[0] or "").strip().upper()

@@ -688,7 +688,10 @@ def api_personnel_compare():
         if zero_codes:
             exclude_certs |= get_zero_salary_certs(conn, pay_month, zero_codes)
         if excl_codes:
-            exclude_certs |= get_excluded_unit_certs(conn, pay_months, excl_codes)
+            relevant_months = sorted(set(pay_months) | set(
+                get_unpaid_month_range(unpaid_month) if unpaid_month else []))
+            exclude_certs |= get_excluded_unit_certs(conn, pay_months, excl_codes,
+                                                     relevant_months=relevant_months)
         # 经办人/结算单元/单位过滤 + 备注(结算单元名称)数据
         tax_cert_set = {str(p.get("证件号码") or "").strip().upper()
                         for p in tax_export_persons}
