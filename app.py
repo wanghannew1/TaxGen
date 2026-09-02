@@ -397,15 +397,16 @@ def api_special_units_mode(unit_code):
 
 @app.route("/api/special-units/template")
 def api_special_units_template():
-    """下载特殊结算单元配置导入模板 (简化格式: 配置名称+两种模式)。"""
+    """下载特殊结算单元配置导入模板 (4列: 代码/名称/工资为0/完全排除)。"""
     try:
         from openpyxl import Workbook
         wb = Workbook()
         ws = wb.active
         ws.title = "特殊结算单元配置"
-        ws.append(["配置", "工资为0不增员", "完全排除不增员"])
-        ws.append(["（示例）吉林省林业勘察设计研究院", 1, 0])
-        ws.append(["（示例）长春理工大学", 0, 1])
+        ws.append(["结算单元代码", "结算单元名称", "工资为0不增员不报税", "完全排除不增员不报税"])
+        ws.append([None, "测试A-仅工资0", 1, 0])
+        ws.append([None, "测试B-仅完全排除", 0, 1])
+        ws.append([None, "测试C-两种", 1, 1])
         from datetime import datetime as _dt
         filename = f"特殊结算单元配置导入模板_{_dt.now().strftime('%Y%m%d%H%M%S')}.xlsx"
         wb.save(os.path.join(OUTPUT_DIR, filename))
