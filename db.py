@@ -26,7 +26,7 @@ def init_db():
 
 
 def _ensure_special_unit_table():
-    """确保特殊结算单元配置表存在 (工资为0不增员的结算单元)。"""
+    """确保特殊结算单元配置表存在 (工资为0不增员 / 完全排除不增员)。"""
     try:
         conn = _pool.acquire()
         try:
@@ -37,6 +37,7 @@ def _ensure_special_unit_table():
                         unit_code NUMBER(10) PRIMARY KEY,
                         unit_name VARCHAR2(200),
                         zero_salary_no_add NUMBER(1) DEFAULT 1,
+                        exclude_all NUMBER(1) DEFAULT 0,
                         created_at TIMESTAMP DEFAULT SYSTIMESTAMP
                     )
                     """
@@ -45,6 +46,14 @@ def _ensure_special_unit_table():
             # ORA-00955: name is already used by an existing object → 表已存在
             if "ORA-00955" not in str(e):
                 raise
+            # 兼容旧表: 补充 exclude_all 列
+            try:
+                with conn.cursor() as cursor:
+                    cursor.execute("ALTER TABLE special_unit_config ADD (exclude_all NUMBER(1) DEFAULT 0)")
+            except oracledb.DatabaseError as e2:
+                # ORA-01430: 列已存在 → 忽略
+                if "ORA-01430" not in str(e2):
+                    raise
         finally:
             _pool.release(conn)
     except Exception:

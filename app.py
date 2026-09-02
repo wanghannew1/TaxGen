@@ -365,17 +365,90 @@ def api_special_units_list():
 
 @app.route("/api/special-units", methods=["POST"])
 def api_special_units_add():
-    """新增特殊结算单元配置。"""
+    """新增特殊结算单元配置 (exclude_all=完全排除不增员)。"""
     try:
         from queries import add_special_unit
         data = request.get_json()
         unit_code = int(data.get("unit_code", 0) or 0)
         unit_name = str(data.get("unit_name", "") or "")
+        exclude_all = bool(data.get("exclude_all", False))
         if not unit_code:
             return jsonify({"error": "请填写结算单元代码"}), 400
         conn = get_connection()
-        add_special_unit(conn, unit_code, unit_name)
+        add_special_unit(conn, unit_code, unit_name, exclude_all=exclude_all)
         return jsonify({"ok": True})
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route("/api/special-units/<int:unit_code>/mode", methods=["POST"])
+def api_special_units_mode(unit_code):
+    """更新特殊结算单元配置的排除模式。"""
+    try:
+        from queries import update_special_unit
+        data = request.get_json()
+        exclude_all = bool(data.get("exclude_all", False))
+        conn = get_connection()
+        update_special_unit(conn, unit_code, exclude_all)
+        return jsonify({"ok": True})
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route("/api/special-units/export")
+def api_special_units_export():
+    """导出特殊结算单元配置为 Excel。"""
+    try:
+        from openpyxl import Workbook
+        from queries import get_special_units
+        conn = get_connection()
+        units = get_special_units(conn)
+        wb = Workbook()
+        ws = wb.active
+        ws.title = "特殊结算单元配置"
+        ws.append(["结算单元代码", "结算单元名称", "工资为0不增员", "完全排除不增员"])
+        for u in units:
+            ws.append([u["code"], u["name"], u["zero_salary_no_add"], u["exclude_all"]])
+        from datetime import datetime as _dt
+        filename = f"特殊结算单元配置_{_dt.now().strftime('%Y%m%d%H%M%S')}.xlsx"
+        wb.save(os.path.join(OUTPUT_DIR, filename))
+        return jsonify({"download_url": f"/api/download/{filename}"})
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route("/api/special-units/import", methods=["POST"])
+def api_special_units_import():
+    """从 Excel 导入特殊结算单元配置 (覆盖式)。"""
+    try:
+        from openpyxl import load_workbook
+        from queries import add_special_unit, delete_special_unit
+        file = request.files.get("file")
+        if not file:
+            return jsonify({"error": "请上传配置文件"}), 400
+        tmp_path = os.path.join(OUTPUT_DIR, "_special_units_tmp.xlsx")
+        file.save(tmp_path)
+        try:
+            wb = load_workbook(tmp_path, data_only=True)
+            ws = wb.active
+            units = []
+            for row in ws.iter_rows(min_row=2, values_only=True):
+                if not row or row[0] is None:
+                    continue
+                code = int(row[0])
+                name = str(row[1] or "")
+                zero_flag = int(row[2] or 0)
+                exclude_all = int(row[3] or 0)
+                units.append({"code": code, "name": name,
+                              "zero_salary_no_add": zero_flag, "exclude_all": exclude_all})
+        finally:
+            if os.path.exists(tmp_path):
+                os.remove(tmp_path)
+        conn = get_connection()
+        delete_special_unit(conn, None)  # 清空 (用特殊值 None 触发全部删除)
+        for u in units:
+            add_special_unit(conn, u["code"], u["name"], exclude_all=bool(u["exclude_all"]))
+        return jsonify({"ok": True, "count": len(units)})
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
@@ -533,9 +606,12 @@ def api_personnel_compare():
         add_rows, departed_rows, pending_rows, stats = compare_personnel(
             tax_export_persons, payroll_certs, payroll_personnel, termination_dates,
             unpaid_persons=unpaid_persons, contract_signed_persons=contract_persons)
-        # 特殊结算单元: 工资为0不增员
-        from queries import get_special_units, get_zero_salary_certs, get_person_units
-        exclude_certs = get_zero_salary_certs(conn, pay_month) if get_special_units(conn) else set()
+        # 特殊结算单元: 工资为0不增员 + 完全排除单位不增员
+        from queries import get_special_units, get_zero_salary_certs, get_excluded_unit_certs, get_person_units
+        exclude_certs = set()
+        if get_special_units(conn):
+            exclude_certs |= get_zero_salary_certs(conn, pay_month)
+            exclude_certs |= get_excluded_unit_certs(conn, pay_months)
         # 经办人/结算单元/单位过滤 + 备注(结算单元名称)数据
         tax_cert_set = {str(p.get("证件号码") or "").strip().upper()
                         for p in tax_export_persons}

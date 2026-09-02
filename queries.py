@@ -928,24 +928,40 @@ def get_special_units(conn) -> List[dict]:
     """查询特殊结算单元配置列表。"""
     with conn.cursor() as cursor:
         cursor.execute(
-            "SELECT unit_code, unit_name, zero_salary_no_add FROM special_unit_config ORDER BY unit_code")
+            "SELECT unit_code, unit_name, zero_salary_no_add, exclude_all FROM special_unit_config ORDER BY unit_code")
         return [{"code": int(r[0]), "name": str(r[1] or ""),
-                 "zero_salary_no_add": int(r[2] or 0)} for r in cursor.fetchall()]
+                 "zero_salary_no_add": int(r[2] or 0),
+                 "exclude_all": int(r[3] or 0)} for r in cursor.fetchall()]
 
 
-def add_special_unit(conn, unit_code: int, unit_name: str = "") -> None:
-    """新增特殊结算单元配置。"""
+def add_special_unit(conn, unit_code: int, unit_name: str = "", exclude_all: bool = False) -> None:
+    """新增特殊结算单元配置。
+
+    exclude_all=True 表示该结算单元完全不增员/不报个税 (不论是否有工资)。
+    """
     with conn.cursor() as cursor:
         cursor.execute(
-            "INSERT INTO special_unit_config (unit_code, unit_name, zero_salary_no_add) VALUES (:c, :n, 1)",
-            {"c": unit_code, "n": unit_name})
+            "INSERT INTO special_unit_config (unit_code, unit_name, zero_salary_no_add, exclude_all) VALUES (:c, :n, 1, :e)",
+            {"c": unit_code, "n": unit_name, "e": 1 if exclude_all else 0})
+    conn.commit()
+
+
+def update_special_unit(conn, unit_code: int, exclude_all: bool) -> None:
+    """更新特殊结算单元配置的排除模式。"""
+    with conn.cursor() as cursor:
+        cursor.execute(
+            "UPDATE special_unit_config SET exclude_all = :e WHERE unit_code = :c",
+            {"e": 1 if exclude_all else 0, "c": unit_code})
     conn.commit()
 
 
 def delete_special_unit(conn, unit_code: int) -> None:
-    """删除特殊结算单元配置。"""
+    """删除特殊结算单元配置 (unit_code 为 None 时清空全部)。"""
     with conn.cursor() as cursor:
-        cursor.execute("DELETE FROM special_unit_config WHERE unit_code = :c", {"c": unit_code})
+        if unit_code is None:
+            cursor.execute("DELETE FROM special_unit_config")
+        else:
+            cursor.execute("DELETE FROM special_unit_config WHERE unit_code = :c", {"c": unit_code})
     conn.commit()
 
 
@@ -953,6 +969,7 @@ def get_zero_salary_certs(conn, pay_month: int) -> Set[str]:
     """查询指定发薪月份合计工资为0的结算单元中的人员证件号集合。
 
     用途: 特殊结算单元(如二院)当月多批次合计工资为0时, 这些人员不增员。
+    仅排除 zero_salary_no_add=1 且 exclude_all=0 的单位。
     """
     certs = set()
     sql = """
@@ -967,12 +984,74 @@ def get_zero_salary_certs(conn, pay_month: int) -> Set[str]:
           AND t93.ATC93G = '1'
           AND ac01.AAC002 IS NOT NULL
           AND t93.ATB930 IN (
-              SELECT unit_code FROM special_unit_config WHERE zero_salary_no_add = 1
+              SELECT unit_code FROM special_unit_config
+              WHERE zero_salary_no_add = 1 AND exclude_all = 0
           )
           AND NVL(t93.ATC93AA, 0) = 0
     """
     with conn.cursor() as cursor:
         cursor.execute(sql, {"pay_month": pay_month})
+        for row in cursor.fetchall():
+            cert = str(row[0] or "").strip().upper()
+            if cert:
+                certs.add(cert)
+    return certs
+
+
+def get_excluded_unit_certs(conn, pay_months) -> Set[str]:
+    """查询完全排除单位 (exclude_all=1) 中应排除的人员证件号。
+
+    规则: 仅在排除结算单元有记录的人员才排除 (该单位不论是否发工资都不增员)。
+    例外: 若员工同时在排除单位与未排除单位都有记录, 保留增员
+          (排除单位部分不报税, 未排除单位部分正常报税)。
+    范围: TC93 工资记录 (不限月份) ∪ TC90 合同记录。
+    """
+    if not pay_months:
+        return set()
+    certs = set()
+    sql = """
+        SELECT DISTINCT ac01.AAC002
+        FROM TC93 t93
+        LEFT JOIN AC01 ac01 ON t93.AAC001 = ac01.AAC001
+        WHERE t93.ATC93G = '1'
+          AND ac01.AAC002 IS NOT NULL
+          AND t93.ATB930 IN (
+              SELECT unit_code FROM special_unit_config WHERE exclude_all = 1
+          )
+          AND NOT EXISTS (
+              SELECT 1 FROM TC93 t93b
+              LEFT JOIN AC01 ac01b ON t93b.AAC001 = ac01b.AAC001
+              WHERE t93b.ATC93G = '1'
+                AND ac01b.AAC002 = ac01.AAC002
+                AND t93b.ATB930 NOT IN (
+                    SELECT unit_code FROM special_unit_config WHERE exclude_all = 1
+                )
+          )
+    """
+    with conn.cursor() as cursor:
+        cursor.execute(sql)
+        for row in cursor.fetchall():
+            cert = str(row[0] or "").strip().upper()
+            if cert:
+                certs.add(cert)
+    # 补充 TC90 合同单位 (无工资记录但有合同), 同样应用跨单位例外
+    sql90 = """
+        SELECT DISTINCT t90.AAC002
+        FROM TC90 t90
+        WHERE t90.AAC002 IS NOT NULL
+          AND t90.ATB930 IN (
+              SELECT unit_code FROM special_unit_config WHERE exclude_all = 1
+          )
+          AND NOT EXISTS (
+              SELECT 1 FROM TC90 t90b
+              WHERE t90b.AAC002 = t90.AAC002
+                AND t90b.ATB930 NOT IN (
+                    SELECT unit_code FROM special_unit_config WHERE exclude_all = 1
+                )
+          )
+    """
+    with conn.cursor() as cursor:
+        cursor.execute(sql90)
         for row in cursor.fetchall():
             cert = str(row[0] or "").strip().upper()
             if cert:
