@@ -115,7 +115,7 @@ def _cert_key(value) -> str:
 def compare_personnel(tax_export_persons, payroll_certs, payroll_personnel, termination_dates,
                       unpaid_persons=None, contract_signed_persons=None,
                       person_units=None, filter_handlers=None, filter_units=None,
-                      exclude_certs=None):
+                      filter_depts=None, exclude_certs=None):
     """增减员比对引擎。
 
     Args:
@@ -125,9 +125,10 @@ def compare_personnel(tax_export_persons, payroll_certs, payroll_personnel, term
         termination_dates: Dict[str, datetime] - 证件号 → TC90 合同终止日期
         unpaid_persons: Set[str] - 未发薪工资表人员证件号集合 (减员排除 + 增员条件②)
         contract_signed_persons: Set[str] - 合同签署时间范围内人员 (增员条件③)
-        person_units: Dict[str, dict] - 证件号 → {handler, unit_code, unit_name}
+        person_units: Dict[str, dict] - 证件号 → {handler, unit_code, unit_name, dept_name}
         filter_handlers: List[str] - 经办人过滤 (空=不过滤)
         filter_units: List[int] - 结算单元代码过滤 (空=不过滤)
+        filter_depts: List[str] - 单位名称过滤 (空=不过滤)
         exclude_certs: Set[str] - 需从增员中排除的人员 (特殊结算单元工资为0)
 
     Returns:
@@ -146,10 +147,11 @@ def compare_personnel(tax_export_persons, payroll_certs, payroll_personnel, term
 
     handlers = {h for h in (filter_handlers or []) if h}
     units = {int(u) for u in (filter_units or []) if u}
+    depts = {d for d in (filter_depts or []) if d}
     person_units = person_units or {}
 
     def _passes_filter(cert):
-        if not handlers and not units:
+        if not handlers and not units and not depts:
             return True
         info = person_units.get(_cert_key(cert))
         if not info:
@@ -157,6 +159,8 @@ def compare_personnel(tax_export_persons, payroll_certs, payroll_personnel, term
         if handlers and info.get("handler") not in handlers:
             return False
         if units and info.get("unit_code") not in units:
+            return False
+        if depts and info.get("dept_name") not in depts:
             return False
         return True
 
@@ -205,6 +209,7 @@ def compare_personnel(tax_export_persons, payroll_certs, payroll_personnel, term
         "pending_count": len(pending_certs),
         "tax_total": len(tax_certs),
         "payroll_total": len(payroll_set),
+        "add_certs": add_certs,
     }
     return add_rows, departed_rows, pending_rows, stats
 

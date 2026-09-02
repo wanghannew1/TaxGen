@@ -874,11 +874,14 @@ def get_units(conn, pay_month: int = 0) -> List[dict]:
 
 
 def get_person_units(conn, cert_numbers, pay_months) -> Dict[str, dict]:
-    """批量查询人员的经办人/结算单元信息。
+    """批量查询人员的经办人/结算单元/单位信息。
 
-    通过 TC8M(经办) JOIN TC93(工资) JOIN AC01(人员) 关联,
+    通过 TC93(工资) JOIN TC8M(经办) JOIN AC01(人员) 关联:
+    - 结算单元名称/代码取 TC93.ATB931/ATB930 (未发薪/发薪记录都有)
+    - 单位名称取 AC01.AAB004 (人员表直接关联)
+    - 经办人取 TC8M.AAE019 (已发放状态, 仅发薪人员有)
     返回 {证件号(大写): {"handler": 经办人, "unit_code": 结算单元代码,
-    "unit_name": 结算单元名称(ATB931)}}。同一人多个结算单元时取 MAX(AAE019)。
+    "unit_name": 结算单元名称(ATB931), "dept_name": 单位名称(AAB004)}}。
     """
     if not cert_numbers:
         return {}
@@ -886,14 +889,16 @@ def get_person_units(conn, cert_numbers, pay_months) -> Dict[str, dict]:
     result: Dict[str, dict] = {}
     sql = """
         SELECT ac01.AAC002, MAX(m.AAE019) AS handler,
-               MAX(m.ATB930) AS unit_code, MAX(m.ATB931) AS unit_name
-        FROM TC8M m
-        JOIN TC93 t93 ON t93.ATB930 = m.ATB930
-                     AND t93.ATC931 = m.ATC931
-                     AND t93.ATC937 = m.ATC937
+               MAX(t93.ATB930) AS unit_code, MAX(t93.ATB931) AS unit_name,
+               MAX(t93.AAB004) AS dept_name
+        FROM TC93 t93
+        LEFT JOIN TC8M m ON m.ATB930 = t93.ATB930
+                        AND m.ATC931 = t93.ATC931
+                        AND m.ATC937 = t93.ATC937
+                        AND m.ATC8M3 = 2
+                        AND m.ATC8G7 IN ({month_placeholders})
         LEFT JOIN AC01 ac01 ON t93.AAC001 = ac01.AAC001
-        WHERE m.ATC8M3 = 2
-          AND m.ATC8G7 IN ({month_placeholders})
+        WHERE t93.ATC93G = '1'
           AND ac01.AAC002 IN ({cert_placeholders})
         GROUP BY ac01.AAC002
     """
@@ -914,6 +919,7 @@ def get_person_units(conn, cert_numbers, pay_months) -> Dict[str, dict]:
                         "handler": str(row[1] or ""),
                         "unit_code": int(row[2] or 0),
                         "unit_name": str(row[3] or ""),
+                        "dept_name": str(row[4] or ""),
                     }
     return result
 
@@ -972,3 +978,64 @@ def get_zero_salary_certs(conn, pay_month: int) -> Set[str]:
             if cert:
                 certs.add(cert)
     return certs
+
+
+def get_person_units_contract(conn, cert_numbers) -> Dict[str, dict]:
+    """为仅合同人员(无工资记录)从 TC90 补充结算单元/单位信息。
+
+    结算单元名称: TC90.ATB930 → TC8M.ATB931
+    单位名称: TC90.AAB004 (降级用)
+    返回 {证件号(大写): {"unit_code", "unit_name", "dept_name"}}。
+    """
+    if not cert_numbers:
+        return {}
+    certs = sorted({str(c).strip().upper() for c in cert_numbers if str(c).strip()})
+    result: Dict[str, dict] = {}
+    sql = """
+        SELECT t90.AAC002, MAX(t90.ATB930) AS unit_code,
+               MAX(m.ATB931) AS unit_name, MAX(t90.AAB004) AS dept_name
+        FROM TC90 t90
+        LEFT JOIN TC8M m ON m.ATB930 = t90.ATB930
+        WHERE t90.AAC002 IN ({placeholders})
+        GROUP BY t90.AAC002
+    """
+    with conn.cursor() as cursor:
+        for start in range(0, len(certs), _IN_BATCH_SIZE):
+            chunk = certs[start:start + _IN_BATCH_SIZE]
+            placeholders = ", ".join(f":c{i}" for i in range(len(chunk)))
+            binds = {f"c{i}": c for i, c in enumerate(chunk)}
+            cursor.execute(sql.format(placeholders=placeholders), binds)
+            for row in cursor.fetchall():
+                cert = str(row[0] or "").strip().upper()
+                if cert:
+                    result[cert] = {
+                        "unit_code": int(row[1] or 0),
+                        "unit_name": str(row[2] or ""),
+                        "dept_name": str(row[3] or ""),
+                    }
+    return result
+
+
+def get_depts(conn, pay_month: int = 0) -> List[str]:
+    """查询单位名称列表 (TC93.AAB004, 已结算状态)。
+
+    pay_month 为 0 时查询全部单位, 否则限定该发薪月份。
+    """
+    sql = """
+        SELECT DISTINCT t93.AAB004 FROM TC93 t93
+        JOIN TC8M m ON m.ATB930 = t93.ATB930
+                   AND m.ATC931 = t93.ATC931
+                   AND m.ATC937 = t93.ATC937
+        WHERE t93.AAB004 IS NOT NULL
+          AND t93.ATC93G = '1'
+          AND m.ATC8M3 = 2
+          {month_cond}
+        ORDER BY t93.AAB004
+    """
+    month_cond = "AND m.ATC8G7 = :pay_month" if pay_month else ""
+    with conn.cursor() as cursor:
+        if pay_month:
+            cursor.execute(sql.format(month_cond=month_cond), {"pay_month": pay_month})
+        else:
+            cursor.execute(sql.format(month_cond=month_cond))
+        return [str(r[0]) for r in cursor.fetchall()]

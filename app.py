@@ -394,14 +394,15 @@ def api_special_units_delete(unit_code):
 
 @app.route("/api/personnel-compare/filters")
 def api_personnel_compare_filters():
-    """查询经办人/结算单元列表 (供筛选下拉框)。"""
+    """查询经办人/结算单元/单位列表 (供筛选下拉框)。"""
     try:
-        from queries import get_handlers, get_units
+        from queries import get_handlers, get_units, get_depts
         conn = get_connection()
         pay_month = int(request.args.get("pay_month", 0) or 0)
         return jsonify({
             "handlers": get_handlers(conn, pay_month),
             "units": get_units(conn, pay_month),
+            "depts": get_depts(conn, pay_month),
         })
     except Exception as e:
         return jsonify({"error": str(e)}), 500
@@ -466,6 +467,7 @@ def api_personnel_compare():
         contract_month = int(request.form.get("contract_month", 0) or 0)
         filter_handlers = [h for h in request.form.getlist("handler") if h.strip()]
         filter_units = [int(u) for u in request.form.getlist("unit") if u.strip()]
+        filter_depts = [d for d in request.form.getlist("dept") if d.strip()]
         deadline = request.form.get("termination_deadline", "").strip()
         deadline_date = None
         if deadline:
@@ -534,32 +536,48 @@ def api_personnel_compare():
         # 特殊结算单元: 工资为0不增员
         from queries import get_special_units, get_zero_salary_certs, get_person_units
         exclude_certs = get_zero_salary_certs(conn, pay_month) if get_special_units(conn) else set()
-        # 经办人/结算单元过滤 + 备注(结算单元名称)数据
-        person_units = None
-        all_certs = (payroll_certs | unpaid_persons | contract_persons |
-                     {str(p.get("证件号码") or "").strip().upper() for p in tax_export_persons})
-        person_units = get_person_units(conn, all_certs, pay_months)
-        if exclude_certs or filter_handlers or filter_units:
+        # 经办人/结算单元/单位过滤 + 备注(结算单元名称)数据
+        tax_cert_set = {str(p.get("证件号码") or "").strip().upper()
+                        for p in tax_export_persons}
+        add_candidates = (payroll_certs | unpaid_persons | contract_persons) - tax_cert_set
+        # 过滤时减员候选也需要人员归属信息 (个税端未标记离职人员)
+        unit_query_certs = set(add_candidates)
+        if filter_handlers or filter_units or filter_depts:
+            active_certs = {str(p.get("证件号码") or "").strip().upper()
+                            for p in tax_export_persons
+                            if not str(p.get("离职日期") or "").strip()}
+            unit_query_certs |= active_certs
+        person_units = get_person_units(conn, unit_query_certs, pay_months)
+        # 仅合同人员(无工资记录)补充: TC90 结算单元, 降级单位名称
+        missing_certs = {c for c in unit_query_certs
+                         if not person_units.get(c, {}).get("unit_name")}
+        if missing_certs:
+            from queries import get_person_units_contract
+            person_units.update(get_person_units_contract(conn, missing_certs))
+        if exclude_certs or filter_handlers or filter_units or filter_depts:
             add_rows, departed_rows, pending_rows, stats = compare_personnel(
                 tax_export_persons, payroll_certs, payroll_personnel, termination_dates,
                 unpaid_persons=unpaid_persons, contract_signed_persons=contract_persons,
                 person_units=person_units, filter_handlers=filter_handlers,
-                filter_units=filter_units, exclude_certs=exclude_certs)
+                filter_units=filter_units, filter_depts=filter_depts,
+                exclude_certs=exclude_certs)
         # 补充增员人员详细信息 (未发薪/合同签署人员不在 payroll_personnel 中)
         if stats["add_count"] > len(add_rows):
             from templates_gen.personnel_compare import IDX_证件号码, map_personnel_info_to_row
-            tax_cert_set = {str(p.get("证件号码") or "").strip().upper()
-                            for p in tax_export_persons}
-            all_add_certs = (payroll_certs | unpaid_persons | contract_persons) - tax_cert_set
             have_certs = {r[IDX_证件号码] for r in add_rows}
-            need_certs = all_add_certs - have_certs
+            need_certs = stats["add_certs"] - have_certs
             if need_certs:
                 extra_people = get_personnel_by_certs(conn, need_certs)
                 for p in extra_people:
                     row = map_personnel_info_to_row(p)
                     info = (person_units or {}).get(str(p.身份证 or "").strip().upper())
-                    if info and not row[25]:
-                        row[25] = info.get("unit_name", "")
+                    if info:
+                        # 备注优先结算单元名称(ATB931); 降级单位名称时标明"非结算单元名称"
+                        remark = info.get("unit_name") or ""
+                        if remark:
+                            row[25] = remark
+                        elif info.get("dept_name"):
+                            row[25] = f"单位名称（非结算单元名称）：{info['dept_name']}"
                     add_rows.append(row)
         month_label = str(pay_month)
         result = generate_compare_excel(add_rows, departed_rows, pending_rows, stats, OUTPUT_DIR, month_label)

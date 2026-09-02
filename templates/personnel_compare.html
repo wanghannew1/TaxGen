@@ -95,8 +95,14 @@
                         <option value="">全部结算单元</option>
                     </select>
                 </div>
-                <div class="col-md-6 d-flex align-items-end pb-1">
-                    <span class="text-muted" style="font-size: 0.85rem;">按住 Ctrl 多选。筛选后仅显示所选经办人/结算单元的增减员数据（每个业务员只看自己的）。</span>
+                <div class="col-md-3">
+                    <label class="form-label">单位名称过滤（可选，多选）</label>
+                    <select id="deptFilter" class="form-select" multiple size="4">
+                        <option value="">全部单位</option>
+                    </select>
+                </div>
+                <div class="col-md-3 d-flex align-items-end pb-1">
+                    <span class="text-muted" style="font-size: 0.85rem;">按住 Ctrl 多选。筛选后仅显示所选经办人/结算单元/单位的增减员数据（每个业务员只看自己的）。</span>
                 </div>
             </div>
             <div id="loading" class="text-center py-4" style="display: none;">
@@ -136,6 +142,7 @@
     const terminationDeadline = document.getElementById('terminationDeadline');
     const handlerFilter = document.getElementById('handlerFilter');
     const unitFilter = document.getElementById('unitFilter');
+    const deptFilter = document.getElementById('deptFilter');
     const latestPayDate = document.getElementById('latestPayDate');
     const btnCompare = document.getElementById('btnCompare');
     const loading = document.getElementById('loading');
@@ -232,7 +239,12 @@
 
     async function loadFilters() {
         const m = payMonth.value;
-        if (!m) { handlerFilter.innerHTML = '<option value="">全部经办人</option>'; unitFilter.innerHTML = '<option value="">全部结算单元</option>'; return; }
+        if (!m) {
+            handlerFilter.innerHTML = '<option value="">全部经办人</option>';
+            unitFilter.innerHTML = '<option value="">全部结算单元</option>';
+            deptFilter.innerHTML = '<option value="">全部单位</option>';
+            return;
+        }
         try {
             const resp = await fetch(`/api/personnel-compare/filters?pay_month=${m}`);
             if (!resp.ok) throw new Error('加载筛选列表失败');
@@ -241,6 +253,8 @@
                 data.handlers.map(h => `<option value="${h}">${h}</option>`).join('');
             unitFilter.innerHTML = '<option value="">全部结算单元</option>' +
                 data.units.map(u => `<option value="${u.code}">${u.name} (${u.code})</option>`).join('');
+            deptFilter.innerHTML = '<option value="">全部单位</option>' +
+                data.depts.map(d => `<option value="${d}">${d}</option>`).join('');
         } catch (e) { /* 静默失败 */ }
     }
 
@@ -266,6 +280,7 @@
             form.append('termination_deadline', deadline);
             Array.from(handlerFilter.selectedOptions).forEach(o => { if (o.value) form.append('handler', o.value); });
             Array.from(unitFilter.selectedOptions).forEach(o => { if (o.value) form.append('unit', o.value); });
+            Array.from(deptFilter.selectedOptions).forEach(o => { if (o.value) form.append('dept', o.value); });
             const resp = await fetch('/api/personnel-compare/compare', { method: 'POST', body: form });
             const data = await resp.json();
             if (!resp.ok || data.error) { showError(data.error || '比对失败，请稍后重试'); return; }
