@@ -412,8 +412,13 @@ def compare_personnel(tax_export_persons, payroll_certs, payroll_personnel, term
         info = person_units.get(_cert_key(cert))
         if not info:
             return False
-        if handlers and info.get("handler") not in handlers:
-            return False
+        if handlers:
+            # 任一来源命中即通过: 发薪经办人(TC8M) / 做工资经办人(TC93) / 合同经办人(TC90)
+            person_handlers = {str(info.get("handler") or ""),
+                               str(info.get("salary_handler") or ""),
+                               str(info.get("contract_handler") or "")}
+            if not (person_handlers & handlers):
+                return False
         if units and info.get("unit_code") not in units:
             return False
         if depts and info.get("dept_name") not in depts:

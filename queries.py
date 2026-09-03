@@ -865,7 +865,7 @@ def get_default_report_month(conn) -> int:
 
 
 def get_handlers(conn, pay_month: int = 0) -> List[str]:
-    """查询经办人列表 (TC8M.AAE019 经办人, 已发放状态)。
+    """查询发薪经办人列表 (TC8M.AAE019 经办人, 已发放状态)。
 
     注意: Oracle 中空字符串等价于 NULL, 只需 IS NOT NULL 判断。
     pay_month 为 0 时查询全部经办人, 否则限定该发薪月份。
@@ -884,6 +884,46 @@ def get_handlers(conn, pay_month: int = 0) -> List[str]:
         else:
             cursor.execute(sql.format(month_cond=month_cond))
         return [str(r[0]) for r in cursor.fetchall()]
+
+
+def get_handler_options(conn, pay_month: int = 0) -> dict:
+    """查询三来源经办人列表 (增减员比对筛选下拉用)。
+
+    - pay_handlers: 发薪经办人 TC8M.AAE019 (已发放), pay_month 限定发薪月份
+    - salary_handlers: 做工资经办人 TC93.AAE019 (已结算), 全量返回
+      (所属月可能早于发放月, 按月限定会漏人, 如 202606 所属 202607 发放)
+    - contract_handlers: 合同经办人 TC90.AAE019, 全量返回
+
+    返回 {"pay_handlers": [...], "salary_handlers": [...], "contract_handlers": [...]}。
+    """
+    month_cond = "AND ATC8G7 = :pay_month" if pay_month else ""
+    sql8 = """
+        SELECT DISTINCT AAE019 FROM TC8M
+        WHERE AAE019 IS NOT NULL AND ATC8M3 = 2 {month_cond}
+        ORDER BY AAE019
+    """
+    sql93 = """
+        SELECT DISTINCT AAE019 FROM TC93
+        WHERE AAE019 IS NOT NULL AND ATC93G = '1'
+        ORDER BY AAE019
+    """
+    sql90 = """
+        SELECT DISTINCT AAE019 FROM TC90
+        WHERE AAE019 IS NOT NULL
+        ORDER BY AAE019
+    """
+    result = {"pay_handlers": [], "salary_handlers": [], "contract_handlers": []}
+    with conn.cursor() as cursor:
+        if pay_month:
+            cursor.execute(sql8.format(month_cond=month_cond), {"pay_month": pay_month})
+        else:
+            cursor.execute(sql8.format(month_cond=""))
+        result["pay_handlers"] = [str(r[0]) for r in cursor.fetchall()]
+        cursor.execute(sql93)
+        result["salary_handlers"] = [str(r[0]) for r in cursor.fetchall()]
+        cursor.execute(sql90)
+        result["contract_handlers"] = [str(r[0]) for r in cursor.fetchall()]
+    return result
 
 
 def get_units(conn, pay_month: int = 0) -> List[dict]:
@@ -913,9 +953,11 @@ def get_person_units(conn, cert_numbers, pay_months) -> Dict[str, dict]:
     通过 TC93(工资) JOIN TC8M(经办) JOIN AC01(人员) 关联:
     - 结算单元名称/代码取 TC93.ATB931/ATB930 (未发薪/发薪记录都有)
     - 单位名称取 AC01.AAB004 (人员表直接关联)
-    - 经办人取 TC8M.AAE019 (已发放状态, 仅发薪人员有)
-    返回 {证件号(大写): {"handler": 经办人, "unit_code": 结算单元代码,
-    "unit_name": 结算单元名称(ATB931), "dept_name": 单位名称(AAB004)}}。
+    - 发薪经办人取 TC8M.AAE019 (已发放状态, 仅发薪人员有)
+    - 做工资经办人取 TC93.AAE019 (全量历史记录 MAX, 无当期发薪也有值)
+    返回 {证件号(大写): {"handler": 发薪经办人, "salary_handler": 做工资经办人,
+    "unit_code": 结算单元代码, "unit_name": 结算单元名称(ATB931),
+    "dept_name": 单位名称(AAB004)}}。
     """
     if not cert_numbers:
         return {}
@@ -924,7 +966,7 @@ def get_person_units(conn, cert_numbers, pay_months) -> Dict[str, dict]:
     sql = """
         SELECT ac01.AAC002, MAX(m.AAE019) AS handler,
                MAX(t93.ATB930) AS unit_code, MAX(t93.ATB931) AS unit_name,
-               MAX(t93.AAB004) AS dept_name
+               MAX(t93.AAB004) AS dept_name, MAX(t93.AAE019) AS salary_handler
         FROM TC93 t93
         LEFT JOIN TC8M m ON m.ATB930 = t93.ATB930
                         AND m.ATC931 = t93.ATC931
@@ -954,6 +996,7 @@ def get_person_units(conn, cert_numbers, pay_months) -> Dict[str, dict]:
                         "unit_code": int(row[2] or 0),
                         "unit_name": str(row[3] or ""),
                         "dept_name": str(row[4] or ""),
+                        "salary_handler": str(row[5] or ""),
                     }
     return result
 
@@ -1098,11 +1141,12 @@ def get_excluded_unit_certs(conn, pay_months, unit_codes: List[int],
 
 
 def get_person_units_contract(conn, cert_numbers) -> Dict[str, dict]:
-    """为仅合同人员(无工资记录)从 TC90 补充结算单元/单位信息。
+    """为仅合同人员(无工资记录)从 TC90 补充结算单元/单位/合同经办人信息。
 
     结算单元名称: TC90.ATC90X (TC90 自带结算单元名称, 无需关联 TC8M)
     单位名称: TC90.AAB004 (降级用)
-    返回 {证件号(大写): {"unit_code", "unit_name", "dept_name"}}。
+    合同经办人: TC90.AAE019 (减员人员无当期发薪记录, 经办人过滤依赖此字段)
+    返回 {证件号(大写): {"unit_code", "unit_name", "dept_name", "contract_handler"}}。
     """
     if not cert_numbers:
         return {}
@@ -1110,7 +1154,8 @@ def get_person_units_contract(conn, cert_numbers) -> Dict[str, dict]:
     result: Dict[str, dict] = {}
     sql = """
         SELECT t90.AAC002, MAX(t90.ATB930) AS unit_code,
-               MAX(t90.ATC90X) AS unit_name, MAX(t90.AAB004) AS dept_name
+               MAX(t90.ATC90X) AS unit_name, MAX(t90.AAB004) AS dept_name,
+               MAX(t90.AAE019) AS contract_handler
         FROM TC90 t90
         WHERE t90.AAC002 IN ({placeholders})
         GROUP BY t90.AAC002
@@ -1128,6 +1173,7 @@ def get_person_units_contract(conn, cert_numbers) -> Dict[str, dict]:
                         "unit_code": int(row[1] or 0),
                         "unit_name": str(row[2] or ""),
                         "dept_name": str(row[3] or ""),
+                        "contract_handler": str(row[4] or ""),
                     }
     return result
 

@@ -577,16 +577,21 @@ def api_payroll_records():
 
 @app.route("/api/personnel-compare/filters")
 def api_personnel_compare_filters():
-    """查询经办人/结算单元/单位列表 (供筛选下拉框)。"""
+    """查询经办人/结算单元/单位列表 (供筛选下拉框)。
+
+    经办人分三来源: 发薪经办人(TC8M) / 做工资经办人(TC93) / 合同经办人(TC90),
+    三来源可能不同人 (2026 年存在不一致批次), 界面单列供用户分别选择。
+    """
     try:
-        from queries import get_handlers, get_units, get_depts
+        from queries import get_handler_options, get_units, get_depts
         conn = get_connection()
         pay_month = int(request.args.get("pay_month", 0) or 0)
-        return jsonify({
-            "handlers": get_handlers(conn, pay_month),
+        options = get_handler_options(conn, pay_month)
+        options.update({
             "units": get_units(conn, pay_month),
             "depts": get_depts(conn, pay_month),
         })
+        return jsonify(options)
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
@@ -666,6 +671,11 @@ def api_personnel_compare():
         pay_start_dt = _dt.strptime(pay_start_time, "%Y-%m-%dT%H:%M") if pay_start_time else None
         pay_end_dt = _dt.strptime(pay_end_time, "%Y-%m-%dT%H:%M") if pay_end_time else None
         filter_handlers = [h for h in request.form.getlist("handler") if h.strip()]
+        filter_salary_handlers = [h for h in request.form.getlist("salary_handler") if h.strip()]
+        filter_contract_handlers = [h for h in request.form.getlist("contract_handler") if h.strip()]
+        # 三来源合并去重 (去重保序), 匹配规则: 任一来源命中即通过
+        filter_handlers = list(dict.fromkeys(
+            filter_handlers + filter_salary_handlers + filter_contract_handlers))
         filter_units = [int(u) for u in request.form.getlist("unit") if u.strip()]
         filter_depts = [d for d in request.form.getlist("dept") if d.strip()]
         deadline = request.form.get("termination_deadline", "").strip()
@@ -756,12 +766,16 @@ def api_personnel_compare():
                             if not str(p.get("离职日期") or "").strip()}
             unit_query_certs |= active_certs
         person_units = get_person_units(conn, unit_query_certs, pay_months)
-        # 仅合同人员(无工资记录)补充: TC90 结算单元, 降级单位名称
-        missing_certs = {c for c in unit_query_certs
-                         if not person_units.get(c, {}).get("unit_name")}
-        if missing_certs:
-            from queries import get_person_units_contract
-            person_units.update(get_person_units_contract(conn, missing_certs))
+        # 全量合并 TC90 合同经办人 (减员人员无当期发薪记录, 经办人仅能从合同取);
+        # 仅合同人员(无工资记录)同时补充 TC90 结算单元/单位名称
+        from queries import get_person_units_contract
+        for cert, info in get_person_units_contract(conn, unit_query_certs).items():
+            base = person_units.setdefault(cert, {})
+            base["contract_handler"] = str(info.get("contract_handler") or "")
+            if not base.get("unit_name"):
+                base["unit_code"] = info.get("unit_code") or 0
+                base["unit_name"] = info.get("unit_name") or ""
+                base["dept_name"] = info.get("dept_name") or ""
         if exclude_certs or filter_handlers or filter_units or filter_depts:
             add_rows, departed_rows, pending_rows, stats = compare_personnel(
                 tax_export_persons, payroll_certs, payroll_personnel, termination_dates,
