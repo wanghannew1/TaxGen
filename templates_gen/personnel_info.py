@@ -4,6 +4,7 @@ from typing import List
 import os
 from openpyxl import Workbook
 from models import PersonnelInfo, GenerateResult
+from templates_gen.explanation import add_explanation_sheet
 
 
 def extract_remark(title: str) -> str:
@@ -89,6 +90,16 @@ def generate_personnel_info(personnel: List[PersonnelInfo], title: str, output_d
             ws.cell(row=row, column=7, value=birth_date)
         ws.cell(row=row, column=9, value="雇员")
         ws.cell(row=row, column=26, value=remark)
+    
+    add_explanation_sheet(wb, [
+        ("人员信息", [
+            "51 列个税人员信息采集导入模板，无校验。",
+            "按职工号去重，每人一行。",
+            "身份证解析：*性别 = 身份证第 17 位奇男偶女；*出生日期 = 第 7~14 位(YYYYMMDD)。",
+            "*国籍(地区) 恒为「中国」；*证件类型 恒为「居民身份证」；*任职受雇从业类型 恒为「雇员」。",
+            "备注从标题中提取（去除机构名/年月/数字后剩余文本）。",
+        ]),
+    ])
     
     wb.save(output_path)
     

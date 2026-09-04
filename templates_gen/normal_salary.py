@@ -7,6 +7,7 @@ from openpyxl import Workbook
 from openpyxl.utils import get_column_letter
 from models import SalaryRecord, GenerateResult
 from templates_gen.formulas import calc_本期收入, calc_免税
+from templates_gen.explanation import add_explanation_sheet
 
 
 def extract_remark(title: str) -> str:
@@ -132,6 +133,35 @@ def generate_normal_salary(records: List[SalaryRecord], title: str, output_dir: 
         generate_raw_detail_sheet(wb, raw_records, combo_map, title)
         generate_merge_detail_sheet(wb, raw_records, records, merge_mode)
     generate_formula_explanation_sheet(wb, records)
+    add_explanation_sheet(wb, [
+        ("正常工资薪金收入", [
+            "29 列个税申报模板，一行为一人（按人合并）。",
+            "本期收入 = 工资总额(ATC93AA) − 本次免税(ATC936) − 大病险个人(ATC93BD) − 补缴退款差额(ATC93BE) + 个人交纳现金(ATC93X3) − 个人欠款(ATC93E)。",
+            "五险一金列取个人缴部分，企业(职业)年金恒为 0，备注填结算单元名称。",
+        ]),
+        ("验证报告", [
+            "每行一人，左=右校验：左 = 本期收入 − 养老 − 失业 − 医疗 − 公积金 − 其他调整 − 扣款大病险 − 意外险；",
+            "右 = 实发 + 税后工会会费 + 个人代理费 + 个税 − 免税；|左−右|<0.01 为通过。",
+        ]),
+        ("TC93总表", [
+            "TC93 工资原始全字段，按身份证排序、同证相邻；重复次数=该身份证出现行数。",
+        ]),
+        ("异常记录(已过滤)", [
+            "状态异常被过滤的条目，附过滤原因。",
+        ]),
+        ("报税结算单元", [
+            "本次生成的结算单元组合（单元+所属月+发放月+批次+人数+合计收入+经办人）。",
+        ]),
+        ("原始明细(未合并)", [
+            "合并前的逐条明细，便于追溯合并过程。",
+        ]),
+        ("合并明细", [
+            "按人（+所属月或发放月）合并后的汇总与合并痕迹。",
+        ]),
+        ("验算公式说明", [
+            "本期收入、左、右公式的详细推导、字段对照与实际示例。",
+        ]),
+    ])
     
     wb.save(output_path)
     

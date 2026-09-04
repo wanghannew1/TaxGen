@@ -4,6 +4,7 @@ from typing import List
 import os
 from openpyxl import Workbook
 from models import SalaryRecord, GenerateResult
+from templates_gen.explanation import add_explanation_sheet
 
 
 def extract_remark(title: str) -> str:
@@ -48,6 +49,14 @@ def generate_labor_service(records: List[SalaryRecord], title: str, output_dir: 
         ws.cell(row=row, column=5, value="劳务报酬")
         ws.cell(row=row, column=6, value=rec.应发工资)
         ws.cell(row=row, column=14, value=remark)
+    
+    add_explanation_sheet(wb, [
+        ("劳务报酬", [
+            "14 列个税劳务报酬申报模板，一行为一人，无校验。",
+            "*所得项目 恒为「劳务报酬」；收入取应发工资（原始值，不做扣减）。",
+            "*证件类型 恒为「居民身份证」。备注从标题中提取（去除机构名/年月/数字后剩余文本）。",
+        ]),
+    ])
     
     wb.save(output_path)
     

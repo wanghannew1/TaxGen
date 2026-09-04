@@ -16,6 +16,7 @@ from typing import List
 from openpyxl import Workbook
 
 from models import GenerateResult, PersonnelInfo
+from templates_gen.explanation import add_explanation_sheet
 
 # 51 列标题 - 与 personnel_info.py 完全一致
 COMPARE_HEADERS: List[str] = [
@@ -626,6 +627,35 @@ def generate_compare_excel(add_rows, departed_rows, pending_rows, stats, output_
         ws_tc90.append(TC90_HEADERS)
         for row in tc90_rows:
             ws_tc90.append(row)
+
+    add_explanation_sheet(wb, [
+        ("增员名单", [
+            "个税端本应增员但未增员的人员 = 当月发薪(TC93) ∪ 未发薪 ∪ 有合同(TC90) − 个税端导出人员 − 排除项(特殊结算单元)。",
+            "以 51 列人员信息导入格式输出。",
+        ]),
+        ("近期离职人员", [
+            "个税端在职(无合同终止日期) 且不在发薪/未发薪/有合同中，且有工资结束年月(ATC90AV) 的人员。",
+            "以 51 列人员信息导入格式输出。",
+        ]),
+        ("待确认近期离职人员", [
+            "判定同「近期离职人员」，但无工资结束年月，需人工确认是否离职。",
+        ]),
+        ("零申报", [
+            "个税端在职且无发薪、未判定为离职/待确认的人员，按正常工资薪金所得 29 列格式输出，收入金额全为 0 供零申报。",
+        ]),
+        ("待确认零申报", [
+            "与「零申报」相同，仅针对待确认离职人员，供核实后零申报。",
+        ]),
+        ("增员验证", [
+            "在 51 列基础上追加验证列（TC93 工资四要素、状态、对比来源、增减员标志等），回溯增员判定依据。",
+        ]),
+        ("减员验证", [
+            "在 51 列基础上追加验证列，含合同开始日期（ATC90C）、合同终止日期（ATC90D）、工资结束年月（ATC90AV）等，回溯减员判定依据。",
+        ]),
+        ("TC93工资明细 / TC8M发放明细 / TC90合同明细", [
+            "参与比对人员的工资(TC93)、发放(TC8M)、合同(TC90) 原始明细，用于核对判定口径。",
+        ]),
+    ])
 
     wb.save(output_path)
     return GenerateResult(

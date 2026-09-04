@@ -4,6 +4,7 @@ from typing import List
 import os
 from openpyxl import Workbook
 from models import SalaryRecord, GenerateResult
+from templates_gen.explanation import add_explanation_sheet
 
 
 def extract_remark(title: str) -> str:
@@ -49,6 +50,15 @@ def generate_annual_bonus(records: List[SalaryRecord], title: str, output_dir: s
         ws.cell(row=row, column=4, value=rec.身份证)
         ws.cell(row=row, column=5, value=rec.奖金)
         ws.cell(row=row, column=11, value=remark)
+    
+    add_explanation_sheet(wb, [
+        ("全年一次性奖金", [
+            "11 列个税全年一次性奖金申报模板，一行为一人，无校验。",
+            "仅包含奖金数额 ＞ 0 的记录。",
+            "*全年一次性奖金额 取奖金数额；*证件类型 恒为「居民身份证」。",
+            "备注从标题中提取（去除机构名/年月/数字后剩余文本）。",
+        ]),
+    ])
     
     wb.save(output_path)
     
