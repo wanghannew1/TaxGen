@@ -180,6 +180,8 @@
                 <div class="col-md-3 col-sm-6 stat-card"><div class="stat-add num" id="statAddCount">0</div><div class="text-muted">增员人数</div></div>
                 <div class="col-md-3 col-sm-6 stat-card"><div class="stat-remove num" id="statDepartedCount">0</div><div class="text-muted">近期离职人数</div></div>
                 <div class="col-md-3 col-sm-6 stat-card"><div class="stat-info num" id="statPendingCount">0</div><div class="text-muted">待确认近期离职人数</div></div>
+<div class="col-md-3 col-sm-6 stat-card"><div class="stat-info num" id="statZeroCount">0</div><div class="text-muted">零申报人数</div></div>
+<div class="col-md-3 col-sm-6 stat-card"><div class="stat-info num" id="statZeroPendingCount">0</div><div class="text-muted">待确认零申报人数</div></div>
             </div>
             <div id="fileInfo" class="text-muted mt-2" style="font-size: 0.85rem;"></div>
         </div>
@@ -484,6 +486,8 @@
             statAddCount.textContent = data.add_count;
             statDepartedCount.textContent = data.departed_count;
             statPendingCount.textContent = data.pending_count;
+            statZeroCount.textContent = data.zero_count || 0;
+            statZeroPendingCount.textContent = data.zero_pending_count || 0;
             btnDownload.href = data.download_url;
             btnDownload.setAttribute('download', data.file_name);
             fileInfo.textContent = `生成文件: ${data.file_name}`;

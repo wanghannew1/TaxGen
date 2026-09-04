@@ -112,6 +112,42 @@ def _cert_key(value) -> str:
     return str(value or "").strip().upper()
 
 
+# 零申报 Sheet: 正常工资薪金所得 29 列 (与 normal_salary.py 一致), 收入/扣款全为 0
+ZERO_HEADERS: List[str] = [
+    "工号", "*姓名", "*证件类型", "*证件号码", "本期收入", "本期免税收入",
+    "基本养老保险费", "基本医疗保险费", "失业保险费", "住房公积金",
+    "累计子女教育", "累计继续教育", "累计住房贷款利息", "累计住房租金",
+    "累计赡养老人", "累计3岁以下婴幼儿照护", "累计个人养老金", "企业(职业)年金",
+    "商业健康保险", "税延养老保险", "公务交通费用", "通讯费用", "律师办案费用",
+    "西藏附加减除费用", "其他", "准予扣除的捐赠额", "减免税额", "协定减免", "备注",
+]
+# 身份证列索引 (0-based)
+ZERO_IDX_工号 = 0
+ZERO_IDX_姓名 = 1
+ZERO_IDX_证件类型 = 2
+ZERO_IDX_证件号码 = 3
+# 收入/扣款数值列 (0-based): 从本期收入(4) 到 减免税额(27), 全部置 0
+ZERO_IDX_INCOME_START = 4
+ZERO_IDX_INCOME_END = 27  # 含 27 (协定减免), 备注(28) 单独
+
+
+def build_zero_declare_row(person: dict) -> list:
+    """将个税端导出记录映射为 29 列零申报行。
+
+    在职且本期无工资、也未减员的人员需 0 申报: 本期收入及各项扣款/累计/减免
+    全部为 0, 仅工号/姓名/证件类型/证件号码有值, 备注为结算单元名称。
+    """
+    row = [""] * len(ZERO_HEADERS)
+    row[ZERO_IDX_工号] = str(person.get("工号") or "")
+    row[ZERO_IDX_姓名] = str(person.get("姓名") or "")
+    row[ZERO_IDX_证件类型] = str(person.get("证件类型") or "") or "居民身份证"
+    row[ZERO_IDX_证件号码] = str(person.get("证件号码") or "")
+    for i in range(ZERO_IDX_INCOME_START, ZERO_IDX_INCOME_END + 1):
+        row[i] = 0
+    row[ZERO_IDX_INCOME_END + 1] = str(person.get("备注") or "")  # 备注 = 结算单元名称
+    return row
+
+
 # 增员验证附加列 (51 列之后追加)
 VERIFY_HEADERS = [
     # 公共
@@ -372,7 +408,8 @@ def compare_personnel(tax_export_persons, payroll_certs, payroll_personnel, sala
                       unpaid_persons=None, contract_signed_persons=None,
                       person_units=None, filter_handlers=None, filter_units=None,
                       filter_depts=None, exclude_certs=None,
-                      unpaid_latest_persons=None):
+                      unpaid_latest_persons=None,
+                      payroll_start_certs=None):
     """增减员比对引擎。
 
     Args:
@@ -392,13 +429,16 @@ def compare_personnel(tax_export_persons, payroll_certs, payroll_personnel, sala
         exclude_certs: Set[str] - 需从增员中排除的人员 (特殊结算单元工资为0)
         unpaid_latest_persons: Set[str] - 最后一笔工资未发放的人员
             (压月发薪延期: 最后一笔工资未发完前不能减员, 从减员候选剔除)
+        payroll_start_certs: Set[str] - 申报期(发薪起始月)发薪人员证件号集合。
+            零申报人群判定用: 个税端在职且申报期无工资、也未减员 → 需 0 申报。
 
     Returns:
         (add_rows, departed_rows, pending_rows, stats):
             add_rows: List[list] - 增员 51 列行数据
             departed_rows: List[list] - 近期离职人员 51 列行数据
             pending_rows: List[list] - 待确认近期离职人员 51 列行数据
-            stats: dict - {add_count, departed_count, pending_count, tax_total, payroll_total}
+            stats: dict - {add_count, departed_count, pending_count, tax_total, payroll_total,
+                zero_count, zero_certs, zero_pending_count, zero_pending_certs}
     """
     unpaid_set = {_cert_key(c) for c in (unpaid_persons or set())}
     unpaid_set.discard("")
@@ -408,6 +448,8 @@ def compare_personnel(tax_export_persons, payroll_certs, payroll_personnel, sala
     exclude_set.discard("")
     unpaid_latest_set = {_cert_key(c) for c in (unpaid_latest_persons or set())}
     unpaid_latest_set.discard("")
+    payroll_start_set = {_cert_key(c) for c in (payroll_start_certs or set())}
+    payroll_start_set.discard("")
 
     handlers = {h for h in (filter_handlers or []) if h}
     units = {int(u) for u in (filter_units or []) if u}
@@ -463,6 +505,16 @@ def compare_personnel(tax_export_persons, payroll_certs, payroll_personnel, sala
     departed_certs = {c for c in suspect_certs if c in salary_end_dates}
     pending_certs = suspect_certs - departed_certs
 
+    # 零申报人群 (主 sheet): 个税端在职(无离职日期) 且 申报期(发薪起始月)无工资
+    # 且 未减员(departed+pending 均排除), 再排除特殊结算单元(工资为0/完全排除 均不报税)。
+    zero_declare = active_certs - payroll_start_set - departed_certs - pending_certs
+    zero_declare = zero_declare - exclude_set
+    zero_declare = {c for c in zero_declare if _passes_filter(c)}
+    # 待确认零申报 (独立 sheet): 待确认人员虽被判为待查, 一旦确认非离职可直接 0 申报,
+    # 故单独输出。排除特殊结算单元 (pending 已按经办人过滤, 故仅再滤特殊单元)。
+    zero_pending_declare = pending_certs - exclude_set
+    zero_pending_declare = {c for c in zero_pending_declare if _passes_filter(c)}
+
     add_rows = []
     for person in payroll_personnel:
         if _cert_key(person.身份证) in add_certs:
@@ -487,6 +539,10 @@ def compare_personnel(tax_export_persons, payroll_certs, payroll_personnel, sala
         "pending_count": len(pending_certs),
         "tax_total": len(tax_certs),
         "payroll_total": len(payroll_set),
+        "zero_count": len(zero_declare),
+        "zero_certs": zero_declare,
+        "zero_pending_count": len(zero_pending_declare),
+        "zero_pending_certs": zero_pending_declare,
         "add_certs": add_certs,
     }
     return add_rows, departed_rows, pending_rows, stats
@@ -494,11 +550,12 @@ def compare_personnel(tax_export_persons, payroll_certs, payroll_personnel, sala
 
 def generate_compare_excel(add_rows, departed_rows, pending_rows, stats, output_dir: str, pay_month: int,
                            verify_rows=None, tc93_rows=None, tc8m_rows=None, tc90_rows=None,
-                           remove_verify_rows=None) -> GenerateResult:
+                           remove_verify_rows=None, zero_rows=None, zero_pending_rows=None) -> GenerateResult:
     """生成增减员比对结果 Excel。
 
     基础三 Sheet: 增员名单 + 近期离职人员 + 待确认近期离职人员。
-    可选附加 Sheet: 增员验证 (51列+验证列), 减员验证, TC93工资明细, TC8M发放明细, TC90合同明细。
+    可选附加 Sheet: 增员验证 (51列+验证列), 减员验证, TC93工资明细, TC8M发放明细, TC90合同明细,
+    零申报 (29列正常工资薪金所得, 收入全为0), 待确认零申报 (同上, 仅待确认人员)。
     """
     import os
     from datetime import datetime as _dt
@@ -523,6 +580,18 @@ def generate_compare_excel(add_rows, departed_rows, pending_rows, stats, output_
     ws_pending.append(COMPARE_HEADERS)
     for row in pending_rows:
         ws_pending.append(row)
+
+    if zero_rows is not None:
+        ws_zero = wb.create_sheet("零申报")
+        ws_zero.append(ZERO_HEADERS)
+        for row in zero_rows:
+            ws_zero.append(row)
+
+    if zero_pending_rows is not None:
+        ws_zero_pending = wb.create_sheet("待确认零申报")
+        ws_zero_pending.append(ZERO_HEADERS)
+        for row in zero_pending_rows:
+            ws_zero_pending.append(row)
 
     if verify_rows is not None:
         ws_verify = wb.create_sheet("增员验证")
