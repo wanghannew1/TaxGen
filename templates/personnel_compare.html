@@ -122,16 +122,18 @@
                     </select>
                 </div>
                 <div class="col-md-4">
-                    <label class="form-label">做工资经办人过滤（TC93，不选 = 全部，可搜索多选）</label>
+                    <label class="form-label">做工资经办人过滤（TC93）</label>
                     <input type="text" id="salaryHandlerSearch" class="form-control form-control-sm mb-1" placeholder="搜索做工资经办人...">
                     <select id="salaryHandlerFilter" class="form-select" multiple size="5">
+                        <option value="__same_pay__" selected>同发薪经办人（推荐，跟随发薪经办人）</option>
                         <option value="">全部做工资经办人</option>
                     </select>
                 </div>
                 <div class="col-md-4">
-                    <label class="form-label">合同经办人过滤（TC90，不选 = 全部，可搜索多选）</label>
+                    <label class="form-label">合同经办人过滤（TC90）</label>
                     <input type="text" id="contractHandlerSearch" class="form-control form-control-sm mb-1" placeholder="搜索合同经办人...">
                     <select id="contractHandlerFilter" class="form-select" multiple size="5">
+                        <option value="__same_salary__" selected>同做工资经办人（推荐，跟随做工资经办人）</option>
                         <option value="">全部合同经办人</option>
                     </select>
                 </div>
@@ -152,7 +154,7 @@
                     </select>
                 </div>
                 <div class="col-md-4 d-flex align-items-end pb-1">
-                    <span class="text-muted" style="font-size: 0.85rem;">按住 Ctrl 多选。<strong>都不选 = 不过滤（显示全部）</strong>。归属规则：<strong>发过薪 → 发薪经办人；未发薪 → 做工资经办人；仅合同 → 合同经办人；离职 → 最后一次发薪 → 最后一次做工资 → 最后一份合同</strong>。<strong>做工资/合同默认同上级经办人</strong>（选择时自动联动，可手动取消）。<strong>最后一笔工资未发放的人员自动排除在减员名单外</strong>（压月发薪延期规则，无需手动选未发薪月份）。</span>
+                    <span class="text-muted" style="font-size: 0.85rem;">按住 Ctrl 多选。<strong>都不选 = 不过滤（显示全部）</strong>。归属规则（<strong>最高优先级为发薪经办人</strong>）：<strong>发过薪 → 发薪经办人；未发薪 → 做工资经办人；仅合同 → 合同经办人；离职 → 最后一次发薪 → 最后一次做工资 → 最后一份合同</strong>。<strong>做工资经办人默认选「同发薪经办人」、合同经办人默认选「同做工资经办人」</strong>：保持该选项时，做工资/合同自动跟随发薪经办人的选择（改发薪经办人不会在下游累积多余人选），只有手动点选具体经办人才会取消跟随、改为独立筛选。<strong>最后一笔工资未发放的人员自动排除在减员名单外</strong>（压月发薪延期规则，无需手动选未发薪月份）。</span>
                 </div>
             </div>
             <div id="loading" class="text-center py-4" style="display: none;">
@@ -341,8 +343,10 @@
             payHandlerFilter.innerHTML = emptyOpts('全部发薪经办人') +
                 (data.pay_handlers || []).map(h => `<option value="${h}">${h}</option>`).join('');
             salaryHandlerFilter.innerHTML = emptyOpts('全部做工资经办人') +
+                `<option value="__same_pay__" selected>同发薪经办人（推荐，跟随发薪经办人）</option>` +
                 (data.salary_handlers || []).map(h => `<option value="${h}">${h}</option>`).join('');
             contractHandlerFilter.innerHTML = emptyOpts('全部合同经办人') +
+                `<option value="__same_salary__" selected>同做工资经办人（推荐，跟随做工资经办人）</option>` +
                 (data.contract_handlers || []).map(h => `<option value="${h}">${h}</option>`).join('');
             unitFilter.innerHTML = emptyOpts('全部结算单元') +
                 data.units.map(u => `<option value="${u.code}">${u.name} (${u.code})</option>`).join('');
@@ -366,21 +370,32 @@
         });
     }
 
-    function syncHandlerDown(src, dst) {
-        // 做工资默认同发薪、合同默认同做工资: 上级选择后自动联动到下级 (只加不减)
-        const vals = new Set(Array.from(src.selectedOptions).map(o => o.value).filter(v => v));
-        if (vals.size === 0) return;
-        Array.from(dst.options).forEach(o => {
-            if (o.value && vals.has(o.value)) o.selected = true;
-        });
-    }
+    const SAME_PAY = '__same_pay__';
+    const SAME_SALARY = '__same_salary__';
 
-    payHandlerFilter.addEventListener('change', () => {
-        syncHandlerDown(payHandlerFilter, salaryHandlerFilter);
-        syncHandlerDown(salaryHandlerFilter, contractHandlerFilter);
-    });
+    // 真实(非标记/非空)已选值班
+    function realVals(select) {
+        return Array.from(select.selectedOptions)
+            .map(o => o.value)
+            .filter(v => v && v !== SAME_PAY && v !== SAME_SALARY);
+    }
+    // 某标记选项是否被选中 (表示"跟随上级")
+    function hasMarker(select, marker) {
+        const opt = Array.from(select.options).find(o => o.value === marker);
+        return !!opt && opt.selected;
+    }
+    // 取消下级标记选项: 手动点选具体经办人 = 不再跟随上级
+    function unmark(select, marker) {
+        const opt = Array.from(select.options).find(o => o.value === marker);
+        if (opt) opt.selected = false;
+    }
+    // 手动点选做工资经办人 → 取消"同发薪经办人"跟随 (重新点回标记则恢复跟随)
     salaryHandlerFilter.addEventListener('change', () => {
-        syncHandlerDown(salaryHandlerFilter, contractHandlerFilter);
+        if (realVals(salaryHandlerFilter).length > 0) unmark(salaryHandlerFilter, SAME_PAY);
+    });
+    // 手动点选合同经办人 → 取消"同做工资经办人"跟随 (重新点回标记则恢复跟随)
+    contractHandlerFilter.addEventListener('change', () => {
+        if (realVals(contractHandlerFilter).length > 0) unmark(contractHandlerFilter, SAME_SALARY);
     });
     payHandlerSearch.addEventListener('input', () => filterOptions(payHandlerSearch, payHandlerFilter));
     salaryHandlerSearch.addEventListener('input', () => filterOptions(salaryHandlerSearch, salaryHandlerFilter));
@@ -446,9 +461,16 @@
                 form.append('pay_start_time', payStartTime.value);
                 form.append('pay_end_time', payEndTime.value);
             }
-            Array.from(payHandlerFilter.selectedOptions).forEach(o => { if (o.value) form.append('handler', o.value); });
-            Array.from(salaryHandlerFilter.selectedOptions).forEach(o => { if (o.value) form.append('salary_handler', o.value); });
-            Array.from(contractHandlerFilter.selectedOptions).forEach(o => { if (o.value) form.append('contract_handler', o.value); });
+            const payHandlers = realVals(payHandlerFilter);
+            // 做工资: 选中"同发薪经办人"则跟随发薪; 否则用手动选择
+            const salaryHandlers = hasMarker(salaryHandlerFilter, SAME_PAY)
+                ? payHandlers : realVals(salaryHandlerFilter);
+            // 合同: 选中"同做工资经办人"则跟随做工资(其本身可能已跟随发薪); 否则用手动选择
+            const contractHandlers = hasMarker(contractHandlerFilter, SAME_SALARY)
+                ? salaryHandlers : realVals(contractHandlerFilter);
+            payHandlers.forEach(h => form.append('handler', h));
+            salaryHandlers.forEach(h => form.append('salary_handler', h));
+            contractHandlers.forEach(h => form.append('contract_handler', h));
             Array.from(unitFilter.selectedOptions).forEach(o => { if (o.value) form.append('unit', o.value); });
             Array.from(deptFilter.selectedOptions).forEach(o => { if (o.value) form.append('dept', o.value); });
             const resp = await fetch('/api/personnel-compare/compare', { method: 'POST', body: form });

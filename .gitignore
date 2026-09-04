@@ -24,3 +24,6 @@ Material/**/*.Zone.Identifier
 # 运行时数据库 (SQLite 配置/回盘数据, 不入库)
 config.db
 tax_return.db
+
+# Playwright MCP 测试产物
+.playwright-mcp/
