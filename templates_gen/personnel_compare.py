@@ -209,8 +209,9 @@ REMOVE_VERIFY_HEADERS = [
     # 合同块 (Oracle)
     "合同签署时间范围",
     "合同签署增员",
-    "合同开始日期(Oracle)",
-    "离职日期(Oracle)",
+    "合同开始日期（ATC90C）",
+    "合同终止日期（ATC90D）",
+    "工资结束年月（ATC90AV）",
     "合同经办人",
 ]
 
@@ -327,7 +328,8 @@ def build_verify_row(add_row, cert, params, paid_salary_details, unpaid_salary_d
 
 def build_remove_verify_row(remove_row, cert, remove_type, params,
                             paid_salary_details, unpaid_salary_details, tc8m_details,
-                            contract_start, contract_end_dt, contract_details=None,
+                            contract_start, contract_end_dt, contract_end_d90=None,
+                            contract_details=None,
                             tax_person=None, last_pay=None):
     """为单个减员人员组装减员验证行。
 
@@ -343,7 +345,8 @@ def build_remove_verify_row(remove_row, cert, remove_type, params,
         unpaid_salary_details: 该人 TC93 未发薪记录 (验证用, 应为空)
         tc8m_details: 该人 TC8M 发放记录 (验证用, 应为空)
         contract_start: 该人合同开始日期 (TC90 最早 ATC90C)
-        contract_end_dt: 该人合同终止日期 (TC90 ATC90D, 即离职日期)
+        contract_end_dt: 该人工资结束年月 (TC90 ATC90AV 补全月末, 判定离职口径)
+        contract_end_d90: 该人合同终止日期 (TC90 ATC90D)
         contract_details: 该人 TC90 合同记录列表 (取经办人)
         tax_person: 个税端导出原始记录 dict (报送状态/身份验证/任职/更新时间等)
         last_pay: 该人最近一次发薪记录 dict {unit_name, salary_month, seq, pay_month}
@@ -399,6 +402,7 @@ def build_remove_verify_row(remove_row, cert, remove_type, params,
         contract_time,
         "否",
         contract_start or "",
+        contract_end_d90.strftime("%Y-%m-%d") if hasattr(contract_end_d90, "strftime") else (contract_end_d90 or ""),
         contract_end_dt.strftime("%Y-%m-%d") if hasattr(contract_end_dt, "strftime") else (contract_end_dt or ""),
         contract_handlers,
     ]

@@ -905,10 +905,14 @@ def api_personnel_compare():
                     tax_person_by_cert.setdefault(pc, p)
             remove_contract_start = {}
             remove_contract_end = {}
+            remove_contract_end_d90 = {}
             for r in remove_tc90:
                 c = r["cert"]
                 if c not in remove_contract_start or (r["合同开始日期"] and r["合同开始日期"] < remove_contract_start[c]):
                     remove_contract_start[c] = r["合同开始日期"]
+                if r.get("合同终止日期"):
+                    if c not in remove_contract_end_d90 or r["合同终止日期"] > remove_contract_end_d90[c]:
+                        remove_contract_end_d90[c] = r["合同终止日期"]
             # 离职日期: 用已按截止日期过滤的 salary_end_dates (判定口径, ATC90AV月末)
             # 待确认人员 (无有效工资结束年月) 离职日期为空
             for c, dt in salary_end_dates.items():
@@ -925,6 +929,7 @@ def api_personnel_compare():
                     remove_tc8m_by_cert.get(cert, []),
                     remove_contract_start.get(cert),
                     remove_contract_end.get(cert),
+                    contract_end_d90=remove_contract_end_d90.get(cert),
                     contract_details=remove_tc90_by_cert.get(cert, []),
                     tax_person=tax_person_by_cert.get(cert, {}),
                     last_pay=remove_last_pay.get(cert)))
