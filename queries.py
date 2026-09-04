@@ -686,6 +686,56 @@ def get_unpaid_salary_persons(conn, salary_months) -> Set[str]:
     return certs
 
 
+def get_latest_unpaid_persons(conn, cert_numbers) -> Set[str]:
+    """查询"最后一笔工资未发放"的人员证件号集合 (减员保护)。
+
+    规则: 派遣员工离职后, 压月发放的最后一笔工资若因故延期未发放,
+    则一直不能减员, 直到该笔工资发放并报税、下月无工资才可减员。
+
+    口径: 所属月 <= 最近发薪月 (TC8M 最新 ATC8G7) 的范围内,
+    最新所属月的 TC93 记录无对应 TC8M 已发记录 (ATC8M3=2) → 阻止减员。
+    更早的历史未发放残留不影响; 未来月份 (所属月 > 最近发薪月) 的工资表不参与判定。
+    """
+    if not cert_numbers:
+        return set()
+    certs = sorted({str(c).strip().upper() for c in cert_numbers if str(c).strip()})
+    result = set()
+    with conn.cursor() as cursor:
+        cursor.execute(
+            "SELECT MAX(ATC8G7) FROM TC8M WHERE ATC8M3 = 2 AND ATC8G7 IS NOT NULL")
+        row = cursor.fetchone()
+        cap = int(row[0] or 0) if row and row[0] else 0
+        if not cap:
+            return result
+        sql = """
+            SELECT cert FROM (
+                SELECT ac01.AAC002 AS cert, t93.ATC931, m.ATB930 AS paid,
+                       RANK() OVER (PARTITION BY ac01.AAC002
+                                    ORDER BY t93.ATC931 DESC NULLS LAST) AS rk
+                FROM TC93 t93
+                LEFT JOIN TC8M m ON m.ATB930 = t93.ATB930
+                                AND m.ATC931 = t93.ATC931
+                                AND m.ATC937 = t93.ATC937
+                                AND m.ATC8M3 = 2
+                LEFT JOIN AC01 ac01 ON t93.AAC001 = ac01.AAC001
+                WHERE t93.ATC93G = '1'
+                  AND t93.ATC931 <= :cap
+                  AND ac01.AAC002 IN ({placeholders})
+            ) WHERE rk = 1 AND paid IS NULL
+        """
+        for start in range(0, len(certs), _IN_BATCH_SIZE):
+            chunk = certs[start:start + _IN_BATCH_SIZE]
+            placeholders = ", ".join(f":c{i}" for i in range(len(chunk)))
+            binds = {f"c{i}": c for i, c in enumerate(chunk)}
+            binds["cap"] = cap
+            cursor.execute(sql.format(placeholders=placeholders), binds)
+            for row in cursor.fetchall():
+                cert = str(row[0] or "").strip().upper()
+                if cert:
+                    result.add(cert)
+    return result
+
+
 def get_pay_month_range(selected_month: int, conn) -> List[int]:
     """计算发薪月份筛选范围: 选中月份 → 最近发薪月份。
 
@@ -947,15 +997,15 @@ def get_units(conn, pay_month: int = 0) -> List[dict]:
         return [{"code": int(r[0]), "name": str(r[1] or "")} for r in cursor.fetchall()]
 
 
-def get_person_units(conn, cert_numbers, pay_months) -> Dict[str, dict]:
-    """批量查询人员的经办人/结算单元/单位信息。
+def get_person_units(conn, cert_numbers, pay_months, unpaid_months=None) -> Dict[str, dict]:
+    """批量查询人员的经办人/结算单元/单位信息 (按身份类别取经办人来源)。
 
     通过 TC93(工资) JOIN TC8M(经办) JOIN AC01(人员) 关联:
     - 结算单元名称/代码取 TC93.ATB931/ATB930 (未发薪/发薪记录都有)
     - 单位名称取 AC01.AAB004 (人员表直接关联)
-    - 发薪经办人取 TC8M.AAE019 (已发放状态, 仅发薪人员有)
-    - 做工资经办人取 TC93.AAE019 (全量历史记录 MAX, 无当期发薪也有值)
-    返回 {证件号(大写): {"handler": 发薪经办人, "salary_handler": 做工资经办人,
+    - pay_handlers: 发薪经办人列表 (TC8M.AAE019, 所选发薪月份, 多批次并集)
+    - salary_handlers: 做工资经办人列表 (TC93.AAE019, 未发薪月份, 多记录并集)
+    返回 {证件号(大写): {"pay_handlers": [...], "salary_handlers": [...],
     "unit_code": 结算单元代码, "unit_name": 结算单元名称(ATB931),
     "dept_name": 单位名称(AAB004)}}。
     """
@@ -963,41 +1013,77 @@ def get_person_units(conn, cert_numbers, pay_months) -> Dict[str, dict]:
         return {}
     certs = sorted({str(c).strip().upper() for c in cert_numbers if str(c).strip()})
     result: Dict[str, dict] = {}
-    sql = """
-        SELECT ac01.AAC002, MAX(m.AAE019) AS handler,
-               MAX(t93.ATB930) AS unit_code, MAX(t93.ATB931) AS unit_name,
-               MAX(t93.AAB004) AS dept_name, MAX(t93.AAE019) AS salary_handler
+    months = sorted(set(pay_months)) if pay_months else [0]
+    unpaid = sorted(set(unpaid_months or [])) if unpaid_months else []
+    sql_units = """
+        SELECT ac01.AAC002, MAX(t93.ATB930) AS unit_code,
+               MAX(t93.ATB931) AS unit_name, MAX(t93.AAB004) AS dept_name
         FROM TC93 t93
-        LEFT JOIN TC8M m ON m.ATB930 = t93.ATB930
-                        AND m.ATC931 = t93.ATC931
-                        AND m.ATC937 = t93.ATC937
-                        AND m.ATC8M3 = 2
-                        AND m.ATC8G7 IN ({month_placeholders})
         LEFT JOIN AC01 ac01 ON t93.AAC001 = ac01.AAC001
         WHERE t93.ATC93G = '1'
           AND ac01.AAC002 IN ({cert_placeholders})
         GROUP BY ac01.AAC002
     """
-    months = sorted(set(pay_months)) if pay_months else [0]
+    sql_pay = """
+        SELECT DISTINCT ac01.AAC002, m.AAE019
+        FROM TC93 t93
+        JOIN TC8M m ON m.ATB930 = t93.ATB930
+                   AND m.ATC931 = t93.ATC931
+                   AND m.ATC937 = t93.ATC937
+                   AND m.ATC8M3 = 2
+                   AND m.ATC8G7 IN ({month_placeholders})
+        LEFT JOIN AC01 ac01 ON t93.AAC001 = ac01.AAC001
+        WHERE t93.ATC93G = '1'
+          AND m.AAE019 IS NOT NULL
+          AND ac01.AAC002 IN ({cert_placeholders})
+    """
+    sql_sal = """
+        SELECT DISTINCT ac01.AAC002, t93.AAE019
+        FROM TC93 t93
+        LEFT JOIN AC01 ac01 ON t93.AAC001 = ac01.AAC001
+        WHERE t93.ATC93G = '1'
+          AND t93.ATC931 IN ({month_placeholders})
+          AND t93.AAE019 IS NOT NULL
+          AND ac01.AAC002 IN ({cert_placeholders})
+    """
     with conn.cursor() as cursor:
         for start in range(0, len(certs), _IN_BATCH_SIZE):
             chunk = certs[start:start + _IN_BATCH_SIZE]
-            month_ph = ", ".join(f":pm{i}" for i in range(len(months)))
             cert_ph = ", ".join(f":c{i}" for i in range(len(chunk)))
-            binds = {f"pm{i}": m for i, m in enumerate(months)}
-            binds.update({f"c{i}": c for i, c in enumerate(chunk)})
-            cursor.execute(sql.format(month_placeholders=month_ph,
-                                      cert_placeholders=cert_ph), binds)
+            binds = {f"c{i}": c for i, c in enumerate(chunk)}
+            cursor.execute(sql_units.format(cert_placeholders=cert_ph), binds)
             for row in cursor.fetchall():
                 cert = str(row[0] or "").strip().upper()
                 if cert:
                     result[cert] = {
-                        "handler": str(row[1] or ""),
-                        "unit_code": int(row[2] or 0),
-                        "unit_name": str(row[3] or ""),
-                        "dept_name": str(row[4] or ""),
-                        "salary_handler": str(row[5] or ""),
+                        "pay_handlers": [],
+                        "salary_handlers": [],
+                        "unit_code": int(row[1] or 0),
+                        "unit_name": str(row[2] or ""),
+                        "dept_name": str(row[3] or ""),
                     }
+            month_ph = ", ".join(f":pm{i}" for i in range(len(months)))
+            binds2 = {f"pm{i}": m for i, m in enumerate(months)}
+            binds2.update({f"c{i}": c for i, c in enumerate(chunk)})
+            cursor.execute(sql_pay.format(month_placeholders=month_ph,
+                                          cert_placeholders=cert_ph), binds2)
+            for row in cursor.fetchall():
+                cert = str(row[0] or "").strip().upper()
+                if cert and cert in result:
+                    result[cert]["pay_handlers"].append(str(row[1] or ""))
+            if unpaid:
+                um_ph = ", ".join(f":um{i}" for i in range(len(unpaid)))
+                binds3 = {f"um{i}": m for i, m in enumerate(unpaid)}
+                binds3.update({f"c{i}": c for i, c in enumerate(chunk)})
+                cursor.execute(sql_sal.format(month_placeholders=um_ph,
+                                              cert_placeholders=cert_ph), binds3)
+                for row in cursor.fetchall():
+                    cert = str(row[0] or "").strip().upper()
+                    if cert and cert in result:
+                        result[cert]["salary_handlers"].append(str(row[1] or ""))
+    for info in result.values():
+        info["pay_handlers"] = list(dict.fromkeys(info["pay_handlers"]))
+        info["salary_handlers"] = list(dict.fromkeys(info["salary_handlers"]))
     return result
 
 
@@ -1140,25 +1226,29 @@ def get_excluded_unit_certs(conn, pay_months, unit_codes: List[int],
     return certs
 
 
-def get_person_units_contract(conn, cert_numbers) -> Dict[str, dict]:
-    """为仅合同人员(无工资记录)从 TC90 补充结算单元/单位/合同经办人信息。
+def get_last_pay_handlers(conn, cert_numbers) -> Dict[str, list]:
+    """减员人员最后一次发薪批次 (发放月最大) 的 TC8M 发薪经办人列表。
 
-    结算单元名称: TC90.ATC90X (TC90 自带结算单元名称, 无需关联 TC8M)
-    单位名称: TC90.AAB004 (降级用)
-    合同经办人: TC90.AAE019 (减员人员无当期发薪记录, 经办人过滤依赖此字段)
-    返回 {证件号(大写): {"unit_code", "unit_name", "dept_name", "contract_handler"}}。
+    同一人可能在最大发放月有多个单位批次, 全部保留 (任一命中)。
+    返回 {证件号(大写): [经办人, ...]}, 无发薪记录的人员不出现。
     """
     if not cert_numbers:
         return {}
     certs = sorted({str(c).strip().upper() for c in cert_numbers if str(c).strip()})
-    result: Dict[str, dict] = {}
+    result: Dict[str, list] = {}
     sql = """
-        SELECT t90.AAC002, MAX(t90.ATB930) AS unit_code,
-               MAX(t90.ATC90X) AS unit_name, MAX(t90.AAB004) AS dept_name,
-               MAX(t90.AAE019) AS contract_handler
-        FROM TC90 t90
-        WHERE t90.AAC002 IN ({placeholders})
-        GROUP BY t90.AAC002
+        SELECT cert, AAE019 FROM (
+            SELECT ac01.AAC002 AS cert, m.AAE019 AS AAE019,
+                   RANK() OVER (PARTITION BY ac01.AAC002
+                                ORDER BY m.ATC8G7 DESC NULLS LAST) AS rk
+            FROM TC8M m
+            JOIN TC93 t93 ON t93.ATB930 = m.ATB930
+                         AND t93.ATC931 = m.ATC931
+                         AND t93.ATC937 = m.ATC937
+            LEFT JOIN AC01 ac01 ON t93.AAC001 = ac01.AAC001
+            WHERE m.ATC8M3 = 2
+              AND ac01.AAC002 IN ({placeholders})
+        ) WHERE rk = 1 AND AAE019 IS NOT NULL
     """
     with conn.cursor() as cursor:
         for start in range(0, len(certs), _IN_BATCH_SIZE):
@@ -1169,12 +1259,88 @@ def get_person_units_contract(conn, cert_numbers) -> Dict[str, dict]:
             for row in cursor.fetchall():
                 cert = str(row[0] or "").strip().upper()
                 if cert:
-                    result[cert] = {
-                        "unit_code": int(row[1] or 0),
-                        "unit_name": str(row[2] or ""),
-                        "dept_name": str(row[3] or ""),
-                        "contract_handler": str(row[4] or ""),
-                    }
+                    result.setdefault(cert, []).append(str(row[1] or ""))
+    return {c: list(dict.fromkeys(hs)) for c, hs in result.items()}
+
+
+def get_last_salary_handlers(conn, cert_numbers) -> Dict[str, list]:
+    """减员人员最后一次工资记录 (所属月最大) 的 TC93 做工资经办人列表。
+
+    用于无发薪记录但有工资记录的人员 (减员链: 最后一次发薪 → 最后一次做工资)。
+    返回 {证件号(大写): [经办人, ...]}, 无工资记录的人员不出现。
+    """
+    if not cert_numbers:
+        return {}
+    certs = sorted({str(c).strip().upper() for c in cert_numbers if str(c).strip()})
+    result: Dict[str, list] = {}
+    sql = """
+        SELECT cert, AAE019 FROM (
+            SELECT ac01.AAC002 AS cert, t93.AAE019 AS AAE019,
+                   RANK() OVER (PARTITION BY ac01.AAC002
+                                ORDER BY t93.ATC931 DESC NULLS LAST) AS rk
+            FROM TC93 t93
+            LEFT JOIN AC01 ac01 ON t93.AAC001 = ac01.AAC001
+            WHERE t93.ATC93G = '1'
+              AND ac01.AAC002 IN ({placeholders})
+        ) WHERE rk = 1 AND AAE019 IS NOT NULL
+    """
+    with conn.cursor() as cursor:
+        for start in range(0, len(certs), _IN_BATCH_SIZE):
+            chunk = certs[start:start + _IN_BATCH_SIZE]
+            placeholders = ", ".join(f":c{i}" for i in range(len(chunk)))
+            binds = {f"c{i}": c for i, c in enumerate(chunk)}
+            cursor.execute(sql.format(placeholders=placeholders), binds)
+            for row in cursor.fetchall():
+                cert = str(row[0] or "").strip().upper()
+                if cert:
+                    result.setdefault(cert, []).append(str(row[1] or ""))
+    return {c: list(dict.fromkeys(hs)) for c, hs in result.items()}
+
+
+def get_person_units_contract(conn, cert_numbers) -> Dict[str, dict]:
+    """按最后一份合同 (开始日期最大) 补充结算单元/单位/合同经办人信息。
+
+    结算单元名称: TC90.ATC90X (TC90 自带结算单元名称, 无需关联 TC8M)
+    单位名称: TC90.AAB004 (降级用)
+    合同经办人: TC90.AAE019 (减员人员无当期发薪记录, 经办人过滤依赖此字段)
+    多份合同取最后一份 (ATC90C 最大); 同日开始多份则全部保留经办人 (任一命中)。
+    返回 {证件号(大写): {"unit_code", "unit_name", "dept_name",
+    "contract_handlers": [经办人, ...]}}。
+    """
+    if not cert_numbers:
+        return {}
+    certs = sorted({str(c).strip().upper() for c in cert_numbers if str(c).strip()})
+    result: Dict[str, dict] = {}
+    sql = """
+        SELECT cert, ATB930, ATC90X, AAB004, AAE019 FROM (
+            SELECT t90.AAC002 AS cert, t90.ATB930, t90.ATC90X, t90.AAB004,
+                   t90.AAE019,
+                   RANK() OVER (PARTITION BY t90.AAC002
+                                ORDER BY t90.ATC90C DESC NULLS LAST) AS rk
+            FROM TC90 t90
+            WHERE t90.AAC002 IN ({placeholders})
+        ) WHERE rk = 1
+    """
+    with conn.cursor() as cursor:
+        for start in range(0, len(certs), _IN_BATCH_SIZE):
+            chunk = certs[start:start + _IN_BATCH_SIZE]
+            placeholders = ", ".join(f":c{i}" for i in range(len(chunk)))
+            binds = {f"c{i}": c for i, c in enumerate(chunk)}
+            cursor.execute(sql.format(placeholders=placeholders), binds)
+            for row in cursor.fetchall():
+                cert = str(row[0] or "").strip().upper()
+                if cert:
+                    info = result.setdefault(cert, {
+                        "unit_code": 0, "unit_name": "", "dept_name": "",
+                        "contract_handlers": [],
+                    })
+                    info["unit_code"] = max(info["unit_code"], int(row[1] or 0))
+                    info["unit_name"] = max(info["unit_name"], str(row[2] or ""))
+                    info["dept_name"] = max(info["dept_name"], str(row[3] or ""))
+                    if row[4]:
+                        info["contract_handlers"].append(str(row[4] or ""))
+    for info in result.values():
+        info["contract_handlers"] = list(dict.fromkeys(info["contract_handlers"]))
     return result
 
 

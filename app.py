@@ -731,6 +731,10 @@ def api_personnel_compare():
         }
         protected = payroll_certs | unpaid_persons | contract_persons
         suspect_certs = active_certs - protected
+        # 压月发薪延期规则: 最后一笔工资未发放的人员不能减员 (自动判定, 不依赖未发薪月份选择)
+        from queries import get_latest_unpaid_persons
+        unpaid_latest = get_latest_unpaid_persons(conn, suspect_certs)
+        suspect_certs -= unpaid_latest
         termination_dates = get_tc90_termination_dates(conn, suspect_certs)
         # 离职日期超过截止日期的视为合同未到期, 不列为已离职
         if deadline_date:
@@ -740,7 +744,8 @@ def api_personnel_compare():
             }
         add_rows, departed_rows, pending_rows, stats = compare_personnel(
             tax_export_persons, payroll_certs, payroll_personnel, termination_dates,
-            unpaid_persons=unpaid_persons, contract_signed_persons=contract_persons)
+            unpaid_persons=unpaid_persons, contract_signed_persons=contract_persons,
+            unpaid_latest_persons=unpaid_latest)
         # 特殊结算单元: 工资为0不增员不报税 + 完全排除不增员不报税
         # 配置存 SQLite (config_db), Oracle 只读
         from config_db import get_zero_salary_unit_codes, get_excluded_unit_codes
@@ -765,24 +770,28 @@ def api_personnel_compare():
                             for p in tax_export_persons
                             if not str(p.get("离职日期") or "").strip()}
             unit_query_certs |= active_certs
-        person_units = get_person_units(conn, unit_query_certs, pay_months)
-        # 全量合并 TC90 合同经办人 (减员人员无当期发薪记录, 经办人仅能从合同取);
-        # 仅合同人员(无工资记录)同时补充 TC90 结算单元/单位名称
-        from queries import get_person_units_contract
+        person_units = get_person_units(conn, unit_query_certs, pay_months, unpaid_months)
+        # 合并最后一份合同信息 (合同经办人 + 无工资记录人员补充单位名称)
+        from queries import get_person_units_contract, get_last_pay_handlers, get_last_salary_handlers
         for cert, info in get_person_units_contract(conn, unit_query_certs).items():
             base = person_units.setdefault(cert, {})
-            base["contract_handler"] = str(info.get("contract_handler") or "")
+            base["contract_handlers"] = info.get("contract_handlers") or []
             if not base.get("unit_name"):
                 base["unit_code"] = info.get("unit_code") or 0
                 base["unit_name"] = info.get("unit_name") or ""
                 base["dept_name"] = info.get("dept_name") or ""
+        # 减员人员经办人来源: 最后一次发薪 (TC8M) / 最后一次做工资 (TC93), 链式回落
+        for cert, hs in get_last_pay_handlers(conn, unit_query_certs).items():
+            person_units.setdefault(cert, {})["last_pay_handlers"] = hs
+        for cert, hs in get_last_salary_handlers(conn, unit_query_certs).items():
+            person_units.setdefault(cert, {})["last_salary_handlers"] = hs
         if exclude_certs or filter_handlers or filter_units or filter_depts:
             add_rows, departed_rows, pending_rows, stats = compare_personnel(
                 tax_export_persons, payroll_certs, payroll_personnel, termination_dates,
                 unpaid_persons=unpaid_persons, contract_signed_persons=contract_persons,
                 person_units=person_units, filter_handlers=filter_handlers,
                 filter_units=filter_units, filter_depts=filter_depts,
-                exclude_certs=exclude_certs)
+                exclude_certs=exclude_certs, unpaid_latest_persons=unpaid_latest)
         # 补充增员人员详细信息 (未发薪/合同签署人员不在 payroll_personnel 中)
         if stats["add_count"] > len(add_rows):
             from templates_gen.personnel_compare import IDX_证件号码, map_personnel_info_to_row

@@ -152,7 +152,7 @@
                     </select>
                 </div>
                 <div class="col-md-4 d-flex align-items-end pb-1">
-                    <span class="text-muted" style="font-size: 0.85rem;">按住 Ctrl 多选。<strong>都不选 = 不过滤（显示全部）</strong>。三个经办人下拉按<strong>任一来源命中</strong>匹配：人员只要发薪/做工资/合同任一环节的经办人是所选的人即显示（不同环节经办人可能不同人）。</span>
+                    <span class="text-muted" style="font-size: 0.85rem;">按住 Ctrl 多选。<strong>都不选 = 不过滤（显示全部）</strong>。归属规则：<strong>发过薪 → 发薪经办人；未发薪 → 做工资经办人；仅合同 → 合同经办人；离职 → 最后一次发薪 → 最后一次做工资 → 最后一份合同</strong>。<strong>做工资/合同默认同上级经办人</strong>（选择时自动联动，可手动取消）。<strong>最后一笔工资未发放的人员自动排除在减员名单外</strong>（压月发薪延期规则，无需手动选未发薪月份）。</span>
                 </div>
             </div>
             <div id="loading" class="text-center py-4" style="display: none;">
@@ -366,6 +366,22 @@
         });
     }
 
+    function syncHandlerDown(src, dst) {
+        // 做工资默认同发薪、合同默认同做工资: 上级选择后自动联动到下级 (只加不减)
+        const vals = new Set(Array.from(src.selectedOptions).map(o => o.value).filter(v => v));
+        if (vals.size === 0) return;
+        Array.from(dst.options).forEach(o => {
+            if (o.value && vals.has(o.value)) o.selected = true;
+        });
+    }
+
+    payHandlerFilter.addEventListener('change', () => {
+        syncHandlerDown(payHandlerFilter, salaryHandlerFilter);
+        syncHandlerDown(salaryHandlerFilter, contractHandlerFilter);
+    });
+    salaryHandlerFilter.addEventListener('change', () => {
+        syncHandlerDown(salaryHandlerFilter, contractHandlerFilter);
+    });
     payHandlerSearch.addEventListener('input', () => filterOptions(payHandlerSearch, payHandlerFilter));
     salaryHandlerSearch.addEventListener('input', () => filterOptions(salaryHandlerSearch, salaryHandlerFilter));
     contractHandlerSearch.addEventListener('input', () => filterOptions(contractHandlerSearch, contractHandlerFilter));

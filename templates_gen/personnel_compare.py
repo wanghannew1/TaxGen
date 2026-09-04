@@ -371,7 +371,8 @@ def build_remove_verify_row(remove_row, cert, remove_type, params,
 def compare_personnel(tax_export_persons, payroll_certs, payroll_personnel, termination_dates,
                       unpaid_persons=None, contract_signed_persons=None,
                       person_units=None, filter_handlers=None, filter_units=None,
-                      filter_depts=None, exclude_certs=None):
+                      filter_depts=None, exclude_certs=None,
+                      unpaid_latest_persons=None):
     """增减员比对引擎。
 
     Args:
@@ -381,11 +382,15 @@ def compare_personnel(tax_export_persons, payroll_certs, payroll_personnel, term
         termination_dates: Dict[str, datetime] - 证件号 → TC90 合同终止日期
         unpaid_persons: Set[str] - 未发薪工资表人员证件号集合 (减员排除 + 增员条件②)
         contract_signed_persons: Set[str] - 合同签署时间范围内人员 (增员条件③)
-        person_units: Dict[str, dict] - 证件号 → {handler, unit_code, unit_name, dept_name}
+        person_units: Dict[str, dict] - 证件号 → {pay_handlers, salary_handlers,
+            contract_handlers, last_pay_handlers, last_salary_handlers,
+            unit_code, unit_name, dept_name}
         filter_handlers: List[str] - 经办人过滤 (空=不过滤)
         filter_units: List[int] - 结算单元代码过滤 (空=不过滤)
         filter_depts: List[str] - 单位名称过滤 (空=不过滤)
         exclude_certs: Set[str] - 需从增员中排除的人员 (特殊结算单元工资为0)
+        unpaid_latest_persons: Set[str] - 最后一笔工资未发放的人员
+            (压月发薪延期: 最后一笔工资未发完前不能减员, 从减员候选剔除)
 
     Returns:
         (add_rows, departed_rows, pending_rows, stats):
@@ -400,6 +405,8 @@ def compare_personnel(tax_export_persons, payroll_certs, payroll_personnel, term
     contract_set.discard("")
     exclude_set = {_cert_key(c) for c in (exclude_certs or set())}
     exclude_set.discard("")
+    unpaid_latest_set = {_cert_key(c) for c in (unpaid_latest_persons or set())}
+    unpaid_latest_set.discard("")
 
     handlers = {h for h in (filter_handlers or []) if h}
     units = {int(u) for u in (filter_units or []) if u}
@@ -413,11 +420,19 @@ def compare_personnel(tax_export_persons, payroll_certs, payroll_personnel, term
         if not info:
             return False
         if handlers:
-            # 任一来源命中即通过: 发薪经办人(TC8M) / 做工资经办人(TC93) / 合同经办人(TC90)
-            person_handlers = {str(info.get("handler") or ""),
-                               str(info.get("salary_handler") or ""),
-                               str(info.get("contract_handler") or "")}
-            if not (person_handlers & handlers):
+            # 有效经办人 E (按身份类别取第一个存在的来源):
+            # 增员: 发薪(所选月TC8M) → 做工资(未发薪月TC93) → 合同(最后一份TC90)
+            # 减员: 最后一次发薪(TC8M) → 最后一次做工资(TC93) → 最后一份合同(TC90)
+            if cert in payroll_set:
+                e = info.get("pay_handlers") or []
+            elif cert in unpaid_set:
+                e = info.get("salary_handlers") or []
+            elif cert in contract_set:
+                e = info.get("contract_handlers") or []
+            else:
+                e = (info.get("last_pay_handlers") or info.get("last_salary_handlers")
+                     or info.get("contract_handlers") or [])
+            if not (set(e) & handlers):
                 return False
         if units and info.get("unit_code") not in units:
             return False
@@ -441,7 +456,8 @@ def compare_personnel(tax_export_persons, payroll_certs, payroll_personnel, term
     active_certs = {_cert_key(p.get("证件号码")) for p in tax_export_persons
                     if not str(p.get("离职日期") or "").strip()}
     protected_certs = payroll_set | unpaid_set | contract_set
-    suspect_certs = active_certs - protected_certs
+    # 最后一笔工资未发放的人员不参与减员 (压月发薪延期规则)
+    suspect_certs = active_certs - protected_certs - unpaid_latest_set
     suspect_certs = {c for c in suspect_certs if _passes_filter(c)}
     departed_certs = {c for c in suspect_certs if c in termination_dates}
     pending_certs = suspect_certs - departed_certs
