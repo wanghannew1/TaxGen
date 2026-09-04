@@ -541,23 +541,29 @@ def get_payroll_cert_numbers(conn, pay_month: int, start_time=None, end_time=Non
     return certs
 
 
-def get_tc90_termination_dates(conn, cert_numbers) -> Dict[str, datetime]:
-    """按身份证号批量查询 TC90 合同终止日期 (ATC90D)。
+def get_tc90_salary_end_dates(conn, cert_numbers) -> Dict[str, datetime]:
+    """按身份证号批量查询 TC90 工资结束年月 (ATC90AV) 并补全为当月月末日期。
 
-    同一证件号在 TC90 可能有多个历史合同记录, 取 MAX(ATC90D)
-    作为最新合同终止日期。IN 列表分批查询避免 ORA-01795。
-    返回 {证件号(大写): datetime}, 无合同终止日期的证件号不出现。
+    离职人员的离职日期取 ATC90AV (工资结束年月, NUMBER YYYYMM) 而非
+    ATC90D (合同终止日期): 压月发薪场景下合同终止不等于工资结束。
+    取最后一份合同 (ATC90C 最大, 同日多份取 MAX(ATC90AV)) 的工资结束年月;
+    异常月份 (如 202617) 跳过; 转换后补全月末, 如 202607 → 2026-07-31。
+    返回 {证件号(大写): datetime}, 无有效工资结束年月的证件号不出现。
     """
+    import calendar
     from datetime import datetime
     if not cert_numbers:
         return {}
     dates: Dict[str, datetime] = {}
     sql = """
-        SELECT AAC002, MAX(ATC90D)
-        FROM TC90
-        WHERE AAC002 IN ({placeholders})
-          AND ATC90D IS NOT NULL
-        GROUP BY AAC002
+        SELECT cert, MAX(ATC90AV) FROM (
+            SELECT AAC002 AS cert, ATC90AV,
+                   RANK() OVER (PARTITION BY AAC002
+                                ORDER BY ATC90C DESC NULLS LAST) AS rk
+            FROM TC90
+            WHERE AAC002 IN ({placeholders})
+        ) WHERE rk = 1 AND ATC90AV IS NOT NULL
+        GROUP BY cert
     """
     cert_list = list(cert_numbers)
     with conn.cursor() as cursor:
@@ -568,8 +574,16 @@ def get_tc90_termination_dates(conn, cert_numbers) -> Dict[str, datetime]:
             cursor.execute(sql.format(placeholders=placeholders), binds)
             for row in cursor.fetchall():
                 cert = str(row[0] or "").strip().upper()
-                if cert and row[1] is not None:
-                    dates[cert] = row[1]
+                if not cert or row[1] is None:
+                    continue
+                try:
+                    av = int(row[1])
+                except (ValueError, TypeError):
+                    continue
+                y, m = divmod(av, 100)
+                if not (1 <= m <= 12):
+                    continue
+                dates[cert] = datetime(y, m, calendar.monthrange(y, m)[1])
     return dates
 
 

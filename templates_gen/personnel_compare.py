@@ -89,8 +89,8 @@ def map_personnel_info_to_row(person: PersonnelInfo) -> list:
 def map_tax_export_to_row(person: dict, termination_date=None) -> list:
     """将个税端导出记录 (减员) 映射为 51 列行数据。
 
-    termination_date 为 TC90.ATC90D 合同终止日期 (datetime 或 str),
-    填入"离职日期"列标记减员。
+    termination_date 为工资结束日期 (TC90.ATC90AV 工资结束年月补全为月末,
+    datetime 或 str), 填入"离职日期"列标记减员。
     """
     row = [""] * len(COMPARE_HEADERS)
     row[IDX_工号] = str(person.get("工号") or "")
@@ -368,7 +368,7 @@ def build_remove_verify_row(remove_row, cert, remove_type, params,
     ]
 
 
-def compare_personnel(tax_export_persons, payroll_certs, payroll_personnel, termination_dates,
+def compare_personnel(tax_export_persons, payroll_certs, payroll_personnel, salary_end_dates,
                       unpaid_persons=None, contract_signed_persons=None,
                       person_units=None, filter_handlers=None, filter_units=None,
                       filter_depts=None, exclude_certs=None,
@@ -379,7 +379,8 @@ def compare_personnel(tax_export_persons, payroll_certs, payroll_personnel, term
         tax_export_persons: List[dict] - 个税端导出文件解析结果
         payroll_certs: Set[str] - 发薪月份范围内发薪人员证件号集合 (已大写, 并集)
         payroll_personnel: List[PersonnelInfo] - 发薪人员详细信息
-        termination_dates: Dict[str, datetime] - 证件号 → TC90 合同终止日期
+        salary_end_dates: Dict[str, datetime] - 证件号 → 工资结束日期
+            (TC90.ATC90AV 工资结束年月补全为月末, 即离职日期)
         unpaid_persons: Set[str] - 未发薪工资表人员证件号集合 (减员排除 + 增员条件②)
         contract_signed_persons: Set[str] - 合同签署时间范围内人员 (增员条件③)
         person_units: Dict[str, dict] - 证件号 → {pay_handlers, salary_handlers,
@@ -459,7 +460,7 @@ def compare_personnel(tax_export_persons, payroll_certs, payroll_personnel, term
     # 最后一笔工资未发放的人员不参与减员 (压月发薪延期规则)
     suspect_certs = active_certs - protected_certs - unpaid_latest_set
     suspect_certs = {c for c in suspect_certs if _passes_filter(c)}
-    departed_certs = {c for c in suspect_certs if c in termination_dates}
+    departed_certs = {c for c in suspect_certs if c in salary_end_dates}
     pending_certs = suspect_certs - departed_certs
 
     add_rows = []
@@ -472,7 +473,7 @@ def compare_personnel(tax_export_persons, payroll_certs, payroll_personnel, term
         cert = _cert_key(person.get("证件号码"))
         if cert in departed_certs:
             departed_rows.append(map_tax_export_to_row(
-                person, termination_date=termination_dates.get(cert)))
+                person, termination_date=salary_end_dates.get(cert)))
 
     pending_rows = []
     for person in tax_export_persons:

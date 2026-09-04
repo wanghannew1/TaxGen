@@ -4,7 +4,7 @@ import os
 from datetime import datetime
 from flask import Flask, render_template, request, jsonify, send_file
 from db import init_db, get_connection, close_db
-from queries import get_available_months, get_salary_records, get_personnel_info, get_suggestions, search_tc8m, get_abnormal_records, get_tc93_all_fields, get_tc93_field_comments, get_merge_warnings, get_pay_months, get_payroll_cert_numbers, get_tc90_termination_dates, get_payroll_personnel
+from queries import get_available_months, get_salary_records, get_personnel_info, get_suggestions, search_tc8m, get_abnormal_records, get_tc93_all_fields, get_tc93_field_comments, get_merge_warnings, get_pay_months, get_payroll_cert_numbers, get_tc90_salary_end_dates, get_payroll_personnel
 from templates_gen.normal_salary import generate_normal_salary, generate_tc93_full_sheet, generate_abnormal_sheet
 from templates_gen.labor_service import generate_labor_service
 from templates_gen.annual_bonus import generate_annual_bonus
@@ -638,7 +638,7 @@ def api_personnel_compare():
     - termination_deadline: 离职时间截止日期 (默认最近发薪日期)
     """
     try:
-        from queries import (get_payroll_cert_numbers, get_tc90_termination_dates,
+        from queries import (get_payroll_cert_numbers, get_tc90_salary_end_dates,
                              get_payroll_personnel, get_unpaid_salary_persons,
                              get_pay_month_range, get_unpaid_month_range,
                              get_contract_signed_persons, get_contract_date_range,
@@ -735,15 +735,15 @@ def api_personnel_compare():
         from queries import get_latest_unpaid_persons
         unpaid_latest = get_latest_unpaid_persons(conn, suspect_certs)
         suspect_certs -= unpaid_latest
-        termination_dates = get_tc90_termination_dates(conn, suspect_certs)
+        salary_end_dates = get_tc90_salary_end_dates(conn, suspect_certs)
         # 离职日期超过截止日期的视为合同未到期, 不列为已离职
         if deadline_date:
-            termination_dates = {
-                c: d for c, d in termination_dates.items()
+            salary_end_dates = {
+                c: d for c, d in salary_end_dates.items()
                 if d.date() <= deadline_date
             }
         add_rows, departed_rows, pending_rows, stats = compare_personnel(
-            tax_export_persons, payroll_certs, payroll_personnel, termination_dates,
+            tax_export_persons, payroll_certs, payroll_personnel, salary_end_dates,
             unpaid_persons=unpaid_persons, contract_signed_persons=contract_persons,
             unpaid_latest_persons=unpaid_latest)
         # 特殊结算单元: 工资为0不增员不报税 + 完全排除不增员不报税
@@ -790,7 +790,7 @@ def api_personnel_compare():
             person_units.setdefault(cert, {})["last_salary_handlers"] = hs
         if exclude_certs or filter_handlers or filter_units or filter_depts:
             add_rows, departed_rows, pending_rows, stats = compare_personnel(
-                tax_export_persons, payroll_certs, payroll_personnel, termination_dates,
+                tax_export_persons, payroll_certs, payroll_personnel, salary_end_dates,
                 unpaid_persons=unpaid_persons, contract_signed_persons=contract_persons,
                 person_units=person_units, filter_handlers=filter_handlers,
                 filter_units=filter_units, filter_depts=filter_depts,
@@ -905,9 +905,9 @@ def api_personnel_compare():
                 c = r["cert"]
                 if c not in remove_contract_start or (r["合同开始日期"] and r["合同开始日期"] < remove_contract_start[c]):
                     remove_contract_start[c] = r["合同开始日期"]
-            # 离职日期: 用已按截止日期过滤的 termination_dates (判定口径)
-            # 待确认人员 (无有效终止日期) 离职日期为空
-            for c, dt in termination_dates.items():
+            # 离职日期: 用已按截止日期过滤的 salary_end_dates (判定口径, ATC90AV月末)
+            # 待确认人员 (无有效工资结束年月) 离职日期为空
+            for c, dt in salary_end_dates.items():
                 if c in remove_contract_end:
                     remove_contract_end[c] = max(remove_contract_end[c], dt)
                 else:
