@@ -763,13 +763,16 @@ def api_personnel_compare():
         tax_cert_set = {str(p.get("证件号码") or "").strip().upper()
                         for p in tax_export_persons}
         add_candidates = (payroll_certs | unpaid_persons | contract_persons) - tax_cert_set
-        # 过滤时减员候选也需要人员归属信息 (个税端未标记离职人员)
+        # 减员候选需要人员归属信息 (个税端未标记离职人员: 过滤 + 备注都需要)
         unit_query_certs = set(add_candidates)
         if filter_handlers or filter_units or filter_depts:
             active_certs = {str(p.get("证件号码") or "").strip().upper()
                             for p in tax_export_persons
                             if not str(p.get("离职日期") or "").strip()}
             unit_query_certs |= active_certs
+        else:
+            # 无过滤时仅需减员候选的归属 (备注=结算单元名称)
+            unit_query_certs |= suspect_certs
         person_units = get_person_units(conn, unit_query_certs, pay_months, unpaid_months)
         # 合并最后一份合同信息 (合同经办人 + 无工资记录人员补充单位名称)
         from queries import get_person_units_contract, get_last_pay_handlers, get_last_salary_handlers
@@ -816,6 +819,17 @@ def api_personnel_compare():
         from queries import get_salary_details, get_tc8m_records, get_tc90_records
         from templates_gen.personnel_compare import (IDX_证件号码, build_verify_row,
                                                      map_personnel_info_to_row as _map_row)
+        # 减员名单备注 = 结算单元名称 (与增员名单一致), 并按结算单元排序
+        for row in departed_rows + pending_rows:
+            info = person_units.get(str(row[IDX_证件号码] or "").strip().upper())
+            if info:
+                remark = info.get("unit_name") or ""
+                if remark:
+                    row[25] = remark
+                elif info.get("dept_name"):
+                    row[25] = f"单位名称（非结算单元名称）：{info['dept_name']}"
+        departed_rows.sort(key=lambda r: str(r[25] or ""))
+        pending_rows.sort(key=lambda r: str(r[25] or ""))
         add_certs_final = {r[IDX_证件号码] for r in add_rows}
         verify_params = {
             "pay_months": pay_months,
