@@ -777,6 +777,7 @@ def api_personnel_compare():
                             for p in tax_export_persons
                             if not str(p.get("离职日期") or "").strip()}
             unit_query_certs |= active_certs
+            unit_query_certs |= payroll_certs
         else:
             # 无过滤时仅需减员候选的归属 (备注=结算单元名称)
             unit_query_certs |= suspect_certs
@@ -1011,6 +1012,11 @@ def api_personnel_compare():
             "payroll_total": stats["payroll_total"],
             "zero_count": stats.get("zero_count", 0),
             "zero_pending_count": stats.get("zero_pending_count", 0),
+            "active_total": stats.get("active_total", 0),
+            "unpaid_total": stats.get("unpaid_total", 0),
+            "contract_total": stats.get("contract_total", 0),
+            "filtered_active_count": stats.get("filtered_active_count", 0),
+            "filtered_payroll_count": stats.get("filtered_payroll_count", 0),
             "file_name": os.path.basename(result.file_path),
             "download_url": f"/api/download/{os.path.basename(result.file_path)}",
         })

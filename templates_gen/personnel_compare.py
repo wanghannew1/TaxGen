@@ -459,7 +459,8 @@ def compare_personnel(tax_export_persons, payroll_certs, payroll_personnel, sala
             departed_rows: List[list] - 近期离职人员 51 列行数据
             pending_rows: List[list] - 待确认近期离职人员 51 列行数据
             stats: dict - {add_count, departed_count, pending_count, tax_total, payroll_total,
-                zero_count, zero_certs, zero_pending_count, zero_pending_certs}
+                zero_count, zero_certs, zero_pending_count, zero_pending_certs,
+                active_total, unpaid_total, contract_total, filtered_active_count, filtered_payroll_count}
     """
     unpaid_set = {_cert_key(c) for c in (unpaid_persons or set())}
     unpaid_set.discard("")
@@ -540,6 +541,13 @@ def compare_personnel(tax_export_persons, payroll_certs, payroll_personnel, sala
     zero_pending_declare = pending_certs - exclude_set
     zero_pending_declare = {c for c in zero_pending_declare if _passes_filter(c)}
 
+    # 新增 5 个统计字段（纯函数计算，零新增 DB 查询）
+    active_total = len(active_certs)  # 个税端在职人数
+    unpaid_total = len(unpaid_set)    # 未发薪工资表人数
+    contract_total = len(contract_set)  # 合同签署人数
+    filtered_active_count = len({c for c in active_certs if _passes_filter(c)})  # 过滤后在职人数
+    filtered_payroll_count = len({c for c in payroll_set if _passes_filter(c)})  # 过滤后发薪人数
+
     add_rows = []
     for person in payroll_personnel:
         if _cert_key(person.身份证) in add_certs:
@@ -569,6 +577,12 @@ def compare_personnel(tax_export_persons, payroll_certs, payroll_personnel, sala
         "zero_pending_count": len(zero_pending_declare),
         "zero_pending_certs": zero_pending_declare,
         "add_certs": add_certs,
+        # 新增 5 个统计字段（纯函数计算，零新增 DB 查询）
+        "active_total": active_total,
+        "unpaid_total": unpaid_total,
+        "contract_total": contract_total,
+        "filtered_active_count": filtered_active_count,
+        "filtered_payroll_count": filtered_payroll_count,
     }
     return add_rows, departed_rows, pending_rows, stats
 
