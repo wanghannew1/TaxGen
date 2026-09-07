@@ -5,8 +5,70 @@ from templates_gen.personnel_compare import compare_personnel
 
 
 def _persons(specs):
-    """specs: [(证件号, 离职日期为空串表示在职)] → 个税端人员 dict 列表"""
+    """specs: [(证件号, 离职日期为空串表示在职]] → 个税端人员 dict 列表"""
     return [{"证件号码": c, "姓名": f"人{c}", "离职日期": dep} for c, dep in specs]
+
+
+class TestStatsFields:
+    """测试 compare_personnel 返回的 5 个新统计字段"""
+
+    def test_stats_fields_present_and_correct(self):
+        tax = _persons([
+            ("A001", ""), ("B002", ""), ("C003", ""),
+        ])
+        _, _, _, stats = compare_personnel(
+            tax, payroll_certs=set(), payroll_personnel=[],
+            salary_end_dates={},
+        )
+        assert "active_total" in stats
+        assert "unpaid_total" in stats
+        assert "contract_total" in stats
+        assert "filtered_active_count" in stats
+        assert "filtered_payroll_count" in stats
+        assert stats["active_total"] == 3
+        assert stats["unpaid_total"] == 0
+        assert stats["contract_total"] == 0
+
+    def test_no_filter_invariant(self):
+        tax = _persons([("A001", ""), ("B002", "")])
+        _, _, _, stats = compare_personnel(
+            tax, payroll_certs={"A001", "B002"},
+            payroll_personnel=[], salary_end_dates={"A001": None, "B002": None},
+        )
+        assert stats["filtered_active_count"] == stats["active_total"]
+        assert stats["filtered_payroll_count"] == stats["payroll_total"]
+
+    def test_filtered_counts_with_filter(self):
+        tax = _persons([("A001", ""), ("B002", ""), ("C003", "")])
+        person_units = {
+            "A001": {"pay_handlers": ["E001"], "unit_code": 1, "unit_name": "单位A", "dept_name": "部门X"},
+            "B002": {"pay_handlers": ["E001"], "unit_code": 2, "unit_name": "单位B", "dept_name": "部门X"},
+            "C003": {"pay_handlers": ["E002"], "unit_code": 1, "unit_name": "单位A", "dept_name": "部门Y"},
+        }
+        _, _, _, stats = compare_personnel(
+            tax, payroll_certs={"A001", "B002", "C003"},
+            payroll_personnel=[], salary_end_dates={"A001": None, "B002": None, "C003": None},
+            person_units=person_units, filter_units=[1],
+        )
+        assert stats["filtered_active_count"] == 2
+        assert stats["filtered_active_count"] <= stats["active_total"]
+        assert stats["filtered_payroll_count"] == 2
+        assert stats["filtered_payroll_count"] <= stats["payroll_total"]
+
+    def test_payroll_cert_not_in_active_still_counted_in_payroll_filtered(self):
+        tax = _persons([("A001", ""), ("B002", "2026-06-30")])
+        person_units = {
+            "B002": {"pay_handlers": ["E001"], "unit_code": 1, "unit_name": "单位A", "dept_name": "部门X"},
+        }
+        _, _, _, stats = compare_personnel(
+            tax, payroll_certs={"A001", "B002"},
+            payroll_personnel=[], salary_end_dates={"A001": None, "B002": None},
+            person_units=person_units,
+        )
+        # filtered_payroll_count 计入 B002 (在 payroll_certs 且通过 _passes_filter)
+        assert stats["filtered_payroll_count"] == 2  # A001 + B002
+        # filtered_active_count 不计入 B002 (B002 有离职日期，不在 active_certs)
+        assert stats["filtered_active_count"] == 1  # 只有 A001
 
 
 class TestDeferredPayZeroDeclare:
