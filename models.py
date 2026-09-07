@@ -11,6 +11,7 @@ class SalaryRecord:
     身份证: str = ""  # AAC002 - 公民身份号码 (from AC01)
     工资所属年月: int = 0  # ATC931 - 工资所属年月
     结算单元: int = 0  # ATB930 - 结算单元流水号
+    结算单元名称: str = ""  # ATB931 - 结算单元名称 (TC93 自带冗余列)
     当月批次: str = ""  # ATC937 - 工资发放次数
     tc930_id: int = 0  # ATC930 - 流水号
 

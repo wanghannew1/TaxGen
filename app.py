@@ -80,19 +80,22 @@ def build_labor_service_records(conn, raw_records, confirmed_combos, month,
     (ATC931), 收入=各所属月 ATC93AA 之和; 仅保留 AAE00P='3'(劳务报酬)。
     有 confirmed_combos 时复用按批次过滤的原始记录, 否则按发放月自动取全部
     已确认批次 (与 Web 组合流程等价)。AAE00P 按身份证集合统一大写过滤。
+
+    返回 (合并后记录, 合并前原始记录, 使用的组合列表) 供辅助 sheet 使用。
     """
     from queries import get_suggestions, get_salary_records, get_labor_service_cert_numbers
-    if confirmed_combos:
-        lab_records = list(raw_records)
+    combos = confirmed_combos
+    if combos:
+        lab_raw = list(raw_records)
     else:
         combos = get_suggestions(conn, month)
         combo_set = {(c["unit"], c["salary_month"], c["seq"]) for c in combos}
         salary_months = {c["salary_month"] for c in combos}
-        lab_records = []
+        lab_raw = []
         for sm in sorted(salary_months):
-            lab_records.extend(get_salary_records(conn, sm))
-        lab_records = [r for r in lab_records
-                       if (r.结算单元, r.工资所属年月, r.当月批次) in combo_set]
+            lab_raw.extend(get_salary_records(conn, sm))
+        lab_raw = [r for r in lab_raw
+                   if (r.结算单元, r.工资所属年月, r.当月批次) in combo_set]
         if zero_codes or excl_codes:
             def _keep_lab(unit, salary_total):
                 if unit in excl_codes:
@@ -100,16 +103,18 @@ def build_labor_service_records(conn, raw_records, confirmed_combos, month,
                 if unit in zero_codes and (salary_total or 0) == 0:
                     return False
                 return True
-            lab_records = [r for r in lab_records if _keep_lab(r.结算单元, r.工资总额)]
+            lab_raw = [r for r in lab_raw if _keep_lab(r.结算单元, r.工资总额)]
+    lab_certs = get_labor_service_cert_numbers(conn, month)
+    if lab_certs:
+        lab_raw = [r for r in lab_raw if r.身份证 and r.身份证.strip().upper() in lab_certs]
     if merge_by_person:
-        lab_records = merge_records_by_person(lab_records, by_pay_month=merge_by_pay_month)
+        lab_records = merge_records_by_person(lab_raw, by_pay_month=merge_by_pay_month)
+    else:
+        lab_records = list(lab_raw)
     # 手工「07-月劳务报酬所得」文件 258 人精确匹配验证: 仅含工资总额>0 的人员
     # (工资为0 不发钱, 不应出现在劳务报酬申报模板)
     lab_records = [r for r in lab_records if r.工资总额 and float(r.工资总额) > 0]
-    lab_certs = get_labor_service_cert_numbers(conn, month)
-    if lab_certs:
-        lab_records = [r for r in lab_records if r.身份证 and r.身份证.strip().upper() in lab_certs]
-    return lab_records
+    return lab_records, lab_raw, combos
 
 
 @app.route("/")
@@ -245,11 +250,27 @@ def api_generate():
                                             raw_records=raw_records if merge_by_person else None,
                                             merge_mode="pay_month" if merge_by_pay_month else "month")
             elif tpl == "laborService":
-                lab_records = build_labor_service_records(conn, raw_records,
-                                                          confirmed_combos, month,
-                                                          merge_by_person, merge_by_pay_month,
-                                                          zero_codes, excl_codes)
-                r = generate_labor_service(lab_records, f"劳务派遣人员工资发放表{month}", OUTPUT_DIR)
+                lab_records, lab_raw, lab_combos = build_labor_service_records(
+                    conn, raw_records, confirmed_combos, month,
+                    merge_by_person, merge_by_pay_month, zero_codes, excl_codes)
+                lab_combo_set = {(int(c.get("unit", 0) or 0),
+                                  int(c.get("salary_month", 0) or 0),
+                                  str(c.get("seq", "") or "")) for c in lab_combos}
+                lab_salary_months = sorted({int(c.get("salary_month", 0) or 0) for c in lab_combos})
+                lab_tc93 = []
+                for sm in lab_salary_months:
+                    lab_tc93.extend(r for r in get_tc93_all_fields(conn, sm)
+                                    if (int(r.get("ATB930") or 0), int(r.get("ATC931") or 0),
+                                        str(r.get("ATC937") or "")) in lab_combo_set)
+                lab_cert_set = {r.身份证.strip().upper() for r in lab_records if r.身份证}
+                if lab_cert_set:
+                    lab_tc93 = [r for r in lab_tc93
+                                if str(r.get("身份证") or "").strip().upper() in lab_cert_set]
+                r = generate_labor_service(lab_records, f"劳务派遣人员工资发放表{month}", OUTPUT_DIR,
+                                           tc93_all=lab_tc93, combos=lab_combos,
+                                           raw_records=lab_raw,
+                                           tc93_comments=get_tc93_field_comments(conn),
+                                           merge_mode="pay_month" if merge_by_pay_month else "month")
             elif tpl == "annualBonus":
                 r = generate_annual_bonus(records, f"劳务派遣人员工资发放表{month}", OUTPUT_DIR)
             elif tpl == "personnelInfo":
