@@ -296,7 +296,8 @@ def api_generate():
                                            tc93_all=lab_tc93, combos=report_combos,
                                            raw_records=lab_raw,
                                            tc93_comments=get_tc93_field_comments(conn),
-                                           merge_mode="pay_month" if merge_by_pay_month else "month")
+                                           merge_mode="pay_month" if merge_by_pay_month else "month",
+                                           pay_month=month)
             elif tpl == "annualBonus":
                 r = generate_annual_bonus(records, f"劳务派遣人员工资发放表{month}", OUTPUT_DIR)
             elif tpl == "personnelInfo":

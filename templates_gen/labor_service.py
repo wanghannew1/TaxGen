@@ -25,7 +25,8 @@ def generate_labor_service(records: List[SalaryRecord], title: str, output_dir: 
                            combos: Optional[List[dict]] = None,
                            raw_records: Optional[List[SalaryRecord]] = None,
                            tc93_comments: Optional[dict] = None,
-                           merge_mode: str = "pay_month") -> GenerateResult:
+                           merge_mode: str = "pay_month",
+                           pay_month: Optional[int] = None) -> GenerateResult:
     """生成劳务报酬所得 Excel 模板
 
     备注列固定填结算单元名称(ATB931), 与手工「07-月劳务报酬所得」文件一致。
@@ -110,8 +111,11 @@ def generate_labor_service(records: List[SalaryRecord], title: str, output_dir: 
     if combos:
         generate_combo_list_sheet(wb, combos)
     if raw_records:
-        generate_raw_detail_sheet(wb, raw_records, title)
-        generate_merge_detail_sheet(wb, raw_records, records, merge_mode)
+        # TC8M批次人数含0工资挂账人员(不发钱), 原始明细仅保留本次报税人员记录, 否则与合并后条目严重失真
+        final_gh = {r.职工号 for r in records}
+        raw_report = [r for r in raw_records if r.职工号 in final_gh]
+        generate_raw_detail_sheet(wb, raw_report, title, pay_month)
+        generate_merge_detail_sheet(wb, raw_report, records, merge_mode)
     generate_formula_explanation_sheet(wb, records)
 
     add_explanation_sheet(wb, [
@@ -153,11 +157,12 @@ def generate_labor_service(records: List[SalaryRecord], title: str, output_dir: 
     )
 
 
-def generate_raw_detail_sheet(wb: Workbook, raw_records: List[SalaryRecord], title: str):
+def generate_raw_detail_sheet(wb: Workbook, raw_records: List[SalaryRecord], title: str,
+                              pay_month: Optional[int] = None):
     """原始明细(未合并)sheet：逐条列出未合并记录的报送数据，保证可追溯。"""
     ws = wb.create_sheet("原始明细(未合并)")
     headers = [
-        "ATC930", "姓名", "证件号码", "结算单元", "结算单元名称", "所属月份", "批次",
+        "ATC930", "姓名", "证件号码", "结算单元", "结算单元名称", "所属月份", "批次", "发放月份",
         "收入(工资总额)", "个税", "实发", "备注"
     ]
     for col, h in enumerate(headers, 1):
@@ -165,7 +170,7 @@ def generate_raw_detail_sheet(wb: Workbook, raw_records: List[SalaryRecord], tit
     for idx, rec in enumerate(raw_records, 2):
         vals = [
             rec.tc930_id, rec.姓名, rec.身份证, rec.结算单元, rec.结算单元名称,
-            rec.工资所属年月, rec.当月批次,
+            rec.工资所属年月, rec.当月批次, pay_month,
             rec.工资总额, rec.个人所得税, rec.实发工资, _remark_for(rec, title)
         ]
         for col, val in enumerate(vals, 1):
