@@ -174,15 +174,28 @@
             <a id="btnDownload" class="btn btn-success btn-sm" href="#" download>下载增减员 Excel</a>
         </div>
         <div class="card-body">
+            <!-- 栏一：总人数（未过滤） -->
+            <div class="mb-2"><h6 class="text-muted mb-1" style="font-size: 0.95rem;"><strong>总人数（未过滤）</strong></h6></div>
             <div class="row text-center">
-                <div class="col-md-3 col-sm-6 stat-card"><div class="stat-info num" id="statTaxTotal">0</div><div class="text-muted">个税端总人数</div></div>
-                <div class="col-md-3 col-sm-6 stat-card"><div class="stat-info num" id="statPayrollTotal">0</div><div class="text-muted">发薪总人数</div></div>
-                <div class="col-md-3 col-sm-6 stat-card"><div class="stat-add num" id="statAddCount">0</div><div class="text-muted">增员人数</div></div>
-                <div class="col-md-3 col-sm-6 stat-card"><div class="stat-remove num" id="statDepartedCount">0</div><div class="text-muted">近期离职人数</div></div>
-                <div class="col-md-3 col-sm-6 stat-card"><div class="stat-info num" id="statPendingCount">0</div><div class="text-muted">待确认近期离职人数</div></div>
-<div class="col-md-3 col-sm-6 stat-card"><div class="stat-info num" id="statZeroCount">0</div><div class="text-muted">零申报人数</div></div>
-<div class="col-md-3 col-sm-6 stat-card"><div class="stat-info num" id="statZeroPendingCount">0</div><div class="text-muted">待确认零申报人数</div></div>
+                <div class="col-md-2 col-sm-4 col-6 stat-card"><div class="stat-info num" id="statTaxTotal">0</div><div class="text-muted">个税端总人数</div></div>
+                <div class="col-md-2 col-sm-4 col-6 stat-card"><div class="stat-info num" id="activeTotal">0</div><div class="text-muted">个税端在职人数</div></div>
+                <div class="col-md-2 col-sm-4 col-6 stat-card"><div class="stat-info num" id="statPayrollTotal">0</div><div class="text-muted">发薪总人数</div></div>
+                <div class="col-md-3 col-sm-4 col-6 stat-card"><div class="stat-info num" id="unpaidTotal">0</div><div class="text-muted">未发薪工资表人数</div></div>
+                <div class="col-md-3 col-sm-4 col-6 stat-card"><div class="stat-info num" id="contractTotal">0</div><div class="text-muted">合同签署人数</div></div>
             </div>
+
+            <!-- 栏二：比对结果（过滤后） -->
+            <div class="mb-2 mt-3"><h6 class="text-muted mb-1" style="font-size: 0.95rem;"><strong>比对结果（过滤后）</strong></h6></div>
+            <div class="row text-center">
+                <div class="col-md-2 col-sm-4 col-6 stat-card"><div class="stat-info num" id="filteredActiveCount">0</div><div class="text-muted">过滤范围内在职人数</div></div>
+                <div class="col-md-2 col-sm-4 col-6 stat-card"><div class="stat-info num" id="filteredPayrollCount">0</div><div class="text-muted">过滤范围内发薪人数</div></div>
+                <div class="col-md-1 col-sm-4 col-6 stat-card"><div class="stat-add num" id="statAddCount">0</div><div class="text-muted">增员人数</div></div>
+                <div class="col-md-2 col-sm-4 col-6 stat-card"><div class="stat-remove num" id="statDepartedCount">0</div><div class="text-muted">近期离职人数</div></div>
+                <div class="col-md-2 col-sm-4 col-6 stat-card"><div class="stat-info num" id="statPendingCount">0</div><div class="text-muted">待确认近期离职人数</div></div>
+                <div class="col-md-1 col-sm-4 col-6 stat-card"><div class="stat-info num" id="statZeroCount">0</div><div class="text-muted">零申报人数</div></div>
+                <div class="col-md-2 col-sm-4 col-6 stat-card"><div class="stat-info num" id="statZeroPendingCount">0</div><div class="text-muted">待确认零申报人数</div></div>
+            </div>
+            <div class="text-muted mt-1" style="font-size: 0.85rem;">发薪总人数与过滤后发薪为独立口径，含个税端已标记离职但仍发薪的人员，故过滤后发薪人数可能大于过滤后在职人数。</div>
             <div id="fileInfo" class="text-muted mt-2" style="font-size: 0.85rem;"></div>
         </div>
     </div>
@@ -225,6 +238,13 @@
     const statAddCount = document.getElementById('statAddCount');
     const statDepartedCount = document.getElementById('statDepartedCount');
     const statPendingCount = document.getElementById('statPendingCount');
+    const statZeroCount = document.getElementById('statZeroCount');
+    const statZeroPendingCount = document.getElementById('statZeroPendingCount');
+    const activeTotal = document.getElementById('activeTotal');
+    const unpaidTotal = document.getElementById('unpaidTotal');
+    const contractTotal = document.getElementById('contractTotal');
+    const filteredActiveCount = document.getElementById('filteredActiveCount');
+    const filteredPayrollCount = document.getElementById('filteredPayrollCount');
     const fileInfo = document.getElementById('fileInfo');
 
     function showError(msg) {
@@ -482,7 +502,12 @@
             const label = payMonthStart.options[payMonthStart.selectedIndex] ? payMonthStart.options[payMonthStart.selectedIndex].text : payMonthStart.value;
             statMonth.textContent = label;
             statTaxTotal.textContent = data.tax_total;
+            activeTotal.textContent = data.active_total || 0;
             statPayrollTotal.textContent = data.payroll_total;
+            unpaidTotal.textContent = data.unpaid_total || 0;
+            contractTotal.textContent = data.contract_total || 0;
+            filteredActiveCount.textContent = data.filtered_active_count || 0;
+            filteredPayrollCount.textContent = data.filtered_payroll_count || 0;
             statAddCount.textContent = data.add_count;
             statDepartedCount.textContent = data.departed_count;
             statPendingCount.textContent = data.pending_count;
