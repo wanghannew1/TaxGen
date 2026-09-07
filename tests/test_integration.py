@@ -90,7 +90,7 @@ class TestTemplateGeneration:
         assert result.file_path is not None
         assert os.path.exists(result.file_path)
         assert result.record_count == len(records)
-        assert result.template_type == "劳务报酬所得"
+        assert result.template_type == "劳务报酬所得（不适用累计预扣法）"
         wb = load_workbook(result.file_path)
         ws = wb.active
         assert ws.max_row == len(records) + 1

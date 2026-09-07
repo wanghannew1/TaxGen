@@ -501,6 +501,38 @@ def get_latest_pay_date(conn):
         return int(row[0]), row[1]
 
 
+def get_labor_service_cert_numbers(conn, pay_month: int) -> Set[str]:
+    """查询劳务报酬(AAE00P='3')申报人员的身份证号集合。
+
+    劳务报酬所得模板只应包含 AAE00P='3' 的人群 (手工「07-月劳务报酬所得」
+    文件 258 人验证: 当前有效 AAE00P 全部为 '3')。人员判定:
+    - TC90 合同服务性质为 '3'(劳务报酬);
+    - 合同在发放月仍有效: 费用结束年月 (AAE003) 为空 或 不早于发放月
+      (pay_month)。例: 冯守臣 AAE003=202607 且发放月 202607 -> 包含
+      (7月发工资、7月合同到期, 手工文件含此类人员);
+    - 同一身份证多份合同时, 取费用开始年月 (AAE002) 最晚的一份 (最后一次生效合同)。
+    返回统一大写的证件号码集合(处理末位 X), 供劳务报酬模板按人过滤。
+    """
+    sql = """
+        SELECT cert FROM (
+            SELECT t90.AAC002 AS cert,
+                   ROW_NUMBER() OVER (PARTITION BY t90.AAC002
+                                      ORDER BY t90.AAE002 DESC NULLS LAST) AS rk
+            FROM TC90 t90
+            WHERE t90.AAE00P = '3'
+              AND (t90.AAE003 IS NULL OR t90.AAE003 = '' OR t90.AAE003 >= :pay_month)
+        ) WHERE rk = 1
+    """
+    certs = set()
+    with conn.cursor() as cursor:
+        cursor.execute(sql, {"pay_month": pay_month})
+        for row in cursor.fetchall():
+            cert = str(row[0] or "").strip().upper()
+            if cert:
+                certs.add(cert)
+    return certs
+
+
 def get_payroll_cert_numbers(conn, pay_month: int, start_time=None, end_time=None) -> Set[str]:
     """按发放月份(经办年月)查询全部发薪人员的身份证号集合。
 

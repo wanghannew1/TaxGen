@@ -23,7 +23,7 @@ def generate_labor_service(records: List[SalaryRecord], title: str, output_dir: 
     """生成劳务报酬所得 Excel 模板"""
     os.makedirs(output_dir, exist_ok=True)
     timestamp = datetime.now().strftime("%Y%m%d%H%M%S")
-    output_path = os.path.join(output_dir, f"劳务报酬所得_{timestamp}.xlsx")
+    output_path = os.path.join(output_dir, f"劳务报酬所得（不适用累计预扣法）_{timestamp}.xlsx")
     remark = extract_remark(title)
     
     wb = Workbook()
@@ -47,13 +47,13 @@ def generate_labor_service(records: List[SalaryRecord], title: str, output_dir: 
         ws.cell(row=row, column=3, value="居民身份证")
         ws.cell(row=row, column=4, value=rec.身份证)
         ws.cell(row=row, column=5, value="劳务报酬")
-        ws.cell(row=row, column=6, value=rec.应发工资)
+        ws.cell(row=row, column=6, value=rec.工资总额)
         ws.cell(row=row, column=14, value=remark)
     
     add_explanation_sheet(wb, [
         ("劳务报酬", [
             "14 列个税劳务报酬申报模板，一行为一人，无校验。",
-            "*所得项目 恒为「劳务报酬」；收入取应发工资（原始值，不做扣减）。",
+            "*所得项目 恒为「劳务报酬」；收入取工资总额（ATC93AA，原始值，不做扣减）。",
             "*证件类型 恒为「居民身份证」。备注从标题中提取（去除机构名/年月/数字后剩余文本）。",
         ]),
     ])
@@ -62,7 +62,7 @@ def generate_labor_service(records: List[SalaryRecord], title: str, output_dir: 
     
     return GenerateResult(
         file_path=output_path,
-        template_type="劳务报酬所得",
+        template_type="劳务报酬所得（不适用累计预扣法）",
         record_count=len(records),
         validation_pass=0,
         validation_fail=0

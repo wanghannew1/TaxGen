@@ -4,7 +4,7 @@ import os
 from datetime import datetime
 from flask import Flask, render_template, request, jsonify, send_file
 from db import init_db, get_connection, close_db
-from queries import get_available_months, get_salary_records, get_personnel_info, get_suggestions, search_tc8m, get_abnormal_records, get_tc93_all_fields, get_tc93_field_comments, get_merge_warnings, get_pay_months, get_payroll_cert_numbers, get_tc90_salary_end_dates, get_payroll_personnel
+from queries import get_available_months, get_salary_records, get_personnel_info, get_suggestions, search_tc8m, get_abnormal_records, get_tc93_all_fields, get_tc93_field_comments, get_merge_warnings, get_pay_months, get_payroll_cert_numbers, get_tc90_salary_end_dates, get_payroll_personnel, get_labor_service_cert_numbers
 from templates_gen.normal_salary import generate_normal_salary, generate_tc93_full_sheet, generate_abnormal_sheet
 from templates_gen.labor_service import generate_labor_service
 from templates_gen.annual_bonus import generate_annual_bonus
@@ -69,6 +69,48 @@ def merge_records_by_person(records, by_pay_month: bool = False):
             m.意外险个人 += rec.意外险个人
         merged.append(m)
     return merged
+
+
+def build_labor_service_records(conn, raw_records, confirmed_combos, month,
+                                merge_by_person, merge_by_pay_month, zero_codes, excl_codes):
+    """劳务报酬模板数据: 按发放月(ATC8G7) + 当前有效TC90 AAE00P=3 过滤。
+
+    口径对齐手工「07-月劳务报酬所得」文件 (258/258 精确匹配验证):
+    发放月份=TC8M.ATC8G7 且 ATC8M3='2'; 同一发放月横跨多个所属月
+    (ATC931), 收入=各所属月 ATC93AA 之和; 仅保留 AAE00P='3'(劳务报酬)。
+    有 confirmed_combos 时复用按批次过滤的原始记录, 否则按发放月自动取全部
+    已确认批次 (与 Web 组合流程等价)。AAE00P 按身份证集合统一大写过滤。
+    """
+    from queries import get_suggestions, get_salary_records, get_labor_service_cert_numbers
+    if confirmed_combos:
+        lab_records = list(raw_records)
+    else:
+        combos = get_suggestions(conn, month)
+        combo_set = {(c["unit"], c["salary_month"], c["seq"]) for c in combos}
+        salary_months = {c["salary_month"] for c in combos}
+        lab_records = []
+        for sm in sorted(salary_months):
+            lab_records.extend(get_salary_records(conn, sm))
+        lab_records = [r for r in lab_records
+                       if (r.结算单元, r.工资所属年月, r.当月批次) in combo_set]
+        if zero_codes or excl_codes:
+            def _keep_lab(unit, salary_total):
+                if unit in excl_codes:
+                    return False
+                if unit in zero_codes and (salary_total or 0) == 0:
+                    return False
+                return True
+            lab_records = [r for r in lab_records if _keep_lab(r.结算单元, r.工资总额)]
+    if merge_by_person:
+        lab_records = merge_records_by_person(lab_records, by_pay_month=merge_by_pay_month)
+    # 手工「07-月劳务报酬所得」文件 258 人精确匹配验证: 仅含工资总额>0 的人员
+    # (工资为0 不发钱, 不应出现在劳务报酬申报模板)
+    lab_records = [r for r in lab_records if r.工资总额 and float(r.工资总额) > 0]
+    lab_certs = get_labor_service_cert_numbers(conn, month)
+    if lab_certs:
+        lab_records = [r for r in lab_records if r.身份证 and r.身份证.strip().upper() in lab_certs]
+    return lab_records
+
 
 @app.route("/")
 def index():
@@ -203,7 +245,11 @@ def api_generate():
                                             raw_records=raw_records if merge_by_person else None,
                                             merge_mode="pay_month" if merge_by_pay_month else "month")
             elif tpl == "laborService":
-                r = generate_labor_service(records, f"劳务派遣人员工资发放表{month}", OUTPUT_DIR)
+                lab_records = build_labor_service_records(conn, raw_records,
+                                                          confirmed_combos, month,
+                                                          merge_by_person, merge_by_pay_month,
+                                                          zero_codes, excl_codes)
+                r = generate_labor_service(lab_records, f"劳务派遣人员工资发放表{month}", OUTPUT_DIR)
             elif tpl == "annualBonus":
                 r = generate_annual_bonus(records, f"劳务派遣人员工资发放表{month}", OUTPUT_DIR)
             elif tpl == "personnelInfo":
