@@ -113,7 +113,7 @@ def _cert_key(value) -> str:
     return str(value or "").strip().upper()
 
 
-# 零申报 Sheet: 正常工资薪金所得 29 列 (与 normal_salary.py 一致), 收入/扣款全为 0
+# 零申报 Sheet: 正常工资薪金所得 29 列 (与 normal_salary.py 一致), 仅 本期收入+五险一金 填 0
 ZERO_HEADERS: List[str] = [
     "工号", "*姓名", "*证件类型", "*证件号码", "本期收入", "本期免税收入",
     "基本养老保险费", "基本医疗保险费", "失业保险费", "住房公积金",
@@ -127,25 +127,37 @@ ZERO_IDX_工号 = 0
 ZERO_IDX_姓名 = 1
 ZERO_IDX_证件类型 = 2
 ZERO_IDX_证件号码 = 3
-# 收入/扣款数值列 (0-based): 从本期收入(4) 到 减免税额(27), 全部置 0
-ZERO_IDX_INCOME_START = 4
-ZERO_IDX_INCOME_END = 27  # 含 27 (协定减免), 备注(28) 单独
+# 需填 0 的收入/扣款列 (0-based):
+# 本期收入(4) + 基本养老保险费(6) + 基本医疗保险费(7) + 失业保险费(8) + 住房公积金(9)
+# 其余数值列 (本期免税收入、累计*、企业(职业)年金、减免等) 一律留空, 不填 0。
+# 注意: 本期免税收入(5) 不在填 0 之列。
+ZERO_IDX_本期收入 = 4
+ZERO_IDX_基本养老保险费 = 6
+ZERO_IDX_基本医疗保险费 = 7
+ZERO_IDX_失业保险费 = 8
+ZERO_IDX_住房公积金 = 9
+ZERO_ZERO_COLS = [ZERO_IDX_本期收入, ZERO_IDX_基本养老保险费, ZERO_IDX_基本医疗保险费,
+                  ZERO_IDX_失业保险费, ZERO_IDX_住房公积金]
+# 备注列 (0-based), 单独取值
+ZERO_IDX_备注 = 28
 
 
 def build_zero_declare_row(person: dict) -> list:
     """将个税端导出记录映射为 29 列零申报行。
 
-    在职且本期无工资、也未减员的人员需 0 申报: 本期收入及各项扣款/累计/减免
-    全部为 0, 仅工号/姓名/证件类型/证件号码有值, 备注为结算单元名称。
+    在职且本期无工资、也未减员的人员需 0 申报: 仅 本期收入、基本养老保险费、
+    基本医疗保险费、失业保险费、住房公积金 填 0, 其余数值列 (本期免税收入、
+    累计*、企业(职业)年金、减免税额等) 留空; 仅工号/姓名/证件类型/证件号码
+    有值, 备注为结算单元名称。
     """
     row = [""] * len(ZERO_HEADERS)
     row[ZERO_IDX_工号] = str(person.get("工号") or "")
     row[ZERO_IDX_姓名] = str(person.get("姓名") or "")
     row[ZERO_IDX_证件类型] = str(person.get("证件类型") or "") or "居民身份证"
     row[ZERO_IDX_证件号码] = str(person.get("证件号码") or "")
-    for i in range(ZERO_IDX_INCOME_START, ZERO_IDX_INCOME_END + 1):
+    for i in ZERO_ZERO_COLS:
         row[i] = 0
-    row[ZERO_IDX_INCOME_END + 1] = str(person.get("备注") or "")  # 备注 = 结算单元名称
+    row[ZERO_IDX_备注] = str(person.get("备注") or "")  # 备注 = 结算单元名称
     return row
 
 
@@ -414,7 +426,8 @@ def compare_personnel(tax_export_persons, payroll_certs, payroll_personnel, sala
                       person_units=None, filter_handlers=None, filter_units=None,
                       filter_depts=None, exclude_certs=None,
                       unpaid_latest_persons=None,
-                      payroll_start_certs=None):
+                      payroll_start_certs=None,
+                      deferred_pay_persons=None):
     """增减员比对引擎。
 
     Args:
@@ -436,6 +449,9 @@ def compare_personnel(tax_export_persons, payroll_certs, payroll_personnel, sala
             (压月发薪延期: 最后一笔工资未发完前不能减员, 从减员候选剔除)
         payroll_start_certs: Set[str] - 申报期(发薪起始月)发薪人员证件号集合。
             零申报人群判定用: 个税端在职且申报期无工资、也未减员 → 需 0 申报。
+        deferred_pay_persons: Set[str] - 延期发放人员证件号集合 (次月月初 1~10 日
+            有 TC8M 已发记录, 证明所选申报月在职)。从"待确认近期离职"中剔除,
+            改判零申报 (不参与待确认零申报)。
 
     Returns:
         (add_rows, departed_rows, pending_rows, stats):
@@ -508,10 +524,14 @@ def compare_personnel(tax_export_persons, payroll_certs, payroll_personnel, sala
     suspect_certs = active_certs - protected_certs - unpaid_latest_set
     suspect_certs = {c for c in suspect_certs if _passes_filter(c)}
     departed_certs = {c for c in suspect_certs if c in salary_end_dates}
-    pending_certs = suspect_certs - departed_certs
+    deferred_set = {_cert_key(c) for c in (deferred_pay_persons or set())}
+    deferred_set.discard("")
+    # 延期发放人员: 申报月无发放但次月月初已发 (在职证据), 未判离职则不列待确认
+    pending_certs = suspect_certs - departed_certs - deferred_set
 
     # 零申报人群 (主 sheet): 个税端在职(无离职日期) 且 申报期(发薪起始月)无工资
     # 且 未减员(departed+pending 均排除), 再排除特殊结算单元(工资为0/完全排除 均不报税)。
+    # 延期发放人员因已从 pending 剔除, 会自然落入零申报人群。
     zero_declare = active_certs - payroll_start_set - departed_certs - pending_certs
     zero_declare = zero_declare - exclude_set
     zero_declare = {c for c in zero_declare if _passes_filter(c)}
@@ -639,9 +659,11 @@ def generate_compare_excel(add_rows, departed_rows, pending_rows, stats, output_
         ]),
         ("待确认近期离职人员", [
             "判定同「近期离职人员」，但无工资结束年月，需人工确认是否离职。",
+            "延期发放人员（申报月无发放、次月月初已发，可确认在职）除外，已归入零申报。",
         ]),
         ("零申报", [
-            "个税端在职且无发薪、未判定为离职/待确认的人员，按正常工资薪金所得 29 列格式输出，收入金额全为 0 供零申报。",
+            "个税端在职且无发薪、未判定为离职/待确认的人员，按正常工资薪金所得 29 列格式输出，本期收入及养老/医疗/失业/公积金填 0，其余列留空供零申报。",
+            "含延期发放人员：申报月已做工资但未发放、次月月初(1~10日)有发放记录，属在职待申报。",
         ]),
         ("待确认零申报", [
             "与「零申报」相同，仅针对待确认离职人员，供核实后零申报。",

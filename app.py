@@ -745,10 +745,14 @@ def api_personnel_compare():
                 c: d for c, d in salary_end_dates.items()
                 if d.date() <= deadline_date
             }
+        # 延期发放人员: 申报月无发放但次月月初(1~10日)已发 (在职证据) → 零申报而非待确认
+        from queries import get_deferred_pay_persons
+        deferred_pay = get_deferred_pay_persons(conn, pay_months)
         add_rows, departed_rows, pending_rows, stats = compare_personnel(
             tax_export_persons, payroll_certs, payroll_personnel, salary_end_dates,
             unpaid_persons=unpaid_persons, contract_signed_persons=contract_persons,
-            unpaid_latest_persons=unpaid_latest, payroll_start_certs=payroll_start_certs)
+            unpaid_latest_persons=unpaid_latest, payroll_start_certs=payroll_start_certs,
+            deferred_pay_persons=deferred_pay)
         # 特殊结算单元: 工资为0不增员不报税 + 完全排除不增员不报税
         # 配置存 SQLite (config_db), Oracle 只读
         from config_db import get_zero_salary_unit_codes, get_excluded_unit_codes
@@ -798,7 +802,8 @@ def api_personnel_compare():
                 person_units=person_units, filter_handlers=filter_handlers,
                 filter_units=filter_units, filter_depts=filter_depts,
                 exclude_certs=exclude_certs, unpaid_latest_persons=unpaid_latest,
-                payroll_start_certs=payroll_start_certs)
+                payroll_start_certs=payroll_start_certs,
+                deferred_pay_persons=deferred_pay)
         # 补充增员人员详细信息 (未发薪/合同签署人员不在 payroll_personnel 中)
         if stats["add_count"] > len(add_rows):
             from templates_gen.personnel_compare import IDX_证件号码, map_personnel_info_to_row
@@ -966,7 +971,7 @@ def api_personnel_compare():
                                   r["合同开始日期"], r["合同终止日期"], r["单位名称"], r["经办人"]])
         # 零申报人群: 个税端在职且本期无工资、未减员, 排除特殊结算单元。
         # 主"零申报" sheet 排除待确认; 待确认另立独立"待确认零申报" sheet。
-        # 组装 29 列零申报行 (本期收入等全为0), 备注=结算单元名称。
+        # 组装 29 列零申报行 (本期收入+养老/医疗/失业/公积金填0, 其余数值列留空), 备注=结算单元名称。
         from templates_gen.personnel_compare import build_zero_declare_row
         zero_person_by_cert = {str(p.get("证件号码") or "").strip().upper(): p
                                for p in tax_export_persons}

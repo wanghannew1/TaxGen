@@ -700,6 +700,66 @@ def get_unpaid_salary_persons(conn, salary_months) -> Set[str]:
     return certs
 
 
+def get_deferred_pay_persons(conn, pay_months, window_days: int = 10) -> Set[str]:
+    """查询"延期发放"人员证件号集合 (次月月初已发 → 零申报, 不判待确认离职)。
+
+    场景: 所属月 X (如 202608) 已做工资, 但 X 月无任何发放 (ATC8G7=X 无已发记录),
+    工资因到账等原因延至 X+1 月月初 (1 日 ~ window_days 日) 才发放。
+    此时 TC8M 记录表现为 ATC8G7 = X+1 月 且 AAE036 (经办时间) 落在次月月初窗口内,
+    已发 (ATC8M3=2), 关联的 TC93 所属月 = X。
+
+    这类人员个税端在职、无工资结束年月, 但次月已发记录证明在职,
+    应进"零申报"而非"待确认零申报"。
+
+    口径: 发薪月份范围内 (pay_months) 已做工资 (TC93.ATC931 IN pay_months,
+    ATC93G='1'), 且有 TC8M 已发记录: ATC8G7 = 次月 (pay_months 末月+1),
+    AAE036 ∈ [次月 1 日, 次月 window_days 日末]。
+    返回统一大写的证件号码集合。
+    """
+    if not pay_months:
+        return set()
+    from datetime import datetime, timedelta
+    months = sorted({int(m) for m in pay_months if m})
+    if not months:
+        return set()
+    last = months[-1]
+    y, m = divmod(last, 100)
+    ny, nm = (y + 1, 1) if m == 12 else (y, m + 1)
+    next_month = ny * 100 + nm
+    w_start = datetime(ny, nm, 1)
+    w_end = w_start + timedelta(days=window_days)  # 次月1日00:00 ~ 次月(1+window_days)日00:00
+    certs = set()
+    sql = """
+        SELECT DISTINCT ac01.AAC002
+        FROM TC93 t93
+        JOIN TC8M m ON m.ATB930 = t93.ATB930
+                   AND m.ATC931 = t93.ATC931
+                   AND m.ATC937 = t93.ATC937
+        LEFT JOIN AC01 ac01 ON t93.AAC001 = ac01.AAC001
+        WHERE m.ATC8G7 = :next_month
+          AND m.ATC8M3 = 2
+          AND t93.ATC93G = '1'
+          AND m.AAE036 >= :w_start
+          AND m.AAE036 < :w_end
+          AND t93.ATC931 IN ({placeholders})
+          AND ac01.AAC002 IS NOT NULL
+    """
+    with conn.cursor() as cursor:
+        for start in range(0, len(months), _IN_BATCH_SIZE):
+            chunk = months[start:start + _IN_BATCH_SIZE]
+            placeholders = ", ".join(f":m{i}" for i in range(len(chunk)))
+            binds = {f"m{i}": m for i, m in enumerate(chunk)}
+            binds["next_month"] = next_month
+            binds["w_start"] = w_start
+            binds["w_end"] = w_end
+            cursor.execute(sql.format(placeholders=placeholders), binds)
+            for row in cursor.fetchall():
+                cert = str(row[0] or "").strip().upper()
+                if cert:
+                    certs.add(cert)
+    return certs
+
+
 def get_latest_unpaid_persons(conn, cert_numbers) -> Set[str]:
     """查询"最后一笔工资未发放"的人员证件号集合 (减员保护)。
 
