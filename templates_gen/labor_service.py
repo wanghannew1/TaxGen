@@ -80,17 +80,24 @@ def generate_labor_service(records: List[SalaryRecord], title: str, output_dir: 
         for r in raw_records:
             key = (r.职工号,) if by_pay_month else (r.职工号, r.工资所属年月, r.当月批次)
             raw_groups.setdefault(key, []).append(r)
+    pass_count = 0
+    fail_count = 0
     for idx, rec in enumerate(records, 1):
         key = (rec.职工号,) if by_pay_month else (rec.职工号, rec.工资所属年月, rec.当月批次)
         raw_list = raw_groups.get(key, [])
         raw_total = sum((float(r.工资总额 or 0) for r in raw_list), 0.0) if raw_list else float(rec.工资总额 or 0)
         merged_income = float(rec.工资总额 or 0)
         diff = abs(merged_income - raw_total)
+        passed = diff < 0.01
+        if passed:
+            pass_count += 1
+        else:
+            fail_count += 1
         vals = [
             rec.姓名, rec.身份证, _remark_for(rec, title),
             rec.工资所属年月, rec.当月批次,
             merged_income, len(raw_list) if raw_list else 1, raw_total,
-            round(diff, 4), "通过" if diff < 0.01 else "失败"
+            round(diff, 4), "通过" if passed else "失败"
         ]
         for col, val in enumerate(vals, 1):
             vs.cell(row=idx + 1, column=col, value=val)
@@ -141,8 +148,8 @@ def generate_labor_service(records: List[SalaryRecord], title: str, output_dir: 
         file_path=output_path,
         template_type="劳务报酬所得（不适用累计预扣法）",
         record_count=len(records),
-        validation_pass=0,
-        validation_fail=0
+        validation_pass=pass_count,
+        validation_fail=fail_count
     )
 
 
