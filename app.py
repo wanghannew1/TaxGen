@@ -266,8 +266,34 @@ def api_generate():
                 if lab_cert_set:
                     lab_tc93 = [r for r in lab_tc93
                                 if str(r.get("身份证") or "").strip().upper() in lab_cert_set]
+                # 报税结算单元只汇总本表实际报税人员 (业务要求, 非查询条件全部单元)
+                agg_combos = {}
+                for rec in lab_records:
+                    key = (int(rec.结算单元 or 0), int(rec.工资所属年月 or 0),
+                           str(rec.当月批次 or ""))
+                    agg_combos.setdefault(key, {"person_count": 0, "total_income": 0.0})
+                    agg_combos[key]["person_count"] += 1
+                    agg_combos[key]["total_income"] += float(rec.工资总额 or 0)
+                combo_extra = {(int(c.get("unit", 0) or 0), int(c.get("salary_month", 0) or 0),
+                                str(c.get("seq", "") or "")): c for c in lab_combos}
+                report_combos = []
+                key_order = sorted(agg_combos)
+                for key in key_order:
+                    unit, sm, seq = key
+                    extra = combo_extra.get((unit, sm, seq), {})
+                    agg = agg_combos[key]
+                    report_combos.append({
+                        "unit": unit,
+                        "unit_name": extra.get("unit_name", ""),
+                        "salary_month": sm,
+                        "pay_month": extra.get("pay_month", month),
+                        "seq": seq,
+                        "person_count": agg["person_count"],
+                        "total_income": round(agg["total_income"], 2),
+                        "handler": extra.get("handler", ""),
+                    })
                 r = generate_labor_service(lab_records, f"劳务派遣人员工资发放表{month}", OUTPUT_DIR,
-                                           tc93_all=lab_tc93, combos=lab_combos,
+                                           tc93_all=lab_tc93, combos=report_combos,
                                            raw_records=lab_raw,
                                            tc93_comments=get_tc93_field_comments(conn),
                                            merge_mode="pay_month" if merge_by_pay_month else "month")
