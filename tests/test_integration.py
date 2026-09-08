@@ -354,12 +354,12 @@ class TestX3Income:
     def test_x3_balances_validation(self):
         """宋霜案例: 总额359.68 X3 608.5 五险608.5 实发359.68 -> 左=右"""
         from decimal import Decimal
-        from templates_gen.formulas import calc_本期收入, calc_免税
+        from templates_gen.formulas import calc_本期收入
         rec = self._mk(total=359.68, x3=608.5, social=608.5, paid=359.68)
         income = calc_本期收入(rec)
         assert income == Decimal("968.18")
-        left = income - rec.养老个人
-        right = rec.实发工资 + rec.个人所得税 - calc_免税(rec)
+        left = income - rec.养老个人 + rec.补发3
+        right = (rec.实发工资 - rec.经济补偿金) + rec.税后工会会费 + rec.个人代理费 + rec.个人所得税 + rec.个人其他调整
         assert abs(left - right) < Decimal("0.01")
 
     def test_merge_sums_x3(self):
@@ -381,20 +381,15 @@ class TestX3Income:
         assert calc_本期收入(rec) == Decimal("608.5")
 
     def test_x3_e_validation_equivalent(self):
-        """E 从左式移入收入后, 左=右 结果与原公式代数等价"""
+        """2026-09-08 公式重构后：左=右 结果与旧公式代数等价"""
         from decimal import Decimal
-        from templates_gen.formulas import calc_本期收入, calc_免税
+        from templates_gen.formulas import calc_本期收入
         rec = self._mk(total=0, be=1825.5, social=608.5)
         rec.个人欠款 = Decimal("-2434")
         income = calc_本期收入(rec)
-        # 新左式(不含E)
-        left_new = income - rec.养老个人
-        # 旧左式(收入不含E, 左式减E)
-        income_old = rec.工资总额 - rec.补缴及退款保险金额个人
-        left_old = income_old - rec.养老个人 - rec.个人欠款
-        assert left_new == left_old
-        # 零工资补缴行: 左=0=右
-        right = rec.实发工资 + rec.个人所得税 - calc_免税(rec)
+        # 左式=本期收入−五险一金−意外险+本次免税；_mk fixture 仅设置养老 → 只减养老
+        left_new = income - rec.养老个人 + rec.补发3
+        right = (rec.实发工资 - rec.经济补偿金) + rec.税后工会会费 + rec.个人代理费 + rec.个人所得税 + rec.个人其他调整
         assert abs(left_new - right) < Decimal("0.01")
 
 
