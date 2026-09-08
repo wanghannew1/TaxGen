@@ -8,9 +8,10 @@ def validate_salary_records(records: List[SalaryRecord]) -> ValidationReport:
     """验证工资记录 - 左=右 校验
     
     验证公式:
-        左 = 本期收入 - 养老个人 - 失业个人 - 医疗个人 - 公积金个人 - 年金(0)
-        右 = (实发工资 - 经济补偿金) + 个人所得税 - 免税 (经济补偿金含在实发中, 属一次性补偿, 扣回)
+        左 = 本期收入 - 养老个人 - 失业个人 - 医疗个人 - 公积金个人 - 其他调整 - 大病险个人 - 意外险个人
+        右 = (实发工资 - 经济补偿金) + 税后工会会费 + 个人代理费 + 个人所得税 - 免税 (经济补偿金含在实发中, 属一次性补偿, 扣回)
         通过 = |左 - 右| < 0.01
+        说明: 扣款-大病险(ATC93Y2)=大病险个人(ATC93BD)+单位承担(ATC93BC), 单位承担不参与个税, 左式只减个人承担(ATC93BD)
     """
     pass_count = 0
     fail_count = 0
@@ -21,7 +22,7 @@ def validate_salary_records(records: List[SalaryRecord]) -> ValidationReport:
         tax_exempt = calc_免税(rec)
         
         left = income - rec.养老个人 - rec.失业个人 - rec.医疗个人 - rec.公积金个人 \
-               - rec.个人其他调整 - rec.扣款大病险 - rec.意外险个人
+               - rec.个人其他调整 - rec.大病险个人 - rec.意外险个人
         right = (rec.实发工资 - rec.经济补偿金) + rec.税后工会会费 + rec.个人代理费 + rec.个人所得税 - tax_exempt
         diff = abs(left - right)
         passed = diff < 0.01
@@ -42,7 +43,7 @@ def validate_salary_records(records: List[SalaryRecord]) -> ValidationReport:
                 "大病险个人": rec.大病险个人,
                 "补缴退款差额": rec.补缴及退款保险金额个人,
                 "养老": rec.养老个人, "失业": rec.失业个人, "医疗": rec.医疗个人, "公积金": rec.公积金个人,
-                "其他调整": rec.个人其他调整, "个人欠款": rec.个人欠款, "扣款大病险": rec.扣款大病险,
+                "其他调整": rec.个人其他调整, "个人欠款": rec.个人欠款,
                 "实发": rec.实发工资, "工会会费": rec.税后工会会费, "代理费": rec.个人代理费,
                 "个税": rec.个人所得税, "免税": tax_exempt,
             })

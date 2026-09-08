@@ -83,8 +83,10 @@ def generate_normal_salary(records: List[SalaryRecord], title: str, output_dir: 
         rec_remark = combo_map.get((rec.结算单元, rec.工资所属年月, rec.当月批次), title)
         ws.cell(row=row, column=30, value=rec_remark)
         
+        # 扣款-大病险(ATC93Y2)=大病险个人(ATC93BD)+大病险单位(ATC93BC)，单位承担不参与个税，
+        # 故左式只减个人承担部分 ATC93BD；不再减 ATC93Y2（见 docs/本期收入算法说明.md）
         left = income - rec.养老个人 - rec.失业个人 - rec.医疗个人 - rec.公积金个人 \
-               - rec.个人其他调整 - rec.扣款大病险 - rec.意外险个人
+               - rec.个人其他调整 - rec.大病险个人 - rec.意外险个人
         # 右 = (实发 − 经济补偿金) + 工会会费 + 代理费 + 个税 − 免税
         # 经济补偿金(ATC93M)含在实发金额中但属一次性补偿，不参与正常工资薪金验算
         right = (rec.实发工资 - rec.经济补偿金) + rec.税后工会会费 + rec.个人代理费 + rec.个人所得税 - tax_exempt
@@ -99,7 +101,7 @@ def generate_normal_salary(records: List[SalaryRecord], title: str, output_dir: 
             "工资总额": rec.工资总额, "本次免税": rec.补发3, "大病险个人": rec.大病险个人,
             "补缴退款差额": rec.补缴及退款保险金额个人, "交纳现金": rec.个人交纳现金, "本期收入": income,
             "养老": rec.养老个人, "失业": rec.失业个人, "医疗": rec.医疗个人, "公积金": rec.公积金个人,
-            "其他调整": rec.个人其他调整, "个人欠款": rec.个人欠款, "扣款大病险": rec.扣款大病险, "意外险": rec.意外险个人,
+            "其他调整": rec.个人其他调整, "个人欠款": rec.个人欠款, "意外险": rec.意外险个人,
             "左": left,
             "实发": rec.实发工资, "工会会费": rec.税后工会会费, "代理费": rec.个人代理费,
             "个税": rec.个人所得税, "免税": tax_exempt,
@@ -113,7 +115,7 @@ def generate_normal_salary(records: List[SalaryRecord], title: str, output_dir: 
         "ATC930", "姓名", "结算单元名称", "所属月份", "批次",
         "本次工资总额(ATC93AA)", "本次免税(ATC936)", "大病险（个人承担）(ATC93BD)", "补缴及退款保险差额（个人）(ATC93BE)", "个人交纳现金(ATC93X3)", "本期收入",
         "当月养老个人缴(BAA001)", "当月失业个人缴(BAA003)", "当月医疗个人缴(BAA002)", "个人公积金月缴存额(CAA002)",
-        "个人其他调整(ATC93AG)", "个人欠款(ATC93E)", "扣款-大病险(ATC93Y2)", "意外险个人(ATC93BH)", "左",
+        "个人其他调整(ATC93AG)", "个人欠款(ATC93E)", "大病险个人(ATC93BD)(左式扣减)", "意外险个人(ATC93BH)", "左",
         "本次实发金额(ATC93C)", "税后扣除工会会费(ATC93Z2)", "个人承担代理费(BAA300)", "本次个人所得税(ATC93D)", "免税(ATC936+ATC93BD)",
         "经济补偿金(ATC93M)", f"经济补偿是否达交税标准(基准=3×年平均工资{thr:,.0f})",
         "右", "差值", "状态"
@@ -125,7 +127,7 @@ def generate_normal_salary(records: List[SalaryRecord], title: str, output_dir: 
             v["tc930"], v["姓名"], v["unit_name"], v["salary_month"], v["seq"],
             v["工资总额"], v["本次免税"], v["大病险个人"], v["补缴退款差额"], v["交纳现金"], v["本期收入"],
             v["养老"], v["失业"], v["医疗"], v["公积金"],
-            v["其他调整"], v["个人欠款"], v["扣款大病险"], v["意外险"], v["左"],
+            v["其他调整"], v["个人欠款"], v["大病险个人"], v["意外险"], v["左"],
             v["实发"], v["工会会费"], v["代理费"], v["个税"], v["免税"],
             v["经济补偿金"], v["达交税标准"],
             v["右"], v["差值"], "通过" if v["通过"] else "失败"
@@ -151,7 +153,7 @@ def generate_normal_salary(records: List[SalaryRecord], title: str, output_dir: 
             "五险一金列取个人缴部分，企业(职业)年金恒为 0，备注填结算单元名称。",
         ]),
         ("验证报告", [
-            "每行一人，左=右校验：左 = 本期收入 − 养老 − 失业 − 医疗 − 公积金 − 其他调整 − 扣款大病险 − 意外险；",
+            "每行一人，左=右校验：左 = 本期收入 − 养老 − 失业 − 医疗 − 公积金 − 其他调整 − 大病险个人 − 意外险；",
             "右 = (实发 − 经济补偿金) + 税后工会会费 + 个人代理费 + 个税 − 免税；|左−右|<0.01 为通过。",
             "经济补偿金(ATC93M)含在实发中但属一次性补偿，验证时从实发扣回；另按 3×年平均工资判断是否达交税标准。",
         ]),
@@ -287,8 +289,8 @@ def generate_formula_explanation_sheet(wb: Workbook, records: List[SalaryRecord]
 
     w(8, 1, "二、左(收入-五险一金)", bold=True)
     w(9, 1, "左 = 本期收入 − 当月养老个人缴(BAA001) − 当月失业个人缴(BAA003) − 当月医疗个人缴(BAA002)")
-    w(10, 1, "     − 个人公积金月缴存额(CAA002) − 个人其他调整(ATC93AG) − 扣款-大病险(ATC93Y2)")
-    w(11, 1, "含义：本期收入已含个人欠款(ATC93E)冲抵，左侧不再重复扣减；收入扣除五险一金及其他扣减后，应等于个人实际到手的金额。")
+    w(10, 1, "     − 个人公积金月缴存额(CAA002) − 个人其他调整(ATC93AG) − 大病险个人(ATC93BD)")
+    w(11, 1, "说明：大病险(ATC93Y2)=个人(ATC93BD)+单位(ATC93BC)，单位承担不参与个税，左式只减个人承担部分(ATC93BD)。")
 
     w(13, 1, "三、右(实发+个税-免税)", bold=True)
     w(14, 1, "右 = （本次实发金额合计(ATC93C) − 经济补偿金(ATC93M)） + 税后扣除工会会费(ATC93Z2) + 个人承担代理费(BAA300)")
@@ -322,7 +324,7 @@ def generate_formula_explanation_sheet(wb: Workbook, records: List[SalaryRecord]
         ("", "− 补缴退款差额(ATC93BE) + 交纳现金(X3) − 个人欠款(E)", "补缴/退款冲抵；现金交纳与欠款冲抵均计入收入"),
         ("= 本期收入", "← 报税口径的收入", ""),
         ("本期收入", "− 养老(BAA001) − 失业(BAA003) − 医疗(BAA002) − 公积金(CAA002)", "五险一金个人缴"),
-        ("", "− 其他调整(ATC93AG) − 扣款大病险(ATC93Y2)", "其他扣减（个人欠款已含在收入中）"),
+        ("", "− 其他调整(ATC93AG) − 大病险个人(ATC93BD)", "大病险单位承担(ATC93BC)不参与个税，只看个人承担"),
         ("= 左", "← 理论到手的钱", ""),
         ("", "", ""),
         ("", "【发放侧】", ""),
@@ -346,7 +348,7 @@ def generate_formula_explanation_sheet(wb: Workbook, records: List[SalaryRecord]
         w(52, col, h, bold=True)
     rows = [
         ("本期收入", "工资总额 − 本次免税 − 大病险个人 − 补缴及退款保险差额个人 + 个人交纳现金 − 个人欠款", "ATC93AA, ATC936, ATC93BD, ATC93BE, ATC93X3, ATC93E"),
-        ("左", "本期收入 − 养老 − 失业 − 医疗 − 公积金 − 个人其他调整 − 扣款大病险 − 意外险个人", "BAA001, BAA003, BAA002, CAA002, ATC93AG, ATC93Y2, ATC93BH"),
+        ("左", "本期收入 − 养老 − 失业 − 医疗 − 公积金 − 个人其他调整 − 大病险个人 − 意外险个人", "BAA001, BAA003, BAA002, CAA002, ATC93AG, ATC93BD, ATC93BH"),
         ("右", "实发合计 − 经济补偿金 + 税后工会会费 + 个人代理费 + 个税 − 免税", "ATC93C, ATC93M, ATC93Z2, BAA300, ATC93D, ATC936, ATC93BD"),
         ("经济补偿金", "本次经济补偿金(ATC93M)，从实发中扣回后参与右式", "ATC93M"),
         ("经济补偿是否达交税标准", "经济补偿金 > 3×年平均工资（默认120000）为已达，需单独按一次性补偿收入计税", "ATC93M, annual_avg_wage"),
@@ -364,7 +366,7 @@ def generate_formula_explanation_sheet(wb: Workbook, records: List[SalaryRecord]
         income = calc_本期收入(rec)
         tax_exempt = calc_免税(rec)
         left = (income - rec.养老个人 - rec.失业个人 - rec.医疗个人 - rec.公积金个人
-                - rec.个人其他调整 - rec.扣款大病险 - rec.意外险个人)
+                - rec.个人其他调整 - rec.大病险个人 - rec.意外险个人)
         right = ((rec.实发工资 - rec.经济补偿金) + rec.税后工会会费 + rec.个人代理费
              + rec.个人所得税 - tax_exempt)
         ex_rows = [
@@ -378,8 +380,8 @@ def generate_formula_explanation_sheet(wb: Workbook, records: List[SalaryRecord]
             ("五险一金(养老+失业+医疗+公积金)", rec.养老个人 + rec.失业个人 + rec.医疗个人 + rec.公积金个人, "BAA001+BAA003+BAA002+CAA002"),
             ("个人其他调整(ATC93AG)", rec.个人其他调整, ""),
             ("个人欠款(ATC93E)", rec.个人欠款, ""),
-            ("扣款大病险(ATC93Y2)", rec.扣款大病险, ""),
-            ("左", left, "本期收入 − 五险一金 − AG − Y2（个人欠款已含在收入中）"),
+            ("大病险个人(ATC93BD)(左式扣减)", rec.大病险个人, "扣款-大病险(ATC93Y2)=个人+单位，只减个人承担"),
+            ("左", left, "本期收入 − 五险一金 − AG − 大病险个人（个人欠款已含在收入中）"),
             ("实发合计(ATC93C)", rec.实发工资, ""),
             ("经济补偿金(ATC93M)", rec.经济补偿金, "含在实发中，从实发扣回"),
             ("税后工会会费(ATC93Z2)", rec.税后工会会费, ""),
@@ -414,7 +416,7 @@ def generate_raw_detail_sheet(wb: Workbook, raw_records: List[SalaryRecord],
         "ATC930", "姓名", "证件号码", "结算单元", "所属月份", "批次",
         "工资总额(AA)", "本次免税(936)", "大病险(BD)", "补缴退款差额(BE)", "交纳现金(X3)", "本期收入",
         "养老(BAA001)", "失业(BAA003)", "医疗(BAA002)", "公积金(CAA002)",
-        "其他调整(AG)", "个人欠款(E)", "扣款大病险(Y2)", "意外险(BH)",
+        "其他调整(AG)", "个人欠款(E)", "大病险个人(BD)(左式)", "意外险(BH)",
         "实发(C)", "工会会费(Z2)", "代理费(BAA300)", "个税(D)", "免税",
         "左", "右", "差值", "状态", "备注"
     ]
@@ -424,7 +426,7 @@ def generate_raw_detail_sheet(wb: Workbook, raw_records: List[SalaryRecord],
         income = calc_本期收入(rec)
         tax_exempt = calc_免税(rec)
         left = (income - rec.养老个人 - rec.失业个人 - rec.医疗个人 - rec.公积金个人
-                - rec.个人其他调整 - rec.扣款大病险 - rec.意外险个人)
+                - rec.个人其他调整 - rec.大病险个人 - rec.意外险个人)
         right = ((rec.实发工资 - rec.经济补偿金) + rec.税后工会会费 + rec.个人代理费
                  + rec.个人所得税 - tax_exempt)
         diff = abs(left - right)
@@ -433,7 +435,7 @@ def generate_raw_detail_sheet(wb: Workbook, raw_records: List[SalaryRecord],
             rec.tc930_id, rec.姓名, rec.身份证, rec.结算单元, rec.工资所属年月, rec.当月批次,
             rec.工资总额, rec.补发3, rec.大病险个人, rec.补缴及退款保险金额个人, rec.个人交纳现金, income,
             rec.养老个人, rec.失业个人, rec.医疗个人, rec.公积金个人,
-            rec.个人其他调整, rec.个人欠款, rec.扣款大病险, rec.意外险个人,
+            rec.个人其他调整, rec.个人欠款, rec.大病险个人, rec.意外险个人,
             rec.实发工资, rec.税后工会会费, rec.个人代理费, rec.个人所得税, tax_exempt,
             left, right, round(float(diff), 4), "通过" if diff < 0.01 else "失败", remark
         ]
@@ -483,7 +485,7 @@ def generate_merge_detail_sheet(wb: Workbook, raw_records: List[SalaryRecord],
         income = calc_本期收入(m)
         tax_exempt = calc_免税(m)
         left = (income - m.养老个人 - m.失业个人 - m.医疗个人 - m.公积金个人
-                - m.个人其他调整 - m.扣款大病险 - m.意外险个人)
+                - m.个人其他调整 - m.大病险个人 - m.意外险个人)
         right = ((m.实发工资 - m.经济补偿金) + m.税后工会会费 + m.个人代理费
                  + m.个人所得税 - tax_exempt)
         diff = abs(left - right)
