@@ -20,7 +20,14 @@ def get_db() -> sqlite3.Connection:
 
 
 def init_db() -> None:
-    """初始化配置表 (幂等)。"""
+    """初始化配置表 (幂等)。
+
+    salary_month_scope: 工资所属月取数范围 (三险一金翻倍合并规则)。
+    'all'(默认) = 取发放月内全部工资所属月并合并 (双月发放自动翻倍);
+    'first_1'/'first_2' = 仅取最早 N 个工资所属月 (压月单元如37449, 手工只报最早一月);
+    'latest_1'/'latest_2' = 仅取最近 N 个工资所属月 (对称预留)。
+    旧库自动 ALTER TABLE ADD COLUMN 迁移。
+    """
     conn = get_db()
     conn.execute("""
         CREATE TABLE IF NOT EXISTS special_unit_config (
@@ -28,9 +35,15 @@ def init_db() -> None:
             unit_name TEXT DEFAULT '',
             zero_salary_no_add INTEGER DEFAULT 1,
             exclude_all INTEGER DEFAULT 0,
+            salary_month_scope TEXT DEFAULT 'all',
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         )
     """)
+    # 旧库迁移: 已存在表缺 salary_month_scope 列时补列 (SQLite 单次 ALTER 幂等)
+    cols = {r[1] for r in conn.execute("PRAGMA table_info(special_unit_config)").fetchall()}
+    if "salary_month_scope" not in cols:
+        conn.execute(
+            "ALTER TABLE special_unit_config ADD COLUMN salary_month_scope TEXT DEFAULT 'all'")
     conn.commit()
     conn.close()
 
@@ -39,42 +52,82 @@ def get_special_units() -> List[dict]:
     """查询特殊结算单元配置列表。"""
     conn = get_db()
     rows = conn.execute(
-        "SELECT unit_code, unit_name, zero_salary_no_add, exclude_all "
+        "SELECT unit_code, unit_name, zero_salary_no_add, exclude_all, salary_month_scope "
         "FROM special_unit_config ORDER BY unit_code").fetchall()
     conn.close()
     return [{"code": int(r["unit_code"]), "name": str(r["unit_name"] or ""),
              "zero_salary_no_add": int(r["zero_salary_no_add"] or 0),
-             "exclude_all": int(r["exclude_all"] or 0)} for r in rows]
+             "exclude_all": int(r["exclude_all"] or 0),
+             "salary_month_scope": str(r["salary_month_scope"] or "all")} for r in rows]
 
 
-def add_special_unit(unit_code: int, unit_name: str = "", exclude_all: bool = False) -> None:
+def get_scope_map() -> dict:
+    """查询结算单元 -> 工资所属月取数范围映射 (仅返回非 'all' 的配置)。
+
+    'all'(默认) = 取发放月内全部工资所属月合并 (双月发放自动翻倍);
+    'first_1'/'first_2' = 仅取最早 N 个工资所属月 (压月单元, 手工只报最早一月);
+    'latest_1'/'latest_2' = 仅取最近 N 个工资所属月 (对称预留)。
+    """
+    conn = get_db()
+    rows = conn.execute(
+        "SELECT unit_code, salary_month_scope FROM special_unit_config "
+        "WHERE salary_month_scope IS NOT NULL AND salary_month_scope != 'all'").fetchall()
+    conn.close()
+    return {int(r["unit_code"]): str(r["salary_month_scope"]) for r in rows}
+
+
+def add_special_unit(unit_code: int, unit_name: str = "", exclude_all: bool = False,
+                     salary_month_scope: str = "all") -> None:
     """新增特殊结算单元配置。
 
     exclude_all=True 表示该结算单元完全不增员/不报个税 (不论是否有工资)。
     """
     conn = get_db()
     conn.execute(
-        "INSERT INTO special_unit_config (unit_code, unit_name, zero_salary_no_add, exclude_all) "
-        "VALUES (?, ?, 1, ?)",
-        (unit_code, unit_name, 1 if exclude_all else 0))
+        "INSERT INTO special_unit_config (unit_code, unit_name, zero_salary_no_add, exclude_all, salary_month_scope) "
+        "VALUES (?, ?, 1, ?, ?)",
+        (unit_code, unit_name, 1 if exclude_all else 0, salary_month_scope))
     conn.commit()
     conn.close()
 
 
 def add_special_unit_full(unit_code: int, unit_name: str = "",
-                          zero_salary_no_add: int = 1, exclude_all: int = 0) -> None:
+                          zero_salary_no_add: int = 1, exclude_all: int = 0,
+                          salary_month_scope: str = "all") -> None:
     """新增特殊结算单元配置 (完整模式参数, 用于导入)。"""
     conn = get_db()
     conn.execute(
-        "INSERT INTO special_unit_config (unit_code, unit_name, zero_salary_no_add, exclude_all) "
-        "VALUES (?, ?, ?, ?)",
-        (unit_code, unit_name, zero_salary_no_add, exclude_all))
+        "INSERT INTO special_unit_config (unit_code, unit_name, zero_salary_no_add, exclude_all, salary_month_scope) "
+        "VALUES (?, ?, ?, ?, ?)",
+        (unit_code, unit_name, zero_salary_no_add, exclude_all, salary_month_scope))
+    conn.commit()
+    conn.close()
+
+
+def upsert_special_unit_full(unit_code: int, unit_name: str = "",
+                             zero_salary_no_add: int = 1, exclude_all: int = 0,
+                             salary_month_scope: str = "all") -> None:
+    """新增或更新特殊结算单元配置 (合并式导入用)。
+
+    已存在同 code 时仅更新业务字段, 保留 created_at; 不存在则插入。
+    """
+    conn = get_db()
+    conn.execute(
+        "INSERT INTO special_unit_config (unit_code, unit_name, zero_salary_no_add, exclude_all, salary_month_scope) "
+        "VALUES (?, ?, ?, ?, ?) "
+        "ON CONFLICT(unit_code) DO UPDATE SET "
+        "unit_name = excluded.unit_name, "
+        "zero_salary_no_add = excluded.zero_salary_no_add, "
+        "exclude_all = excluded.exclude_all, "
+        "salary_month_scope = excluded.salary_month_scope",
+        (unit_code, unit_name, zero_salary_no_add, exclude_all, salary_month_scope))
     conn.commit()
     conn.close()
 
 
 def update_special_unit(unit_code: int, exclude_all: Optional[bool] = None,
-                        zero_salary_no_add: Optional[bool] = None) -> None:
+                        zero_salary_no_add: Optional[bool] = None,
+                        salary_month_scope: Optional[str] = None) -> None:
     """更新特殊结算单元配置的排除模式 (传入的字段才更新)。"""
     sets = []
     binds = [unit_code]
@@ -84,6 +137,9 @@ def update_special_unit(unit_code: int, exclude_all: Optional[bool] = None,
     if zero_salary_no_add is not None:
         sets.append("zero_salary_no_add = ?")
         binds.insert(len(binds) - 1, 1 if zero_salary_no_add else 0)
+    if salary_month_scope is not None:
+        sets.append("salary_month_scope = ?")
+        binds.insert(len(binds) - 1, salary_month_scope)
     if not sets:
         return
     conn = get_db()

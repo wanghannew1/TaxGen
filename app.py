@@ -72,6 +72,42 @@ def merge_records_by_person(records, by_pay_month: bool = False):
     return merged
 
 
+def _apply_scope_filter(combo_set, scope_map):
+    """按结算单元 salary_month_scope 配置过滤组合集合。
+
+    默认 'all' 保留全部所属月(翻倍合并); 'latest_N' 仅保留所属月最大的 N 个月,
+    'first_N' 仅保留所属月最小的 N 个月。非法配置回退 'all' 全保留, 避免丢数据。
+    """
+    if not scope_map:
+        return combo_set
+    unit_months = {}
+    for unit, sm, _seq in combo_set:
+        unit_months.setdefault(unit, set()).add(sm)
+    kept = set()
+    for unit, sm, seq in combo_set:
+        scope = scope_map.get(unit, "all")
+        if scope == "all":
+            kept.add((unit, sm, seq))
+            continue
+        parts = scope.split("_")
+        if len(parts) != 2 or parts[0] not in ("first", "latest"):
+            kept.add((unit, sm, seq))
+            continue
+        try:
+            n = int(parts[1])
+        except ValueError:
+            kept.add((unit, sm, seq))
+            continue
+        if n <= 0:
+            kept.add((unit, sm, seq))
+            continue
+        months = sorted(unit_months.get(unit, set()))
+        selected = months[:n] if parts[0] == "first" else months[-n:]
+        if sm in selected:
+            kept.add((unit, sm, seq))
+    return kept
+
+
 def build_labor_service_records(conn, raw_records, confirmed_combos, month,
                                 merge_by_person, merge_by_pay_month, zero_codes, excl_codes):
     """劳务报酬模板数据: 按发放月(ATC8G7) + 当前有效TC90 AAE00P=3 过滤。
@@ -182,7 +218,9 @@ def api_generate():
         conn = get_connection()
         if confirmed_combos is not None:
             combo_set = {(c["unit"], c["salary_month"], c["seq"]) for c in confirmed_combos}
-            salary_months = {c["salary_month"] for c in confirmed_combos}
+            from config_db import get_scope_map
+            combo_set = _apply_scope_filter(combo_set, get_scope_map())
+            salary_months = {c[1] for c in combo_set}
             records = []
             for sm in salary_months:
                 records.extend(get_salary_records(conn, sm))
@@ -489,9 +527,11 @@ def api_special_units_add():
         unit_code = int(data.get("unit_code", 0) or 0)
         unit_name = str(data.get("unit_name", "") or "")
         exclude_all = bool(data.get("exclude_all", False))
+        salary_month_scope = str(data.get("salary_month_scope", "") or "all")
         if not unit_code:
             return jsonify({"error": "请填写结算单元代码"}), 400
-        add_special_unit(unit_code, unit_name, exclude_all=exclude_all)
+        add_special_unit(unit_code, unit_name, exclude_all=exclude_all,
+                         salary_month_scope=salary_month_scope)
         return jsonify({"ok": True})
     except Exception as e:
         return jsonify({"error": str(e)}), 500
@@ -505,9 +545,11 @@ def api_special_units_mode(unit_code):
         data = request.get_json() or {}
         exclude_all = data.get("exclude_all")
         zero_salary_no_add = data.get("zero_salary_no_add")
+        salary_month_scope = data.get("salary_month_scope")
         update_special_unit(unit_code,
                             exclude_all=exclude_all if exclude_all is not None else None,
-                            zero_salary_no_add=zero_salary_no_add if zero_salary_no_add is not None else None)
+                            zero_salary_no_add=zero_salary_no_add if zero_salary_no_add is not None else None,
+                            salary_month_scope=salary_month_scope if salary_month_scope is not None else None)
         return jsonify({"ok": True})
     except Exception as e:
         return jsonify({"error": str(e)}), 500
@@ -515,16 +557,17 @@ def api_special_units_mode(unit_code):
 
 @app.route("/api/special-units/template")
 def api_special_units_template():
-    """下载特殊结算单元配置导入模板 (4列: 代码/名称/工资为0/完全排除)。"""
+    """下载特殊结算单元配置导入模板 (5列: 代码/名称/工资为0/完全排除/所属月取数范围)。"""
     try:
         from openpyxl import Workbook
         wb = Workbook()
         ws = wb.active
         ws.title = "特殊结算单元配置"
-        ws.append(["结算单元代码", "结算单元名称", "工资为0不增员不报税", "完全排除不增员不报税"])
-        ws.append([None, "测试A-仅工资0", 1, 0])
-        ws.append([None, "测试B-仅完全排除", 0, 1])
-        ws.append([None, "测试C-两种", 1, 1])
+        ws.append(["结算单元代码", "结算单元名称", "工资为0不增员不报税", "完全排除不增员不报税", "工资所属月取数范围"])
+        ws.append([None, "测试A-仅工资0", 1, 0, "all"])
+        ws.append([None, "测试B-仅完全排除", 0, 1, "all"])
+        ws.append([None, "测试C-仅最早1个月(压月)", 0, 0, "first_1"])
+        ws.append([None, "测试D-两种+最早2个月", 1, 1, "first_2"])
         from datetime import datetime as _dt
         filename = f"特殊结算单元配置导入模板_{_dt.now().strftime('%Y%m%d%H%M%S')}.xlsx"
         wb.save(os.path.join(OUTPUT_DIR, filename))
@@ -565,9 +608,10 @@ def api_special_units_export():
         wb = Workbook()
         ws = wb.active
         ws.title = "特殊结算单元配置"
-        ws.append(["结算单元代码", "结算单元名称", "工资为0不增员不报税", "完全排除不增员不报税"])
+        ws.append(["结算单元代码", "结算单元名称", "工资为0不增员不报税", "完全排除不增员不报税", "工资所属月取数范围"])
         for u in units:
-            ws.append([u["code"], u["name"], u["zero_salary_no_add"], u["exclude_all"]])
+            ws.append([u["code"], u["name"], u["zero_salary_no_add"], u["exclude_all"],
+                       u.get("salary_month_scope", "all")])
         from datetime import datetime as _dt
         filename = f"特殊结算单元配置_{_dt.now().strftime('%Y%m%d%H%M%S')}.xlsx"
         wb.save(os.path.join(OUTPUT_DIR, filename))
@@ -578,13 +622,15 @@ def api_special_units_export():
 
 @app.route("/api/special-units/import", methods=["POST"])
 def api_special_units_import():
-    """从 Excel 导入特殊结算单元配置 (覆盖式)。
+    """从 Excel 导入特殊结算单元配置 (合并式/更新式)。
 
+    仅新增或更新文件中出现的单元, 绝不删除文件中未出现的单元
+    (删除请用逐行删除按钮或 DELETE 接口, 避免误清空例外规则)。
     结算单元代码可留空, 按结算单元名称自动匹配; 名称匹配不到或多个时跳过并提示。
     """
     try:
         from openpyxl import load_workbook
-        from config_db import delete_special_unit, add_special_unit_full
+        from config_db import upsert_special_unit_full
         from queries import lookup_unit_codes_by_name
         file = request.files.get("file")
         if not file:
@@ -601,23 +647,27 @@ def api_special_units_import():
                 if not row or all(v is None for v in row):
                     continue
                 # 兼容两种格式:
-                # 4列: 结算单元代码 | 结算单元名称 | 工资为0不增员不报税 | 完全排除不增员不报税
+                # 4/5列: 结算单元代码 | 结算单元名称 | 工资为0不增员不报税 | 完全排除不增员不报税 [| 工资所属月取数范围]
                 # 3列: 配置(名称或代码) | 工资为0不增员 | 完全排除不增员
                 vals = list(row)
-                while len(vals) < 4:
+                while len(vals) < 5:
                     vals.append(None)
                 if vals[2] is not None or vals[3] is not None:
                     code_raw = vals[0]
                     name = str(vals[1] or "")
                     zero_flag = int(vals[2] or 0)
                     exclude_all = int(vals[3] or 0)
+                    scope = str(vals[4] or "").strip() or "all"
                     code = int(code_raw) if str(code_raw or "").strip().isdigit() else None
                 else:
                     code_raw = vals[0]
                     name = str(code_raw or "")
                     zero_flag = int(vals[1] or 0)
                     exclude_all = int(vals[2] or 0)
+                    scope = str(vals[3] or "").strip() or "all"
                     code = int(code_raw) if str(code_raw or "").strip().isdigit() else None
+                if scope not in ("all", "first_1", "first_2", "latest_1", "latest_2"):
+                    scope = "all"
                 if not code:
                     # 代码留空时按名称自动匹配
                     codes = lookup_unit_codes_by_name(conn, name)
@@ -627,15 +677,16 @@ def api_special_units_import():
                         skipped.append(f"{name}(匹配到{len(codes)}个代码)")
                         continue
                 units.append({"code": code, "name": name,
-                              "zero_salary_no_add": zero_flag, "exclude_all": exclude_all})
+                              "zero_salary_no_add": zero_flag, "exclude_all": exclude_all,
+                              "salary_month_scope": scope})
         finally:
             if os.path.exists(tmp_path):
                 os.remove(tmp_path)
-        delete_special_unit(None)  # 清空 (SQLite 全部删除)
         for u in units:
-            add_special_unit_full(u["code"], u["name"],
-                                  zero_salary_no_add=u["zero_salary_no_add"],
-                                  exclude_all=u["exclude_all"])
+            upsert_special_unit_full(u["code"], u["name"],
+                                     zero_salary_no_add=u["zero_salary_no_add"],
+                                     exclude_all=u["exclude_all"],
+                                     salary_month_scope=u.get("salary_month_scope", "all"))
         resp = {"ok": True, "count": len(units)}
         if skipped:
             resp["skipped"] = skipped

@@ -34,16 +34,29 @@
             <div class="alert alert-info" style="font-size: 0.9rem;">
                 两种排除模式：
                 <strong>工资为0不增员不报税</strong> — 该结算单元当月合计工资为0时人员不增员不报税（有工资仍增员报税）；
-                <strong>完全排除不增员不报税</strong> — 该结算单元不论是否发工资，都不增员不报个税（从根源排除）。
+                <strong>完全排除不增员不报税</strong> — 该结算单元不论是否发工资，都不增员不报个税（从根源排除）。<br>
+                <strong>工资所属月取数范围</strong> — 默认 <code>all</code> 取发放月内全部所属月（双月发放自动翻倍合并）；
+                <code>first_1</code> 仅取最早1个所属月、<code>latest_1</code> 仅取最近1个所属月（压月/偶发欠发单元，
+                手工只报单倍）。
             </div>
             <div class="row g-2 align-items-end mb-3">
-                <div class="col-md-4">
+                <div class="col-md-3">
                     <label class="form-label">结算单元代码</label>
                     <input type="number" id="unitCode" class="form-control" placeholder="如 41137">
                 </div>
-                <div class="col-md-4">
+                <div class="col-md-3">
                     <label class="form-label">结算单元名称</label>
                     <input type="text" id="unitName" class="form-control" placeholder="如 吉林大学第二医院B">
+                </div>
+                <div class="col-md-2">
+                    <label class="form-label">工资所属月取数范围</label>
+                    <select id="salaryScope" class="form-select">
+                        <option value="all">all（全部所属月）</option>
+                        <option value="first_1">first_1（仅最早1个月）</option>
+                        <option value="first_2">first_2（仅最早2个月）</option>
+                        <option value="latest_1">latest_1（仅最近1个月）</option>
+                        <option value="latest_2">latest_2（仅最近2个月）</option>
+                    </select>
                 </div>
                 <div class="col-md-2">
                     <div class="form-check mt-4">
@@ -75,6 +88,7 @@
                         <th>结算单元名称</th>
                         <th>工资为0不增员不报税</th>
                         <th>完全排除不增员不报税</th>
+                        <th>工资所属月取数范围</th>
                         <th>操作</th>
                     </tr>
                 </thead>
@@ -89,6 +103,7 @@
 <script>
     const unitCode = document.getElementById('unitCode');
     const unitName = document.getElementById('unitName');
+    const salaryScope = document.getElementById('salaryScope');
     const excludeAll = document.getElementById('excludeAll');
     const btnAdd = document.getElementById('btnAdd');
     const btnExport = document.getElementById('btnExport');
@@ -126,6 +141,15 @@
                             <input class="form-check-input" type="checkbox" ${u.exclude_all ? 'checked' : ''} onchange="toggleMode(${u.code}, this.checked)">
                         </div>
                     </td>
+                    <td>
+                        <select class="form-select form-select-sm" style="width:auto;display:inline-block;" onchange="toggleScope(${u.code}, this.value)">
+                            <option value="all" ${(u.salary_month_scope || 'all') === 'all' ? 'selected' : ''}>all</option>
+                            <option value="first_1" ${(u.salary_month_scope || 'all') === 'first_1' ? 'selected' : ''}>first_1</option>
+                            <option value="first_2" ${(u.salary_month_scope || 'all') === 'first_2' ? 'selected' : ''}>first_2</option>
+                            <option value="latest_1" ${(u.salary_month_scope || 'all') === 'latest_1' ? 'selected' : ''}>latest_1</option>
+                            <option value="latest_2" ${(u.salary_month_scope || 'all') === 'latest_2' ? 'selected' : ''}>latest_2</option>
+                        </select>
+                    </td>
                     <td><button class="btn btn-sm btn-outline-danger" onclick="deleteUnit(${u.code})">删除</button></td>
                 </tr>`).join('');
         } catch (e) {
@@ -135,6 +159,10 @@
 
     async function toggleMode(code, checked) {
         await toggleField(code, { exclude_all: checked });
+    }
+
+    async function toggleScope(code, value) {
+        await toggleField(code, { salary_month_scope: value });
     }
 
     async function toggleZero(code, checked) {
@@ -172,13 +200,14 @@
             const resp = await fetch('/api/special-units', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ unit_code: parseInt(code), unit_name: unitName.value.trim(), exclude_all: excludeAll.checked })
+                body: JSON.stringify({ unit_code: parseInt(code), unit_name: unitName.value.trim(), exclude_all: excludeAll.checked, salary_month_scope: salaryScope.value })
             });
             const data = await resp.json();
             if (!resp.ok || data.error) { showError(data.error || '新增失败'); return; }
             unitCode.value = '';
             unitName.value = '';
             excludeAll.checked = false;
+            salaryScope.value = 'all';
             loadUnits();
         } catch (e) { showError(`新增失败: ${e.message}`); }
     });
