@@ -111,6 +111,7 @@ def generate_normal_salary(records: List[SalaryRecord], title: str, output_dir: 
     
     # 写入数据
     validations = []
+    income_rows = []  # 收入表每行30列值, 供验证报告逐行1:1复制
     for idx, rec in enumerate(records, 1):
         row = idx + 1
         income = calc_本期收入(rec)
@@ -126,6 +127,12 @@ def generate_normal_salary(records: List[SalaryRecord], title: str, output_dir: 
         ws.cell(row=row, column=10, value=rec.公积金个人)
         ws.cell(row=row, column=18, value=0)  # 企业(职业)年金 = 0
         ws.cell(row=row, column=30, value=remark_text)
+        income_rows.append([
+            rec.职工号, rec.姓名, "居民身份证", rec.身份证, income, None,
+            rec.养老个人, rec.医疗个人, rec.失业个人, rec.公积金个人,
+            None, None, None, None, None, None, None, 0,
+            None, None, None, None, None, None, None, None, None, None, None, remark_text,
+        ])
         
         # 左 = 本期收入 − 养老 − 失业 − 医疗 − 公积金 − 意外险 + 本次免税(ATC936)
         # 本期收入内部已减本次免税与大病险个人(ATC93BD)，此处加回本次免税使左式回到工资总额口径；
@@ -142,6 +149,7 @@ def generate_normal_salary(records: List[SalaryRecord], title: str, output_dir: 
             "已达到" if rec.经济补偿金 > 3 * annual_avg_wage else "未达到")
         validations.append({
             "tc930": rec.tc930_id, "姓名": rec.姓名,
+            "unit": rec.结算单元,
             "unit_name": combo_map.get((rec.结算单元, rec.工资所属年月, rec.当月批次), title),
             "salary_month": rec.工资所属年月, "seq": rec.当月批次,
             "工资总额": rec.工资总额, "本次免税": rec.补发3, "大病险个人": rec.大病险个人,
@@ -155,9 +163,11 @@ def generate_normal_salary(records: List[SalaryRecord], title: str, output_dir: 
             "右": right, "差值": diff, "通过": passed
         })
     
+    # 验证报告与收入表逐行一一对应: 收入表30列原样复制 + 新增组合合并列/发放经办人 + 原验算列右移
     vs = wb.create_sheet("验证报告")
     thr = 3 * annual_avg_wage
-    vs_headers = [
+    vs_headers = headers + [
+        "结算单元名称-所属月份-批次", "发放经办人",
         "ATC930", "姓名", "结算单元名称", "所属月份", "批次",
         "本次工资总额(ATC93AA)", "本次免税(ATC936)", "大病险（个人承担）(ATC93BD)", "补缴及退款保险差额（个人）(ATC93BE)", "个人交纳现金(ATC93X3)", "本期收入",
         "当月养老个人缴(BAA001)", "当月失业个人缴(BAA003)", "当月医疗个人缴(BAA002)", "个人公积金月缴存额(CAA002)",
@@ -168,8 +178,32 @@ def generate_normal_salary(records: List[SalaryRecord], title: str, output_dir: 
     ]
     for col, h in enumerate(vs_headers, 1):
         vs.cell(row=1, column=col, value=h)
+    # 组合合并列: 全部发放组合(单元-所属月-批次)写全, 不受50字限制, 英文分号连接
+    if combos:
+        combo_full = ";".join(
+            f"{c.get('unit_name', '')}-{c.get('salary_month', '')}-{c.get('seq', '')}"
+            for c in combos)
+    else:
+        combo_full = title
+    # 经办人: 发放经办人(TC8M.AAE019, 来自combos.handler)优先, 回落做工资经办人(TC93.AAE019)
+    trip_handlers = {}
+    for c in combos or []:
+        key = (int(c.get("unit", 0) or 0), int(c.get("salary_month", 0) or 0),
+               str(c.get("seq", "") or ""))
+        h = str(c.get("handler", "") or "")
+        if h and key not in trip_handlers:
+            trip_handlers[key] = h
+    tc93_handlers = {}
+    for r in tc93_all or []:
+        key = (int(r.get("ATB930", 0) or 0), int(r.get("ATC931", 0) or 0),
+               str(r.get("ATC937", "") or ""))
+        h = str(r.get("AAE019", "") or "")
+        if h and key not in tc93_handlers:
+            tc93_handlers[key] = h
     for idx, v in enumerate(validations, 1):
-        vals = [
+        key = (int(v["unit"] or 0), int(v["salary_month"] or 0), str(v["seq"] or ""))
+        handler = trip_handlers.get(key) or tc93_handlers.get(key) or ""
+        vals = list(income_rows[idx - 1]) + [combo_full, handler] + [
             v["tc930"], v["姓名"], v["unit_name"], v["salary_month"], v["seq"],
             v["工资总额"], v["本次免税"], v["大病险个人"], v["补缴退款差额"], v["交纳现金"], v["本期收入"],
             v["养老"], v["失业"], v["医疗"], v["公积金"],
@@ -179,7 +213,8 @@ def generate_normal_salary(records: List[SalaryRecord], title: str, output_dir: 
             v["右"], v["差值"], "通过" if v["通过"] else "失败"
         ]
         for col, val in enumerate(vals, 1):
-            vs.cell(row=idx+1, column=col, value=val)
+            if val is not None:
+                vs.cell(row=idx+1, column=col, value=val)
     
     if tc93_all:
         generate_tc93_full_sheet(wb, tc93_all, tc93_comments)
@@ -200,7 +235,8 @@ def generate_normal_salary(records: List[SalaryRecord], title: str, output_dir: 
             "五险一金列取个人缴部分，企业(职业)年金恒为 0，备注填本次发放全部结算单元-所属年月-批次组合（≤50字符，单元名与年月间省略连字符，超限回落为仅列结算单元名称）。",
         ]),
         ("验证报告", [
-            "每行一人，左=右校验：左 = 本期收入 − 养老 − 失业 − 医疗 − 公积金 − 意外险 + 本次免税(ATC936)；",
+            "与'正常工资薪金收入'sheet 逐行一一对应：前30列为收入表原样复制，随后为全部发放组合列（结算单元-所属月-批次，不受字数限制）与发放经办人，再向右为原验算列。",
+            "左=右校验：左 = 本期收入 − 养老 − 失业 − 医疗 − 公积金 − 意外险 + 本次免税(ATC936)；",
             "右 = (实发 − 经济补偿金) + 税后工会会费 + 个人代理费 + 个税 + 个人其他调整(ATC93AG)；|左−右|<0.01 为通过。",
             "大病险个人(ATC93BD)左右两侧同项销项不单列；经济补偿金(ATC93M)含在实发中但属一次性补偿，",
             "验证时从实发扣回；另按 3×年平均工资判断是否达交税标准。公式推导详见'验算公式说明'sheet。",

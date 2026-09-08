@@ -266,15 +266,27 @@ class TestGenerateEndToEnd:
         assert "验证报告" in wb.sheetnames
 
     def test_generate_with_tc930_in_validation(self, conn, output_dir):
-        """验证报告 sheet 必须包含 ATC930 列"""
+        """验证报告必须与收入表逐行一一对应: 收入表30列复制 + 组合合并列/发放经办人 + 原ATC930等列右移"""
         months = get_available_months(conn)
         latest_month = months[0].value
         records = get_salary_records(conn, latest_month)
         result = generate_normal_salary(records, f"测试{latest_month}", output_dir)
         wb = load_workbook(result.file_path)
+        inc = wb["正常工资薪金收入"]
         vs = wb["验证报告"]
+        # 表头: 收入表30列 + 组合合并列 + 发放经办人 + 原28列 = 60列
+        assert vs.max_column == 60
         headers = [vs.cell(row=1, column=c).value for c in range(1, vs.max_column + 1)]
         assert "ATC930" in headers
+        assert headers[30] == "结算单元名称-所属月份-批次"
+        assert headers[31] == "发放经办人"
+        assert headers[32] == "ATC930"
+        # 逐行一一对应: 收入表前30列与验证报告同列同值（跳过空列）
+        assert vs.max_row == inc.max_row
+        for r in range(1, inc.max_row + 1):
+            for c in (1, 2, 3, 4, 5, 7, 8, 9, 10, 18, 30):
+                assert vs.cell(row=r, column=c).value == inc.cell(row=r, column=c).value, \
+                    f"row{r} col{c} 不一致"
 
     def test_records_have_tc930_id(self, conn):
         """查询到的每条记录 tc930_id 必须非零"""
