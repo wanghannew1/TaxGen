@@ -493,6 +493,76 @@ def api_tax_return_export():
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
+@app.route("/filing-history")
+def page_filing_history():
+    return render_template("filing_history.html")
+
+@app.route("/api/filing/import", methods=["POST"])
+def api_filing_import():
+    try:
+        from filing_history import init_db as init_filing_db, parse_filing_file, import_filing_records
+        init_filing_db()
+        files = request.files.getlist("files")
+        if not files:
+            return jsonify({"error": "请选择申报文件"}), 400
+        results = []
+        total = 0
+        for i, f in enumerate(files):
+            if not f or not f.filename:
+                continue
+            tmp_path = os.path.join(OUTPUT_DIR, f"_filing_tmp_{datetime.now().strftime('%Y%m%d%H%M%S%f')}_{i}{os.path.splitext(f.filename)[1]}")
+            f.save(tmp_path)
+            try:
+                records = parse_filing_file(tmp_path)
+                import_filing_records(records)
+                months = sorted({r["month"] for r in records})
+                item_type = records[0]["item_type"] if records else ""
+                results.append({"filename": f.filename, "count": len(records),
+                                "item_type": item_type, "months": months, "error": None})
+                total += len(records)
+            except Exception as e:
+                results.append({"filename": f.filename, "count": 0,
+                                "item_type": "", "months": [], "error": str(e)})
+            finally:
+                if os.path.exists(tmp_path):
+                    os.remove(tmp_path)
+        return jsonify({"ok": True, "files": results, "total": total})
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+@app.route("/api/filing/summary")
+def api_filing_summary():
+    try:
+        from filing_history import get_filing_summary
+        data = get_filing_summary()
+        if isinstance(data, dict) and "groups" in data:
+            return jsonify(data)
+        return jsonify({"groups": data})
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+@app.route("/api/filing/records")
+def api_filing_records():
+    try:
+        from filing_history import get_filing_records
+        month = request.args.get("month", "").strip()
+        if month:
+            try:
+                month = int(month)
+            except ValueError:
+                return jsonify({"error": "月份格式不正确"}), 400
+            if not (1000 <= month <= 999999):
+                return jsonify({"error": "月份格式不正确"}), 400
+        else:
+            month = None
+        item_type = request.args.get("item_type", "").strip() or None
+        search = request.args.get("search", "").strip() or None
+        page = max(1, int(request.args.get("page", 1) or 1))
+        page_size = min(500, max(1, int(request.args.get("page_size", 50) or 50)))
+        return jsonify(get_filing_records(month, item_type, search, page, page_size))
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
 @app.route("/personnel-compare")
 def page_personnel_compare():
     return render_template("personnel_compare.html")
