@@ -1,0 +1,339 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>多退少补 - 个税填报服务</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+    <style>
+        body { background: #f5f6fa; overflow-x: hidden; }
+        .container { max-width: 1800px; }
+        .card { margin-bottom: 1rem; box-shadow: 0 1px 3px rgba(0,0,0,.1); }
+        .stat-card { text-align: center; padding: 1rem; }
+        .stat-card .num { font-size: 1.8rem; font-weight: 700; }
+        .stat-ok { color: #198754; }
+        .stat-warn { color: #fd7e14; }
+        .stat-danger { color: #dc3545; }
+        .stat-info { color: #0d6efd; }
+        .status-ok { color: #198754; font-weight: 600; }
+        .status-diff { color: #fd7e14; font-weight: 600; }
+        .status-no { color: #dc3545; font-weight: 600; }
+        .status-other { color: #6c757d; font-weight: 600; }
+        .table-responsive { max-height: 500px; overflow-y: auto; }
+        .sticky-top { background: #fff; }
+        .nav-link.active { font-weight: 600; }
+        .badge-warn { background: #fff3cd; color: #856404; border: 1px solid #ffeeba; border-radius: 4px; padding: 4px 8px; }
+        table.w-100 td, table.w-100 th { overflow: hidden; }
+        #detailsTable, #unitsTable { table-layout: fixed; }
+        .ellipsis-cell { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; cursor: default; }
+        .nowrap { white-space: nowrap; }
+        .num-cell { text-align: right; }
+    </style>
+</head>
+<body>
+<nav class="navbar navbar-dark bg-primary">
+    <div class="container" style="max-width: 1800px;">
+        <span class="navbar-brand">个税填报服务</span>
+    </div>
+</nav>
+
+<div class="container py-3" style="max-width: 1800px;">
+    <div class="d-flex gap-2 mb-3 flex-wrap">
+        <a href="/" class="btn btn-outline-primary">报税数据生成</a>
+        <a href="/tax-return" class="btn btn-outline-primary">报税状态统计</a>
+        <a href="/payroll-records" class="btn btn-outline-primary">工资发放情况查询</a>
+        <a href="/personnel-compare" class="btn btn-outline-success">增减员比对</a>
+        <a href="/special-units" class="btn btn-outline-primary">特殊结算单元配置</a>
+        <a href="/filing-history" class="btn btn-outline-primary">历史申报库</a>
+        <a href="/tax-adjust" class="btn btn-primary active">多退少补</a>
+    </div>
+
+    <div class="card">
+        <div class="card-header"><strong>多退少补比对</strong></div>
+        <div class="card-body">
+            <div class="row g-2 align-items-end">
+                <div class="col-md-3">
+                    <label class="form-label">比对月份（系统发放月份）</label>
+                    <select id="monthSelect" class="form-select">
+                        <option value="">请选择月份</option>
+                    </select>
+                    <div class="form-text">比对系统预算个税与回盘个税，生成多退少补建议</div>
+                </div>
+                <div class="col-md-2">
+                    <button id="btnQuery" class="btn btn-outline-primary w-100">查询</button>
+                </div>
+                <div class="col-md-2">
+                    <button id="btnExport" class="btn btn-outline-success w-100">导出Excel</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <div id="statsCard" class="card" style="display:none;">
+        <div class="card-header"><strong>多退少补概览（<span id="statMonth"></span>）</strong></div>
+        <div class="card-body">
+            <div class="row">
+                <div class="col-md-3 col-sm-6 stat-card"><div class="stat-info num" id="statDetailCount">0</div><div class="text-muted">明细人数</div></div>
+                <div class="col-md-3 col-sm-6 stat-card"><div class="stat-warn num" id="statRefund">0.00</div><div class="text-muted">需退总额</div></div>
+                <div class="col-md-3 col-sm-6 stat-card"><div class="stat-danger num" id="statCollect">0.00</div><div class="text-muted">需补总额</div></div>
+                <div class="col-md-3 col-sm-6 stat-card"><div class="stat-info num" id="statNet">0.00</div><div class="text-muted">净额</div></div>
+            </div>
+        </div>
+    </div>
+
+    <div id="unitsCard" class="card" style="display:none;">
+        <div class="card-header"><strong>结算单元汇总</strong></div>
+        <div class="card-body">
+            <div class="table-responsive">
+                <table class="table table-sm table-striped table-hover mb-0 w-100" id="unitsTable">
+                    <thead class="sticky-top">
+                        <tr>
+                            <th style="width:50px">序号</th><th style="width:90px">结算单元ID</th><th>结算单元名称</th>
+                            <th style="width:70px">人数</th><th style="width:110px">需退</th><th style="width:110px">需补</th><th style="width:110px">净额</th>
+                        </tr>
+                    </thead>
+                    <tbody id="unitsTbody"></tbody>
+                </table>
+            </div>
+            <div class="d-flex justify-content-between align-items-center mt-2">
+                <span id="unitsCount" class="text-muted"></span>
+                <div class="d-flex gap-2 align-items-center">
+                    <label class="form-label mb-0 small">每页</label>
+                    <select id="unitsPageSize" class="form-select form-select-sm" style="width:auto;">
+                        <option value="50">50</option>
+                        <option value="100">100</option>
+                        <option value="200">200</option>
+                        <option value="500" selected>500</option>
+                        <option value="custom">自定义</option>
+                    </select>
+                    <input type="number" id="unitsPageSizeCustom" class="form-control form-control-sm" style="width:80px; display:none;" min="1" placeholder="条数">
+                    <button id="unitsPrev" class="btn btn-sm btn-outline-secondary">上一页</button>
+                    <span class="small" id="unitsPageInfo"></span>
+                    <button id="unitsNext" class="btn btn-sm btn-outline-secondary">下一页</button>
+                    <input type="number" id="unitsJump" class="form-control form-control-sm" style="width:70px" min="1" placeholder="页码">
+                    <button id="unitsJumpBtn" class="btn btn-sm btn-outline-primary">跳页</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <div id="detailsCard" class="card" style="display:none;">
+        <div class="card-header d-flex justify-content-between align-items-center flex-wrap gap-2">
+            <strong>个人明细</strong>
+            <div class="d-flex gap-2">
+                <select id="statusFilter" class="form-select form-select-sm" style="width:auto;">
+                    <option value="">全部</option>
+                    <option value="持平">持平</option>
+                    <option value="需退">需退</option>
+                    <option value="需补">需补</option>
+                    <option value="回盘无记录">回盘无记录</option>
+                    <option value="系统无记录">系统无记录</option>
+                </select>
+                <input type="text" id="nameFilter" class="form-control form-control-sm" placeholder="姓名/证件号" style="width:auto;">
+                <button id="btnFilter" class="btn btn-sm btn-outline-primary">筛选</button>
+            </div>
+        </div>
+        <div class="card-body">
+            <div class="table-responsive">
+                <table class="table table-sm table-striped table-hover mb-0 w-100" id="detailsTable">
+                    <thead class="sticky-top">
+                        <tr>
+                            <th style="width:50px">序号</th><th style="width:80px">姓名</th><th style="width:190px">证件号码</th><th>结算单元</th><th style="width:130px">所属月份-批次</th>
+                            <th style="width:110px">系统预算个税</th><th style="width:110px">回盘个税</th><th style="width:100px">差额</th><th style="width:90px">状态</th><th>建议</th>
+                        </tr>
+                    </thead>
+                    <tbody id="detailsTbody"></tbody>
+                </table>
+            </div>
+            <div class="d-flex justify-content-between align-items-center mt-2">
+                <span id="detailsCount" class="text-muted"></span>
+                <div class="d-flex gap-2 align-items-center">
+                    <label class="form-label mb-0 small">每页</label>
+                    <select id="detailsPageSize" class="form-select form-select-sm" style="width:auto;">
+                        <option value="50">50</option>
+                        <option value="100">100</option>
+                        <option value="200">200</option>
+                        <option value="500" selected>500</option>
+                        <option value="custom">自定义</option>
+                    </select>
+                    <input type="number" id="detailsPageSizeCustom" class="form-control form-control-sm" style="width:80px; display:none;" min="1" placeholder="条数">
+                    <button id="detailsPrev" class="btn btn-sm btn-outline-secondary">上一页</button>
+                    <span class="small" id="detailsPageInfo"></span>
+                    <button id="detailsNext" class="btn btn-sm btn-outline-secondary">下一页</button>
+                    <input type="number" id="detailsJump" class="form-control form-control-sm" style="width:70px" min="1" placeholder="页码">
+                    <button id="detailsJumpBtn" class="btn btn-sm btn-outline-primary">跳页</button>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
+<script>
+    const monthSelect = document.getElementById('monthSelect');
+    let currentMonth = 0;
+    let detailsData = [];
+    let detailsFiltered = [];
+    let unitsData = [];
+    let unitsPage = 1;
+    let detailsPage = 1;
+
+    document.addEventListener('DOMContentLoaded', loadMonths);
+
+    async function loadMonths() {
+        try {
+            const resp = await fetch('/api/pay-months');
+            const months = await resp.json();
+            monthSelect.innerHTML = '<option value="">请选择月份</option>' +
+                months.map(m => `<option value="${m.value}">${m.label}</option>`).join('');
+        } catch (e) {
+            console.error(e);
+        }
+    }
+
+    function fmtMoney(v) {
+        if (v === null || v === undefined || v === '') return '—';
+        return Number(v).toLocaleString('zh-CN', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+    }
+
+    function pageSize(prefix) {
+        const sel = document.getElementById(prefix + 'PageSize');
+        if (sel.value === 'custom') {
+            const v = parseInt(document.getElementById(prefix + 'PageSizeCustom').value);
+            return v > 0 ? v : 50;
+        }
+        return parseInt(sel.value);
+    }
+
+    function toggleCustomInput(prefix) {
+        const sel = document.getElementById(prefix + 'PageSize');
+        document.getElementById(prefix + 'PageSizeCustom').style.display = sel.value === 'custom' ? 'inline-block' : 'none';
+    }
+
+    function bindPageSize(prefix, resetFn) {
+        document.getElementById(prefix + 'PageSize').addEventListener('change', function () {
+            toggleCustomInput(prefix);
+            resetFn(1);
+        });
+        document.getElementById(prefix + 'PageSizeCustom').addEventListener('change', function () {
+            resetFn(1);
+        });
+    }
+
+    document.getElementById('btnQuery').addEventListener('click', queryCompare);
+    document.getElementById('btnExport').addEventListener('click', async () => {
+        if (!currentMonth) { alert('请先查询月份'); return; }
+        const resp = await fetch(`/api/tax-adjust/export?month=${currentMonth}`);
+        const data = await resp.json();
+        if (data.download_url) window.location.href = data.download_url;
+        else alert(data.error || '导出失败');
+    });
+    document.getElementById('btnFilter').addEventListener('click', () => { detailsPage = 1; filterDetails(); });
+    document.getElementById('nameFilter').addEventListener('keydown', e => { if (e.key === 'Enter') { detailsPage = 1; filterDetails(); } });
+
+    document.getElementById('unitsPrev').addEventListener('click', () => { if (unitsPage > 1) { unitsPage--; renderUnits(); } });
+    document.getElementById('unitsNext').addEventListener('click', () => { if (unitsPage * pageSize('units') < unitsData.length) { unitsPage++; renderUnits(); } });
+    document.getElementById('detailsPrev').addEventListener('click', () => { if (detailsPage > 1) { detailsPage--; renderDetails(); } });
+    document.getElementById('detailsNext').addEventListener('click', () => { if (detailsPage * pageSize('details') < detailsFiltered.length) { detailsPage++; renderDetails(); } });
+    document.getElementById('unitsJumpBtn').addEventListener('click', () => jumpPage('units'));
+    document.getElementById('detailsJumpBtn').addEventListener('click', () => jumpPage('details'));
+    bindPageSize('units', p => { unitsPage = p; renderUnits(); });
+    bindPageSize('details', p => { detailsPage = p; renderDetails(); });
+
+    function jumpPage(prefix) {
+        const totalPages = Math.max(1, Math.ceil((prefix === 'units' ? unitsData : detailsFiltered).length / pageSize(prefix)));
+        const p = parseInt(document.getElementById(prefix + 'Jump').value);
+        if (!p || p < 1 || p > totalPages) { alert(`页码需在 1-${totalPages} 之间`); return; }
+        if (prefix === 'units') { unitsPage = p; renderUnits(); }
+        else { detailsPage = p; renderDetails(); }
+    }
+
+    async function queryCompare() {
+        currentMonth = parseInt(monthSelect.value);
+        if (!currentMonth) { alert('请选择月份'); return; }
+        const btn = document.getElementById('btnQuery');
+        btn.disabled = true;
+        btn.textContent = '查询中...';
+        try {
+            const resp = await fetch(`/api/tax-adjust/compare?month=${currentMonth}`);
+            const data = await resp.json();
+            if (data.error) { alert(data.error); return; }
+            document.getElementById('statMonth').textContent = currentMonth;
+            document.getElementById('statDetailCount').textContent = data.total.detail_count;
+            document.getElementById('statRefund').textContent = fmtMoney(data.total.refund_sum);
+            document.getElementById('statCollect').textContent = fmtMoney(data.total.collect_sum);
+            document.getElementById('statNet').textContent = fmtMoney(data.total.net);
+            document.getElementById('statsCard').style.display = 'block';
+
+            unitsData = data.units || [];
+            unitsPage = 1;
+            renderUnits();
+            document.getElementById('unitsCard').style.display = 'block';
+
+            detailsData = data.details || [];
+            detailsPage = 1;
+            filterDetails();
+            document.getElementById('detailsCard').style.display = 'block';
+        } finally {
+            btn.disabled = false;
+            btn.textContent = '查询';
+        }
+    }
+
+    function renderUnits() {
+        const ps = pageSize('units');
+        const totalPages = Math.max(1, Math.ceil(unitsData.length / ps));
+        if (unitsPage > totalPages) unitsPage = totalPages;
+        const start = (unitsPage - 1) * ps;
+        const page = unitsData.slice(start, start + ps);
+        document.getElementById('unitsTbody').innerHTML = page.map((u, i) => `
+            <tr>
+                <td>${start + i + 1}</td><td>${u.unit}</td><td class="ellipsis-cell" title="${(u.unit_name || '').replace(/"/g, '&quot;')}">${u.unit_name || ''}</td>
+                <td>${u.count}</td><td class="num-cell stat-warn">${fmtMoney(u.refund)}</td><td class="num-cell stat-danger">${fmtMoney(u.collect)}</td><td class="num-cell">${fmtMoney(u.net)}</td>
+            </tr>`).join('') || '<tr><td colspan="7" class="text-center text-muted py-3">暂无数据</td></tr>';
+        document.getElementById('unitsCount').textContent = `共 ${unitsData.length} 条`;
+        document.getElementById('unitsPageInfo').textContent = `第 ${unitsPage}/${totalPages} 页`;
+        document.getElementById('unitsPrev').disabled = unitsPage <= 1;
+        document.getElementById('unitsNext').disabled = unitsPage * ps >= unitsData.length;
+    }
+
+    function filterDetails() {
+        const st = document.getElementById('statusFilter').value;
+        const kw = document.getElementById('nameFilter').value.trim().toLowerCase();
+        detailsFiltered = detailsData.filter(d => {
+            if (st && d.status !== st) return false;
+            if (kw) {
+                const name = (d.name || '').toLowerCase();
+                const cert = (d.cert_no || '').toLowerCase();
+                if (!name.includes(kw) && !cert.includes(kw)) return false;
+            }
+            return true;
+        });
+        detailsPage = 1;
+        renderDetails();
+    }
+
+    function renderDetails() {
+        const cls = { '持平': 'status-ok', '需退': 'stat-warn', '需补': 'stat-danger', '回盘无记录': 'status-other', '系统无记录': 'status-other' };
+        const ps = pageSize('details');
+        const totalPages = Math.max(1, Math.ceil(detailsFiltered.length / ps));
+        if (detailsPage > totalPages) detailsPage = totalPages;
+        const start = (detailsPage - 1) * ps;
+        const page = detailsFiltered.slice(start, start + ps);
+        document.getElementById('detailsTbody').innerHTML = page.map((d, i) => `
+            <tr>
+                <td>${start + i + 1}</td><td>${d.name}</td><td class="nowrap">${d.cert_no}</td>
+                <td class="ellipsis-cell" title="${(d.unit_name || '').replace(/"/g, '&quot;')}">${d.unit_name || ''}</td>
+                <td class="ellipsis-cell" title="${(d.unit_periods || '').replace(/"/g, '&quot;')}">${d.unit_periods || ''}</td>
+                <td class="num-cell">${fmtMoney(d.sys_tax)}</td><td class="num-cell">${fmtMoney(d.ret_tax)}</td><td class="num-cell">${fmtMoney(d.diff)}</td>
+                <td class="${cls[d.status] || ''}">${d.status}</td>
+                <td class="ellipsis-cell" title="${(d.advice || '').replace(/"/g, '&quot;')}">${d.advice || ''}</td>
+            </tr>`).join('') || '<tr><td colspan="10" class="text-center text-muted py-3">暂无数据</td></tr>';
+        document.getElementById('detailsCount').textContent = `共 ${detailsFiltered.length} 条`;
+        document.getElementById('detailsPageInfo').textContent = `第 ${detailsPage}/${totalPages} 页`;
+        document.getElementById('detailsPrev').disabled = detailsPage <= 1;
+        document.getElementById('detailsNext').disabled = detailsPage * ps >= detailsFiltered.length;
+    }
+</script>
+</body>
+</html>

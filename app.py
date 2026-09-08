@@ -493,6 +493,62 @@ def api_tax_return_export():
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
+@app.route("/tax-adjust")
+def page_tax_adjust():
+    return render_template("tax_adjust.html")
+
+def _parse_month_arg(raw):
+    """解析月份参数，返回 int 或 None（非法时返回 None）。"""
+    try:
+        month = int(str(raw or "").strip() or 0)
+    except (ValueError, TypeError):
+        return None
+    if not (1000 <= month <= 999999):
+        return None
+    return month
+
+@app.route("/api/tax-adjust/compare")
+def api_tax_adjust_compare():
+    try:
+        from tax_adjust import compare_tax
+        month = _parse_month_arg(request.args.get("month", ""))
+        if month is None:
+            return jsonify({"error": "月份格式不正确"}), 400
+        conn = get_connection()
+        return jsonify(compare_tax(conn, month))
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+@app.route("/api/tax-adjust/export")
+def api_tax_adjust_export():
+    try:
+        from openpyxl import Workbook
+        from tax_adjust import compare_tax
+        month = _parse_month_arg(request.args.get("month", ""))
+        if month is None:
+            return jsonify({"error": "月份格式不正确"}), 400
+        conn = get_connection()
+        result = compare_tax(conn, month)
+        wb = Workbook()
+        ws = wb.active
+        ws.title = "多退少补明细"
+        ws.append(["月份", "姓名", "证件号码", "结算单元", "所属月份-批次", "系统预算个税", "回盘个税", "差额", "状态", "建议"])
+        for d in result.get("details", []):
+            ws.append([month, d.get("name", ""), d.get("cert_no", ""), d.get("unit_name", ""),
+                       d.get("unit_periods", ""), d.get("sys_tax") or "", d.get("ret_tax") or "",
+                       d.get("diff") or "", d.get("status", ""), d.get("advice", "")])
+        ws2 = wb.create_sheet("结算单元汇总")
+        ws2.append(["结算单元", "结算单元名称", "人数", "需退总额", "需补总额", "净额"])
+        for u in result.get("units", []):
+            ws2.append([u.get("unit", ""), u.get("unit_name", ""), u.get("count", 0),
+                        u.get("refund", 0), u.get("collect", 0), u.get("net", 0)])
+        timestamp = datetime.now().strftime("%Y%m%d%H%M%S")
+        filename = f"多退少补建议_{month}_{timestamp}.xlsx"
+        wb.save(os.path.join(OUTPUT_DIR, filename))
+        return jsonify({"download_url": f"/api/download/{filename}"})
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
 @app.route("/filing-history")
 def page_filing_history():
     return render_template("filing_history.html")

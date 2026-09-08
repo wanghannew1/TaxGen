@@ -391,3 +391,26 @@ def get_filing_records(month=0, item_type="", search="", page=1, page_size=50):
     """, params + [page_size, offset]).fetchall()
     conn.close()
     return {"total": total, "records": [dict(r) for r in rows]}
+
+
+def get_filing_map(month, item_type="税款计算"):
+    """查询指定月份+类型的全部申报记录，返回 {cert_no: {字段...}} 字典。
+
+    返回 dict 以 cert_no 为 key，value 为该行所有标量字段（不含 raw、不含 id）。
+    单次查询不分页；若无记录返回空字典。UNIQUE(cert_no,month,item_type) 保证无重复，
+    如遇重复则后者覆盖前者。
+    """
+    conn = get_db()
+    rows = conn.execute("""
+        SELECT cert_no, name, emp_no, id_type, month, item_type,
+               income, tax_free, pension, medical, unemployment, housing,
+               insurance, tax_accum, tax_paid, tax_due, remark,
+               source_file, import_time
+        FROM filing_record
+        WHERE month = ? AND item_type = ?
+    """, (month, item_type)).fetchall()
+    conn.close()
+    result = {}
+    for r in rows:
+        result[r["cert_no"]] = dict(r)
+    return result
