@@ -724,12 +724,21 @@
 
         async function loadMonths() {
             try {
-                const resp = await fetch('/api/months');
+                const resp = await fetch('/api/pay-months');
                 if (!resp.ok) throw new Error(`服务器返回错误: ${resp.status}`);
                 const months = await resp.json();
                 let options = '<option value="">请选择月份</option>';
                 months.forEach(m => { options += `<option value="${m.value}">${m.label}</option>`; });
                 monthSelect.innerHTML = options;
+                // 申报期默认发放月份: 每月 1~15 日(含)仍在申报期内, 默认选中上个月; 16 日起默认选中当月
+                const today = new Date();
+                const target = today.getDate() <= 15
+                    ? new Date(today.getFullYear(), today.getMonth() - 1, 1)
+                    : new Date(today.getFullYear(), today.getMonth(), 1);
+                const targetValue = String(target.getFullYear() * 100 + (target.getMonth() + 1));
+                if (months.some(m => String(m.value) === targetValue)) {
+                    monthSelect.value = targetValue;
+                }
             } catch (e) {
                 monthSelect.innerHTML = '<option value="">加载失败，请刷新重试</option>';
                 showError(`加载月份列表失败: ${e.message}`);
