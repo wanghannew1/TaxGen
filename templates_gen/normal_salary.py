@@ -22,6 +22,49 @@ def extract_remark(title: str) -> str:
     return t if t else title
 
 
+def build_remark_text(combos: Optional[List[dict]]) -> str:
+    """生成收入表备注：本次发放全部 结算单元-所属年月-批次 组合，总长不超过 50 字符。
+
+    压缩规则：
+    - 单元名与年月之间省略连字符（吉林省地质调查院202608-1，省去中间的"-"）；
+    - 单结算单元+单批次：单元与批次不重复写，年月用英文逗号连接；
+    - 全集超过 50 字符时回落为仅列结算单元名称（英文逗号连接）；
+    - 仍超限则逐单元累加至 47 字符后追加英文省略号"..."。
+    全程仅用英文标点（逗号、连字符），避免导入端字数/字节校验失败。
+    """
+    if not combos:
+        return ""
+    triples = sorted({
+        (str(c.get("unit_name") or c.get("unit") or "").strip(),
+         int(c.get("salary_month") or 0),
+         str(c.get("seq") or "").strip())
+        for c in combos if (c.get("unit_name") or c.get("unit"))})
+    triples = [t for t in triples if t[1]]
+    if not triples:
+        return ""
+    units = {t[0] for t in triples}
+    batches = {t[2] for t in triples}
+    if len(units) == 1 and len(batches) == 1:
+        u = next(iter(units))
+        b = next(iter(batches))
+        months = ",".join(str(t[1]) for t in triples)
+        text = f"{u}{months}-{b}" if b else f"{u}{months}"
+    else:
+        text = ",".join(f"{u}{m}" + (f"-{b}" if b else "") for u, m, b in triples)
+    if len(text) <= 50:
+        return text
+    names = ",".join(sorted(units))
+    if len(names) <= 50:
+        return names
+    out = ""
+    for u in sorted(units):
+        cand = f"{out},{u}" if out else u
+        if len(cand) > 47:
+            break
+        out = cand
+    return out + "..." if out else sorted(units)[0][:50]
+
+
 def generate_normal_salary(records: List[SalaryRecord], title: str, output_dir: str,
                            tc93_all: Optional[List[dict]] = None,
                            abnormal: Optional[List[dict]] = None,
@@ -46,6 +89,9 @@ def generate_normal_salary(records: List[SalaryRecord], title: str, output_dir: 
         for c in combos:
             key = (int(c.get("unit", 0) or 0), int(c.get("salary_month", 0) or 0), str(c.get("seq", "") or ""))
             combo_map[key] = f"{c.get('unit_name', '')}-{c.get('salary_month', '')}-{c.get('seq', '')}"
+
+    # 收入表备注：本次发放全部组合（单元-所属年月-批次），≤50字符，每行一致；无组合时回退标题
+    remark_text = build_remark_text(combos) or title
     
     wb = Workbook()
     ws = wb.active
@@ -79,8 +125,7 @@ def generate_normal_salary(records: List[SalaryRecord], title: str, output_dir: 
         ws.cell(row=row, column=9, value=rec.失业个人)
         ws.cell(row=row, column=10, value=rec.公积金个人)
         ws.cell(row=row, column=18, value=0)  # 企业(职业)年金 = 0
-        rec_remark = combo_map.get((rec.结算单元, rec.工资所属年月, rec.当月批次), title)
-        ws.cell(row=row, column=30, value=rec_remark)
+        ws.cell(row=row, column=30, value=remark_text)
         
         # 左 = 本期收入 − 养老 − 失业 − 医疗 − 公积金 − 意外险 + 本次免税(ATC936)
         # 本期收入内部已减本次免税与大病险个人(ATC93BD)，此处加回本次免税使左式回到工资总额口径；
@@ -152,7 +197,7 @@ def generate_normal_salary(records: List[SalaryRecord], title: str, output_dir: 
             "30 列个税申报模板（含占位列'住房公积金调整'），一行为一人（按人合并）。",
             "本期收入 = 应发工资 − （独生子女费+采暖费） − 大病险（个人） − 补缴及退款保险差额（个人） + 交纳现金 − 个人欠款。",
             "字段与算法详见 docs/本期收入算法说明.md；ATC 字段注释见 docs/数据表字段注释.md。",
-            "五险一金列取个人缴部分，企业(职业)年金恒为 0，备注填结算单元名称。",
+            "五险一金列取个人缴部分，企业(职业)年金恒为 0，备注填本次发放全部结算单元-所属年月-批次组合（≤50字符，单元名与年月间省略连字符，超限回落为仅列结算单元名称）。",
         ]),
         ("验证报告", [
             "每行一人，左=右校验：左 = 本期收入 − 养老 − 失业 − 医疗 − 公积金 − 意外险 + 本次免税(ATC936)；",

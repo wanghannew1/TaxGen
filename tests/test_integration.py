@@ -454,7 +454,7 @@ class TestMergeByPayMonth:
         assert ws.max_row == 2  # 表头 + 1人1行
         assert ws.cell(row=2, column=5).value == 71189.25  # 本期收入合计
         assert ws.cell(row=2, column=7).value == 4093.18  # 养老合计
-        assert "吉林大学第二医院B-202607-2" in str(ws.cell(row=2, column=30).value)
+        assert "吉林大学第二医院B202607-2" in str(ws.cell(row=2, column=30).value)
         md = wb["合并明细"]
         assert md.max_row == 2
         assert md.cell(row=2, column=4).value == 4  # 原始条数
