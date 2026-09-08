@@ -43,6 +43,7 @@ class SalaryRecord:
     税后工会会费: Decimal = Decimal("0")  # ATC93Z2
     个人代理费: Decimal = Decimal("0")  # BAA300
     意外险个人: Decimal = Decimal("0")  # ATC93BH - 意外险（个人承担）
+    经济补偿金: Decimal = Decimal("0")  # ATC93M - 本次经济补偿金（解除劳动合同一次性补偿，含在实发金额中，验证时从实发扣回）
 
     # 验证字段
     本期收入: Decimal = Decimal("0")  # 计算得出

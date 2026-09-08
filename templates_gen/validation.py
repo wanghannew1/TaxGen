@@ -9,7 +9,7 @@ def validate_salary_records(records: List[SalaryRecord]) -> ValidationReport:
     
     验证公式:
         左 = 本期收入 - 养老个人 - 失业个人 - 医疗个人 - 公积金个人 - 年金(0)
-        右 = 实发工资 + 个人所得税 - 免税
+        右 = (实发工资 - 经济补偿金) + 个人所得税 - 免税 (经济补偿金含在实发中, 属一次性补偿, 扣回)
         通过 = |左 - 右| < 0.01
     """
     pass_count = 0
@@ -22,7 +22,7 @@ def validate_salary_records(records: List[SalaryRecord]) -> ValidationReport:
         
         left = income - rec.养老个人 - rec.失业个人 - rec.医疗个人 - rec.公积金个人 \
                - rec.个人其他调整 - rec.扣款大病险 - rec.意外险个人
-        right = rec.实发工资 + rec.税后工会会费 + rec.个人代理费 + rec.个人所得税 - tax_exempt
+        right = (rec.实发工资 - rec.经济补偿金) + rec.税后工会会费 + rec.个人代理费 + rec.个人所得税 - tax_exempt
         diff = abs(left - right)
         passed = diff < 0.01
         

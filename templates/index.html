@@ -474,6 +474,14 @@
                             </label>
                         </div>
                     </div>
+                    <div class="d-flex align-items-center gap-2 mb-2">
+                        <label class="form-label form-label-sm mb-0" for="annualAvgWage">
+                            年平均工资总额
+                        </label>
+                        <input class="form-control form-control-sm" type="number" id="annualAvgWage"
+                               value="120000" min="0" step="1000" style="width: 130px;">
+                        <span class="text-muted small">元（验证报告按 3 倍判断经济补偿是否达交税标准）</span>
+                    </div>
                     <button id="btnGenerate" class="btn btn-primary btn-lg w-100 mt-2">生成报税数据</button>
                     <div id="loading" class="loading text-center mt-3" style="display:none;">
                         <div class="spinner-border text-primary" role="status">
@@ -1090,7 +1098,7 @@
             validationReport.style.display = 'none';
 
             try {
-                const body = { month: parseInt(month), templates, confirmed_combos: confirmedCombos, merge_by_person: document.getElementById('mergeByPerson').checked, merge_by_pay_month: document.getElementById('mergeByPerson').checked && document.querySelector('input[name="mergeGranularity"]:checked').value === 'pay_month' };
+                const body = { month: parseInt(month), templates, confirmed_combos: confirmedCombos, merge_by_person: document.getElementById('mergeByPerson').checked, merge_by_pay_month: document.getElementById('mergeByPerson').checked && document.querySelector('input[name="mergeGranularity"]:checked').value === 'pay_month', annual_avg_wage: parseFloat(document.getElementById('annualAvgWage').value) || 120000 };
                 const resp = await fetch('/api/generate', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },

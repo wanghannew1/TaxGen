@@ -163,7 +163,8 @@ def get_salary_records(conn, month: int) -> List[SalaryRecord]:
           t93.BAA300 AS 个人代理费,
           t93.ATC93BH AS 意外险个人,
           t93.ATC930 AS tc930_id,
-          t93.ATB931 AS 结算单元名称
+          t93.ATB931 AS 结算单元名称,
+          t93.ATC93M AS 经济补偿金
         FROM TC93 t93
         LEFT JOIN AC01 ac01 ON t93.AAC001 = ac01.AAC001
         WHERE t93.ATC931 = :month
@@ -204,6 +205,7 @@ def get_salary_records(conn, month: int) -> List[SalaryRecord]:
                 意外险个人=Decimal(str(row[31] or 0)),
                 tc930_id=int(row[32] or 0),
                 结算单元名称=str(row[33] or ""),
+                经济补偿金=Decimal(str(row[34] or 0)),
             ))
     return records
 

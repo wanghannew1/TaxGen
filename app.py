@@ -67,6 +67,7 @@ def merge_records_by_person(records, by_pay_month: bool = False):
             m.税后工会会费 += rec.税后工会会费
             m.个人代理费 += rec.个人代理费
             m.意外险个人 += rec.意外险个人
+            m.经济补偿金 += rec.经济补偿金
         merged.append(m)
     return merged
 
@@ -203,6 +204,8 @@ def api_generate():
             abnormal = get_abnormal_records(conn, month)
         merge_by_person = data.get("merge_by_person", True)
         merge_by_pay_month = bool(data.get("merge_by_pay_month", True))
+        # 年平均工资总额（解除劳动合同一次性补偿金 3 倍免税判断基准，默认 12 万）
+        annual_avg_wage = float(data.get("annual_avg_wage") or 120000)
         # 特殊结算单元规则: 工资为0不申报 + 完全排除不申报
         # 配置存 SQLite (config_db), Oracle 只读
         from config_db import get_zero_salary_unit_codes, get_excluded_unit_codes
@@ -248,7 +251,8 @@ def api_generate():
                                            combos=confirmed_combos,
                                             tc93_comments=get_tc93_field_comments(conn),
                                             raw_records=raw_records if merge_by_person else None,
-                                            merge_mode="pay_month" if merge_by_pay_month else "month")
+                                            merge_mode="pay_month" if merge_by_pay_month else "month",
+                                            annual_avg_wage=annual_avg_wage)
             elif tpl == "laborService":
                 lab_records, lab_raw, lab_combos = build_labor_service_records(
                     conn, raw_records, confirmed_combos, month,
@@ -1066,7 +1070,7 @@ def api_personnel_compare():
                                   r["合同开始日期"], r["合同终止日期"], r["单位名称"], r["经办人"]])
         # 零申报人群: 个税端在职且本期无工资、未减员, 排除特殊结算单元。
         # 主"零申报" sheet 排除待确认; 待确认另立独立"待确认零申报" sheet。
-        # 组装 29 列零申报行 (本期收入+养老/医疗/失业/公积金填0, 其余数值列留空), 备注=结算单元名称。
+        # 组装 30 列零申报行 (本期收入+养老/医疗/失业/公积金填0, 其余数值列留空), 备注=结算单元名称。
         from templates_gen.personnel_compare import build_zero_declare_row
         zero_person_by_cert = {str(p.get("证件号码") or "").strip().upper(): p
                                for p in tax_export_persons}
