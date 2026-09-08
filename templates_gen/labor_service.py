@@ -70,11 +70,25 @@ def generate_labor_service(records: List[SalaryRecord], title: str, output_dir: 
     # 验证报告: 每行一人, 合并收入与原始明细合计自洽校验 (劳务报酬无左=右公式)
     vs = wb.create_sheet("验证报告")
     vs_headers = [
-        "姓名", "证件号码", "结算单元名称", "所属月份", "批次",
+        "姓名", "证件号码", "结算单元名称", "所属月份", "批次", "经办人",
         "收入(合并工资总额)", "原始条数", "原始收入合计", "差值", "状态"
     ]
     for col, h in enumerate(vs_headers, 1):
         vs.cell(row=1, column=col, value=h)
+    trip_handlers = {}
+    for c in combos or []:
+        key = (int(c.get("unit", 0) or 0), int(c.get("salary_month", 0) or 0),
+               str(c.get("seq", "") or ""))
+        h = str(c.get("handler", "") or "")
+        if h and key not in trip_handlers:
+            trip_handlers[key] = h
+    tc93_handlers = {}
+    for r in tc93_all or []:
+        key = (int(r.get("ATB930", 0) or 0), int(r.get("ATC931", 0) or 0),
+               str(r.get("ATC937", "") or ""))
+        h = str(r.get("AAE019", "") or "")
+        if h and key not in tc93_handlers:
+            tc93_handlers[key] = h
     by_pay_month = merge_mode == "pay_month"
     raw_groups = {}
     if raw_records:
@@ -94,9 +108,18 @@ def generate_labor_service(records: List[SalaryRecord], title: str, output_dir: 
             pass_count += 1
         else:
             fail_count += 1
+        handlers = []
+        for r in raw_list:
+            key = (int(r.结算单元 or 0), int(r.工资所属年月 or 0), str(r.当月批次 or ""))
+            h = trip_handlers.get(key) or tc93_handlers.get(key) or ""
+            if h and h not in handlers:
+                handlers.append(h)
+        if not handlers:
+            key = (int(rec.结算单元 or 0), int(rec.工资所属年月 or 0), str(rec.当月批次 or ""))
+            handlers = [trip_handlers.get(key) or tc93_handlers.get(key) or ""]
         vals = [
             rec.姓名, rec.身份证, _remark_for(rec, title),
-            rec.工资所属年月, rec.当月批次,
+            rec.工资所属年月, rec.当月批次, ";".join(h for h in handlers if h),
             merged_income, len(raw_list) if raw_list else 1, raw_total,
             round(diff, 4), "通过" if passed else "失败"
         ]
@@ -128,6 +151,7 @@ def generate_labor_service(records: List[SalaryRecord], title: str, output_dir: 
         ("验证报告", [
             "每行一人，验证 合并收入 = 原始明细收入合计（自洽校验，|差值|<0.01 为通过）。",
             "劳务报酬无左=右公式，本条校验保证按人合并过程可追溯。",
+            "经办人 = 发放经办人(TC8M.AAE019)，取不到时回落做工资经办人(TC93.AAE019)；跨多批次分号连接。",
         ]),
         ("TC93总表", [
             "TC93 工资原始全字段，按身份证排序、同证相邻；重复次数=该身份证出现行数。",

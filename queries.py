@@ -304,7 +304,8 @@ def get_suggestions(conn, pay_month: int) -> List[dict]:
             m.ATC931 AS 工资所属月,
             m.ATC937 AS 当月批次,
             SUM(m.ATC8M1) AS 发放人数,
-            SUM(m.ATC8M2) AS 发放总额
+            SUM(m.ATC8M2) AS 发放总额,
+            MAX(m.AAE019) AS 发放经办人
         FROM TC8M m
         WHERE m.ATC8G7 = :pay_month
         AND m.ATC8M3 = 2
@@ -321,6 +322,7 @@ def get_suggestions(conn, pay_month: int) -> List[dict]:
             "seq": str(r[3] or ""),
             "person_count": int(r[4] or 0),
             "total_income": float(r[5] or 0),
+            "handler": str(r[6] or ""),
         } for r in cursor.fetchall()]
 
     return combos
