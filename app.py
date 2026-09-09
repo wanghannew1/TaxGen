@@ -39,7 +39,7 @@ atexit.register(close_db)
 def _log_api_error(e):
     """记录 API 异常堆栈到日志文件并返回统一错误响应。"""
     logging.getLogger(__name__).exception("API error: %s", e)
-    return _log_api_error(e)
+    return jsonify({"error": f"处理失败: {e}"}), 500
 
 
 def _apply_scope_filter(combo_set, scope_map):
@@ -204,6 +204,116 @@ def api_zero_suggestions():
         return jsonify(build_zero_salary_suggestions(conn, pay_month, combos))
     except Exception as e:
         return _log_api_error(e)
+
+@app.route("/api/merge-suggestions/export", methods=["POST"])
+def api_merge_suggestions_export():
+    """导出合并确认候选为 Excel: 按工资单分组行, 含建议/选择列, 供 Excel 中批量修改后导回。"""
+    try:
+        data = request.get_json()
+        pay_month = int(data.get("pay_month") or 0)
+        combos = data.get("combos") or []
+        if not pay_month or not combos:
+            return jsonify({"error": "请选择月份并勾选待报组合"}), 400
+        conn = get_connection()
+        res = build_merge_suggestions(conn, pay_month, combos)
+        return _merge_suggestions_to_xlsx(res)
+    except Exception as e:
+        return _log_api_error(e)
+
+
+def _merge_suggestions_to_xlsx(res: dict):
+    """把合并建议结果渲染为 xlsx (BytesIO), 返回 send_file 响应。
+
+    每人一行 (与合并确认粒度一致), 工资单列列出该人全部 (结算单元-所属月-批次),
+    可按工资单列排序/筛选后在 Excel 整批修改"选择"列, 再导回。
+    """
+    from io import BytesIO
+    from openpyxl import Workbook
+    from openpyxl.styles import Alignment, Font, PatternFill
+
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "合并确认"
+    headers = ["工资单(结算单元-所属月-批次)", "姓名", "证件号", "职工号",
+               "上月状态", "建议", "置信度", "理由", "选择(翻倍/单倍)"]
+    ws.append(headers)
+    ws.freeze_panes = "A2"
+    head_fill = PatternFill("solid", fgColor="DDEBF7")
+    head_font = Font(bold=True)
+    for c, _ in enumerate(headers, 1):
+        cell = ws.cell(1, c)
+        cell.fill = head_fill
+        cell.font = head_font
+        cell.alignment = Alignment(horizontal="center", vertical="center")
+
+    sheet_key = lambda s: f"{s['unit_name'] or s['unit']}({s['unit']})·{s['salary_month']}·批次{s['seq']}"
+    slips_by_cert = {}
+    for s in res.get("work_sheets", []):
+        for cert in s["cert_nos"]:
+            slips_by_cert.setdefault(cert, []).append(sheet_key(s))
+    for c in res.get("candidates", []):
+        slips = slips_by_cert.get(c["cert_no"], [])
+        ws.append([
+            "；".join(slips),
+            c.get("name", ""),
+            c["cert_no"],
+            c.get("emp_no", ""),
+            c.get("prev_status", ""),
+            "翻倍" if c.get("suggested") == "double" else "单倍",
+            {"high": "高", "medium": "中", "low": "低"}.get(c.get("confidence"), ""),
+            c.get("reason", ""),
+            "翻倍" if c.get("default_chosen", c.get("suggested")) == "double" else "单倍",
+        ])
+
+    width_map = {"A": 55, "B": 10, "C": 20, "D": 10, "E": 8, "F": 6,
+                 "G": 6, "H": 40, "I": 12}
+    for col, w in width_map.items():
+        ws.column_dimensions[col].width = w
+    ws.auto_filter.ref = f"A1:I{ws.max_row}"
+
+    bio = BytesIO()
+    wb.save(bio)
+    bio.seek(0)
+    fname = f"合并确认_{res.get('pay_month', '')}.xlsx"
+    return send_file(bio, as_attachment=True, download_name=fname,
+                     mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+
+
+@app.route("/api/merge-suggestions/import", methods=["POST"])
+def api_merge_suggestions_import():
+    """导回合并确认 Excel: 解析"选择(翻倍/单倍)"列, 按证件号返回 {cert_no: mode}。"""
+    try:
+        f = request.files.get("file")
+        if not f or not f.filename:
+            return jsonify({"error": "请选择要导入的 Excel 文件"}), 400
+        from openpyxl import load_workbook
+        wb = load_workbook(f, data_only=True)
+        ws = wb.active
+        rows = list(ws.iter_rows(values_only=True))
+        if not rows:
+            return jsonify({"error": "文件为空"}), 400
+        header = [str(h or "").strip() for h in rows[0]]
+        if "证件号" not in header or "选择(翻倍/单倍)" not in header:
+            return jsonify({"error": "列不匹配: 需要 证件号 与 选择(翻倍/单倍) 列（请用本系统导出的 Excel 修改）"}), 400
+        i_cert = header.index("证件号")
+        i_mode = header.index("选择(翻倍/单倍)")
+        choices = {}
+        for r in rows[1:]:
+            cert = str(r[i_cert] or "").strip()
+            mode_raw = str(r[i_mode] or "").strip()
+            if not cert or not mode_raw:
+                continue
+            mode = "double" if "翻倍" in mode_raw else ("single" if "单倍" in mode_raw else "")
+            if mode:
+                choices[cert] = mode
+            elif cert:
+                return jsonify({"error": f"证件号 {cert} 的选择列含无法识别值: '{mode_raw}'（仅支持 翻倍/单倍）"}), 400
+        if not choices:
+            return jsonify({"error": "未解析到任何有效的选择记录"}), 400
+        return jsonify({"count": len(choices), "choices": choices})
+    except Exception as e:
+        return _log_api_error(e)
+
 
 @app.route("/api/generate", methods=["POST"])
 def api_generate():

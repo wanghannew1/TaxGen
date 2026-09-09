@@ -102,10 +102,13 @@ def build_merge_suggestions(conn, pay_month, combos):
 
     Returns:
         dict: {
-            "pay_month", "candidates": [
-                {"cert_no", "name", "emp_no", "units", "salary_months", "prev_month",
-                 "prev_status", "prev_income", "prev_insurance", "be_flag",
+            "pay_month", "prev_month", "candidates": [
+                {"cert_no", "name", "emp_no", "units", "unit_names", "salary_months",
+                 "prev_month", "prev_status", "prev_income", "prev_insurance", "be_flag",
                  "suggested", "reason", "confidence", "default_chosen", "persisted"}
+            ],
+            "work_sheets": [   # 按工资单(结算单元-所属月-批次)分组, 供前端分组批量操作
+                {"unit", "unit_name", "salary_month", "seq", "count", "cert_nos"}
             ]
         }
     """
@@ -113,13 +116,15 @@ def build_merge_suggestions(conn, pay_month, combos):
                   str(c.get("seq", "") or "")) for c in combos}
     salary_months = sorted({c[1] for c in combo_set})
     if not combo_set or not salary_months:
-        return {"pay_month": pay_month, "prev_month": None, "candidates": []}
+        return {"pay_month": pay_month, "prev_month": None, "candidates": [],
+                "work_sheets": []}
 
     records = get_salary_records_by_combos(conn, combos)
     checked = [r for r in records
                if (r.结算单元, r.工资所属年月, r.当月批次) in combo_set]
     if not checked:
-        return {"pay_month": pay_month, "prev_month": None, "candidates": []}
+        return {"pay_month": pay_month, "prev_month": None, "candidates": [],
+                "work_sheets": []}
 
     by_person = {}
     for r in checked:
@@ -140,6 +145,7 @@ def build_merge_suggestions(conn, pay_month, combos):
     overrides = get_merge_overrides()
 
     candidates = []
+    work_sheets = {}
     for cert, (pm, recs) in sorted(persons.items()):
         prev = prev_maps[pm].get(cert)
         status = _status_of(prev)
@@ -166,11 +172,20 @@ def build_merge_suggestions(conn, pay_month, combos):
             persisted = False
 
         base = recs[0]
+        unit_names = {str(r.结算单元): str(r.结算单元名称 or "") for r in recs
+                      if (r.结算单元, r.工资所属年月, r.当月批次) in combo_set}
+        for r in recs:
+            key = (int(r.结算单元 or 0), int(r.工资所属年月 or 0), str(r.当月批次 or ""))
+            if key in combo_set:
+                ws = work_sheets.setdefault(key, {"unit": key[0], "salary_month": key[1],
+                                                  "seq": key[2], "cert_nos": []})
+                ws["cert_nos"].append(cert)
         candidates.append({
             "cert_no": cert,
             "name": str(base.姓名 or ""),
             "emp_no": str(base.职工号 or ""),
-            "units": sorted({r.结算单元 for r in recs}),
+            "units": sorted(int(u) for u in unit_names),
+            "unit_names": unit_names,
             "salary_months": sorted({r.工资所属年月 for r in recs}),
             "prev_month": pm,
             "prev_status": status,
@@ -184,6 +199,16 @@ def build_merge_suggestions(conn, pay_month, combos):
             "persisted": persisted,
         })
 
+    for ws in work_sheets.values():
+        ws["cert_nos"] = sorted(set(ws["cert_nos"]))
+        ws["count"] = len(ws["cert_nos"])
+        ws["unit_name"] = next((c["unit_names"].get(str(ws["unit"]), "") for c in candidates
+                                if ws["unit"] in c["units"]), "")
+    sheet_list = [work_sheets[k] for k in sorted(work_sheets,
+                  key=lambda k: (work_sheets[k]["unit"], work_sheets[k]["salary_month"],
+                                 work_sheets[k]["seq"]))]
+
     return {"pay_month": pay_month,
             "prev_month": min(prev_maps) if prev_maps else None,
-            "candidates": candidates}
+            "candidates": candidates,
+            "work_sheets": sheet_list}

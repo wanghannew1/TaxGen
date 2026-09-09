@@ -280,6 +280,16 @@
             font-weight: 600;
             flex-shrink: 0;
         }
+
+        /* 合并确认弹窗加宽 (候选多, 表格列多) */
+        .merge-modal-dialog { max-width: 1800px; }
+        .ws-group-card { border: 1px solid #dee2e6; border-radius: .5rem; margin-bottom: .75rem; overflow: hidden; }
+        .ws-group-head { background: #f8f9fa; padding: .5rem .75rem; cursor: pointer; user-select: none; }
+        .ws-group-head .ws-toggle { transition: transform .15s ease; }
+        .ws-group-card.collapsed .ws-toggle { transform: rotate(-90deg); }
+        .ws-group-card.collapsed .ws-group-body { display: none; }
+        .ws-group-table { margin-bottom: 0; }
+        .ws-group-table td, .ws-group-table th { white-space: nowrap; padding: .35rem .5rem; }
     </style>
 </head>
 <body>
@@ -602,42 +612,31 @@
 
     <!-- 三险一金合并规则确认 Modal -->
     <div class="modal fade" id="mergeConfirmModal" tabindex="-1" aria-labelledby="mergeConfirmModalLabel" aria-hidden="true">
-        <div class="modal-dialog modal-lg modal-dialog-scrollable">
+        <div class="modal-dialog modal-dialog-scrollable merge-modal-dialog">
             <div class="modal-content">
                 <div class="modal-header">
                     <h5 class="modal-title" id="mergeConfirmModalLabel">三险一金合并规则确认</h5>
-                    <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="关闭"></button>
+                    <div class="d-flex gap-2 align-items-center">
+                        <button type="button" class="btn btn-sm btn-outline-success" id="btnMergeExport">导出Excel</button>
+                        <button type="button" class="btn btn-sm btn-outline-primary" id="btnMergeImport">导入Excel</button>
+                        <input type="file" id="fileMergeImport" accept=".xlsx" class="d-none">
+                        <button type="button" class="btn btn-sm btn-outline-secondary" id="btnMergeToggleGroups">收起全部</button>
+                        <button type="button" class="btn-close ms-1" data-bs-dismiss="modal" aria-label="关闭"></button>
+                    </div>
                 </div>
                 <div class="modal-body">
                     <p class="text-muted small" id="mergeModalSubtitle"></p>
-                    <div class="d-flex gap-2 mb-3">
+                    <div class="d-flex gap-2 mb-2">
                         <button type="button" class="btn btn-sm btn-outline-primary" id="btnMergeAllSuggested">全部按建议</button>
                         <button type="button" class="btn btn-sm btn-outline-success" id="btnMergeAllDouble">全部翻倍</button>
                         <button type="button" class="btn btn-sm btn-outline-danger" id="btnMergeAllSingle">全部单倍</button>
+                        <span class="text-muted small ms-2 align-self-center">共 <span id="mergeTotalCount">0</span> 人，按工资单分组；用 Excel 大量修改后导回</span>
                     </div>
-                    <div class="form-check mb-3">
+                    <div class="form-check mb-2">
                         <input class="form-check-input" type="checkbox" id="persistMerge">
                         <label class="form-check-label" for="persistMerge">记住本次选择（持久化到配置）</label>
                     </div>
-                    <div class="table-responsive">
-                        <table class="table table-striped table-hover" id="mergeCandidatesTable">
-                            <thead>
-                                <tr>
-                                    <th>序号</th>
-                                    <th>姓名</th>
-                                    <th>证件号码</th>
-                                    <th>结算单元</th>
-                                    <th>所属月</th>
-                                    <th>上月档案状态</th>
-                                    <th>建议</th>
-                                    <th>置信度</th>
-                                    <th>理由</th>
-                                    <th>选择</th>
-                                </tr>
-                            </thead>
-                            <tbody></tbody>
-                        </table>
-                    </div>
+                    <div id="mergeWorkSheets"></div>
                 </div>
                 <div class="modal-footer">
                     <button type="button" class="btn btn-primary" id="btnMergeConfirm">确认并关闭</button>
@@ -1088,11 +1087,16 @@
         const mergeConfirmedBadge = document.getElementById('mergeConfirmedBadge');
         const mergeConfirmModal = document.getElementById('mergeConfirmModal');
         const mergeModalSubtitle = document.getElementById('mergeModalSubtitle');
-        const mergeCandidatesTbody = document.querySelector('#mergeCandidatesTable tbody');
+        const mergeWorkSheets = document.getElementById('mergeWorkSheets');
+        const mergeTotalCount = document.getElementById('mergeTotalCount');
         const persistMergeCb = document.getElementById('persistMerge');
         const btnMergeAllSuggested = document.getElementById('btnMergeAllSuggested');
         const btnMergeAllDouble = document.getElementById('btnMergeAllDouble');
         const btnMergeAllSingle = document.getElementById('btnMergeAllSingle');
+        const btnMergeToggleGroups = document.getElementById('btnMergeToggleGroups');
+        const btnMergeExport = document.getElementById('btnMergeExport');
+        const btnMergeImport = document.getElementById('btnMergeImport');
+        const fileMergeImport = document.getElementById('fileMergeImport');
         const btnMergeConfirm = document.getElementById('btnMergeConfirm');
         const btnZeroCheck = document.getElementById('btnZeroCheck');
         const zeroConfirmedBadge = document.getElementById('zeroConfirmedBadge');
@@ -1110,6 +1114,9 @@
         let mergeChoices = {};
         let persistMergeChoices = false;
         let mergeCandidatesData = [];
+        let mergeWorkSheetsData = [];
+        let lastMergeCombos = [];
+        let lastMergePayMonth = 0;
         let zeroChoices = {};
         let persistZeroChoices = false;
         let zeroUnitsData = [];
@@ -1144,6 +1151,12 @@
         btnMergeAllSuggested.addEventListener('click', () => setAllMergeChoices('suggested'));
         btnMergeAllDouble.addEventListener('click', () => setAllMergeChoices('double'));
         btnMergeAllSingle.addEventListener('click', () => setAllMergeChoices('single'));
+        btnMergeToggleGroups.addEventListener('click', toggleMergeGroups);
+        btnMergeExport.addEventListener('click', exportMergeExcel);
+        btnMergeImport.addEventListener('click', () => fileMergeImport.click());
+        fileMergeImport.addEventListener('change', importMergeExcel);
+        mergeWorkSheets.addEventListener('click', onMergeWorkSheetClick);
+        mergeWorkSheets.addEventListener('change', onMergeChoiceChange);
         btnMergeConfirm.addEventListener('click', confirmMergeChoices);
         btnZeroCheck.addEventListener('click', checkZeroSalary);
         btnZeroAllSuggested.addEventListener('click', () => setAllZeroChoices('suggested'));
@@ -1202,7 +1215,9 @@
                 const data = await resp.json();
                 if (!resp.ok || data.error) { showError(data.error || '检查合并规则失败，请稍后重试'); return; }
                 if (!data.candidates || data.candidates.length === 0) { alert('本月无跨月合并人员'); return; }
-                renderMergeCandidates(data);
+                renderMergeGroups(data);
+                lastMergePayMonth = data.pay_month;
+                lastMergeCombos = confirmedCombos;
                 mergeModalSubtitle.textContent = `${data.pay_month} 发放 → 上月档 ${data.prev_month}`;
                 bootstrap.Modal.getOrCreateInstance(mergeConfirmModal).show();
             })
@@ -1213,51 +1228,188 @@
             });
         }
 
-        function renderMergeCandidates(data) {
-            mergeCandidatesData = data.candidates;
-            mergeCandidatesTbody.innerHTML = '';
-            data.candidates.forEach((c, i) => {
-                const confClass = c.confidence === 'high' ? 'text-success' : (c.confidence === 'medium' ? 'text-warning' : 'text-danger');
-                const confText = c.confidence === 'high' ? '高' : (c.confidence === 'medium' ? '中' : '低');
-                const persistedBadge = c.persisted ? ' <span class="badge bg-warning text-dark">已记住</span>' : '';
-                const bePrefix = c.be_flag ? '<span class="text-danger">⚠BE借支</span> ' : '';
-                const units = (c.units || []).join('、');
-                const months = (c.salary_months || []).join('、');
-                mergeCandidatesTbody.innerHTML += `
-                    <tr>
-                        <td>${i + 1}</td>
+        function renderMergeGroups(data) {
+            mergeCandidatesData = data.candidates || [];
+            mergeWorkSheetsData = data.work_sheets || [];
+            const candByCert = new Map(mergeCandidatesData.map(c => [c.cert_no, c]));
+            const blocks = [];
+            mergeWorkSheetsData.forEach((ws, wi) => {
+                const rows = [];
+                ws.cert_nos.forEach((cert, ri) => {
+                    const c = candByCert.get(cert);
+                    if (!c) return;
+                    const confClass = c.confidence === 'high' ? 'text-success'
+                        : (c.confidence === 'medium' ? 'text-warning' : 'text-danger');
+                    const confText = c.confidence === 'high' ? '高'
+                        : (c.confidence === 'medium' ? '中' : '低');
+                    const persistedBadge = c.persisted ? ' <span class="badge bg-warning text-dark">已记住</span>' : '';
+                    const bePrefix = c.be_flag ? '<span class="text-danger">⚠BE借支</span> ' : '';
+                    const unitNames = Object.entries(c.unit_names || {})
+                        .map(([u, n]) => `${n}(${u})`).join('、') || (c.units || []).join('、');
+                    const months = (c.salary_months || []).join('、');
+                    const chosen = mergeChoices[c.cert_no] || c.default_chosen || c.suggested;
+                    rows.push(`<tr>
+                        <td>${ri + 1}</td>
                         <td>${c.name || ''}</td>
                         <td>${c.cert_no || ''}</td>
-                        <td>${units}</td>
+                        <td>${c.emp_no || ''}</td>
+                        <td>${unitNames}</td>
                         <td>${months}</td>
                         <td>${c.prev_status || ''}</td>
                         <td>${c.suggested === 'double' ? '翻倍' : '单倍'}${persistedBadge}</td>
                         <td class="${confClass}">${confText}</td>
                         <td>${bePrefix}${c.reason || ''}</td>
                         <td>
-                            <select class="form-select form-select-sm" id="mc_${c.cert_no}">
-                                <option value="double" ${c.default_chosen === 'double' ? 'selected' : ''}>翻倍</option>
-                                <option value="single" ${c.default_chosen === 'single' ? 'selected' : ''}>单倍</option>
+                            <select class="form-select form-select-sm merge-choice" data-cert="${c.cert_no}">
+                                <option value="double" ${chosen === 'double' ? 'selected' : ''}>翻倍</option>
+                                <option value="single" ${chosen === 'single' ? 'selected' : ''}>单倍</option>
                             </select>
                         </td>
-                    </tr>`;
+                    </tr>`);
+                });
+                if (rows.length === 0) return;
+                blocks.push(`<div class="ws-group-card" data-ws-index="${wi}">
+                    <div class="ws-group-head d-flex justify-content-between align-items-center">
+                        <span><i class="bi bi-chevron-down ws-toggle me-1"></i>
+                            <b>${ws.unit_name || ws.unit}（${ws.unit}）</b>
+                            <span class="text-muted">所属 ${ws.salary_month} · 批次 ${ws.seq} · ${ws.count}人</span>
+                        </span>
+                        <span class="d-flex gap-1">
+                            <button type="button" class="btn btn-sm btn-outline-primary" data-ws-action="suggested">本组按建议</button>
+                            <button type="button" class="btn btn-sm btn-outline-success" data-ws-action="double">本组翻倍</button>
+                            <button type="button" class="btn btn-sm btn-outline-danger" data-ws-action="single">本组单倍</button>
+                        </span>
+                    </div>
+                    <div class="ws-group-body">
+                        <table class="table table-striped table-hover ws-group-table">
+                            <thead><tr>
+                                <th>#</th><th>姓名</th><th>证件号码</th><th>职工号</th>
+                                <th>结算单元</th><th>所属月</th><th>上月档案状态</th>
+                                <th>建议</th><th>置信度</th><th>理由</th><th>选择</th>
+                            </tr></thead>
+                            <tbody>${rows.join('')}</tbody>
+                        </table>
+                    </div>
+                </div>`);
+            });
+            mergeWorkSheets.innerHTML = blocks.join('');
+            mergeTotalCount.textContent = mergeCandidatesData.length;
+            updateMergeToggleLabel();
+        }
+
+        function syncMergeChoice(cert, value) {
+            mergeChoices[cert] = value;
+            mergeWorkSheets.querySelectorAll(`select.merge-choice[data-cert="${cert}"]`)
+                .forEach(s => { s.value = value; });
+        }
+
+        function setMergeChoices(mode, wsIndex) {
+            const candByCert = new Map(mergeCandidatesData.map(c => [c.cert_no, c]));
+            let selects;
+            if (wsIndex === null || wsIndex === undefined) {
+                selects = mergeWorkSheets.querySelectorAll('select.merge-choice');
+            } else {
+                const card = mergeWorkSheets.querySelector(`.ws-group-card[data-ws-index="${wsIndex}"]`);
+                selects = card ? card.querySelectorAll('select.merge-choice') : [];
+            }
+            const seen = new Set();
+            selects.forEach(sel => {
+                const cert = sel.dataset.cert;
+                if (seen.has(cert)) return; // 同一人只处理一次, 由 syncMergeChoice 全局同步所有组副本
+                seen.add(cert);
+                const value = (mode === 'double' || mode === 'single') ? mode
+                    : ((candByCert.get(cert) || {}).suggested || 'double');
+                syncMergeChoice(cert, value);
             });
         }
 
-        function setAllMergeChoices(mode) {
-            document.querySelectorAll('#mergeCandidatesTable tbody select').forEach(sel => {
-                const certNo = sel.id.replace('mc_', '');
-                if (mode === 'double') { sel.value = 'double'; return; }
-                if (mode === 'single') { sel.value = 'single'; return; }
-                const c = mergeCandidatesData.find(x => x.cert_no === certNo);
-                sel.value = c ? c.suggested : 'double';
-            });
+        function setAllMergeChoices(mode) { setMergeChoices(mode, null); }
+
+        function onMergeWorkSheetClick(e) {
+            const actBtn = e.target.closest('[data-ws-action]');
+            if (actBtn) {
+                const card = actBtn.closest('.ws-group-card');
+                setMergeChoices(actBtn.dataset.wsAction, parseInt(card.dataset.wsIndex, 10));
+                return;
+            }
+            const head = e.target.closest('.ws-group-head');
+            if (head) {
+                head.parentElement.classList.toggle('collapsed');
+                updateMergeToggleLabel();
+            }
+        }
+
+        function onMergeChoiceChange(e) {
+            const sel = e.target.closest('select.merge-choice');
+            if (!sel) return;
+            syncMergeChoice(sel.dataset.cert, sel.value);
+        }
+
+        function toggleMergeGroups() {
+            const cards = mergeWorkSheets.querySelectorAll('.ws-group-card');
+            const allCollapsed = cards.length > 0 && Array.from(cards).every(c => c.classList.contains('collapsed'));
+            cards.forEach(c => c.classList.toggle('collapsed', !allCollapsed));
+            updateMergeToggleLabel();
+        }
+
+        function updateMergeToggleLabel() {
+            const cards = mergeWorkSheets.querySelectorAll('.ws-group-card');
+            const allCollapsed = cards.length > 0 && Array.from(cards).every(c => c.classList.contains('collapsed'));
+            btnMergeToggleGroups.textContent = allCollapsed ? '展开全部' : '收起全部';
+        }
+
+        function exportMergeExcel() {
+            if (mergeCandidatesData.length === 0) { showError('请先检查合并规则再导出'); return; }
+            fetch('/api/merge-suggestions/export', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ pay_month: lastMergePayMonth, combos: lastMergeCombos })
+            })
+            .then(async resp => {
+                if (!resp.ok) {
+                    const d = await resp.json().catch(() => ({}));
+                    showError(d.error || '导出失败，请稍后重试');
+                    return;
+                }
+                const blob = await resp.blob();
+                const url = URL.createObjectURL(blob);
+                const a = document.createElement('a');
+                a.href = url;
+                a.download = `合并确认_${lastMergePayMonth}.xlsx`;
+                document.body.appendChild(a);
+                a.click();
+                a.remove();
+                URL.revokeObjectURL(url);
+            })
+            .catch(e => showError(`导出失败: ${e.message}`));
+        }
+
+        function importMergeExcel() {
+            const file = fileMergeImport.files[0];
+            if (!file) return;
+            const fd = new FormData();
+            fd.append('file', file);
+            fetch('/api/merge-suggestions/import', { method: 'POST', body: fd })
+            .then(async resp => {
+                const data = await resp.json();
+                if (!resp.ok || data.error) { showError(data.error || '导入失败，请稍后重试'); return; }
+                let applied = 0;
+                Object.entries(data.choices).forEach(([cert, mode]) => {
+                    if (mergeWorkSheets.querySelector(`select.merge-choice[data-cert="${cert}"]`)) {
+                        syncMergeChoice(cert, mode);
+                        applied++;
+                    }
+                });
+                fileMergeImport.value = '';
+                showInfo(`已从 Excel 导入 ${data.count} 人选择（当前界面匹配 ${applied} 人）`);
+            })
+            .catch(e => showError(`导入失败: ${e.message}`));
         }
 
         function confirmMergeChoices() {
             mergeChoices = {};
-            document.querySelectorAll('#mergeCandidatesTable tbody select').forEach(sel => {
-                mergeChoices[sel.id.replace('mc_', '')] = sel.value;
+            mergeWorkSheets.querySelectorAll('select.merge-choice').forEach(sel => {
+                mergeChoices[sel.dataset.cert] = sel.value;
             });
             persistMergeChoices = persistMergeCb.checked;
             const n = Object.keys(mergeChoices).length;
@@ -1299,7 +1451,7 @@
 
         function renderZeroSuggestions(data) {
             zeroUnitsData = data.units;
-            zeroUnitsContainer.innerHTML = '';
+            const blocks = [];
             data.units.forEach((unit, ui) => {
                 const cfgBadge = unit.config === 'zero_salary_no_add'
                     ? '<span class="badge bg-warning text-dark">配置不申报</span>'
@@ -1325,7 +1477,7 @@
                             </td>
                         </tr>`;
                 }).join('');
-                zeroUnitsContainer.innerHTML += `
+                blocks.push(`
                     <div class="card mb-3 border">
                         <div class="card-header py-2 d-flex justify-content-between align-items-center">
                             <span class="fw-bold">${unit.unit_name || unit.unit}（${unit.unit}）${cfgBadge}
@@ -1354,8 +1506,9 @@
                                 <tbody>${rows}</tbody>
                             </table>
                         </div>
-                    </div>`;
+                    </div>`);
             });
+            zeroUnitsContainer.innerHTML = blocks.join('');
         }
 
         function setZeroUnitChoices(unitIndex, mode) {
@@ -1390,6 +1543,14 @@
         }
 
         function showError(message) {
+            errorBox.classList.remove('alert-success');
+            errorBox.classList.add('alert-danger');
+            errorBox.textContent = message;
+            errorBox.style.display = 'block';
+        }
+        function showInfo(message) {
+            errorBox.classList.remove('alert-danger');
+            errorBox.classList.add('alert-success');
             errorBox.textContent = message;
             errorBox.style.display = 'block';
         }

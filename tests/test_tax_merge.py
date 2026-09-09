@@ -14,7 +14,7 @@ def setup_db():
     yield
 
 
-def _rec(emp="E1", cert="C1", sm=202605, unit=100, seq="1",
+def _rec(emp="E1", cert="C1", sm=202605, unit=100, seq="1", unit_name="",
          income=Decimal("1000"), tax=Decimal("0"),
          pension=Decimal("0"), medical=Decimal("0"),
          unemp=Decimal("0"), housing=Decimal("0"),
@@ -25,6 +25,7 @@ def _rec(emp="E1", cert="C1", sm=202605, unit=100, seq="1",
     r.姓名 = f"姓{cert}"
     r.工资所属年月 = sm
     r.结算单元 = unit
+    r.结算单元名称 = unit_name
     r.当月批次 = seq
     r.tc930_id = tc930
     r.工资总额 = income
@@ -234,3 +235,42 @@ class TestBuildSuggestions:
         c = res["candidates"][0]
         assert c["salary_months"] == [202604, 202606]
         assert c["prev_month"] == 202604
+
+    def test_work_sheets_grouped_by_salary_slip(self):
+        # 考察: 按 (结算单元-所属月-批次) 分组, 单月非候选(如C3)不进组
+        self.records = [
+            _rec(cert="C1", sm=202605, tc930=1, unit=100, unit_name="第一医院"),
+            _rec(cert="C1", sm=202606, tc930=2, unit=100, unit_name="第一医院"),
+            _rec(cert="C2", sm=202605, tc930=3, unit=100, unit_name="第一医院"),
+            _rec(cert="C2", sm=202606, tc930=4, unit=100, unit_name="第一医院"),
+            _rec(cert="C3", sm=202606, tc930=5, unit=100, unit_name="第一医院"),
+        ]
+        res = tax_merge.build_merge_suggestions(None, 202606, self.COMBOS)
+        sheets = res["work_sheets"]
+        assert len(sheets) == 2                    # 202605 与 202606 两张工资单
+        by_month = {s["salary_month"]: s for s in sheets}
+        s1 = by_month[202605]
+        assert (s1["unit"], s1["seq"], s1["count"]) == (100, "1", 2)
+        assert s1["cert_nos"] == ["C1", "C2"]
+        assert s1["unit_name"] == "第一医院"
+        assert by_month[202606]["count"] == 2      # C3 单月非候选 → 不分组
+        assert by_month[202606]["cert_nos"] == ["C1", "C2"]
+        assert by_month[202606]["unit_name"] == "第一医院"
+
+    def test_work_sheets_skip_non_combo_records(self):
+        # 同一人跨两个结算单元: 只有勾选组合内的记录进入分组/候选
+        self.records = [
+            _rec(cert="C1", sm=202605, tc930=1, unit=100, unit_name="A单元"),
+            _rec(cert="C1", sm=202606, tc930=2, unit=200, unit_name="B单元"),
+            _rec(cert="C1", sm=3000, tc930=4, unit=300, unit_name="C单元"),
+        ]
+        res = tax_merge.build_merge_suggestions(None, 202606, [
+            {"unit": 100, "salary_month": 202605, "seq": "1"},
+            {"unit": 200, "salary_month": 202606, "seq": "1"},
+        ])
+        c = res["candidates"][0]
+        assert c["units"] == [100, 200]           # 3000 非勾选组合 → 不进候选
+        assert c["unit_names"] == {"100": "A单元", "200": "B单元"}
+        sheets = res["work_sheets"]
+        assert len(sheets) == 2                    # 两张勾选工资单, C(3000) 不在内
+        assert all(s["unit"] in (100, 200) for s in sheets)
