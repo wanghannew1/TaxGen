@@ -377,7 +377,7 @@ class TestX3Income:
     def test_merge_sums_x3(self):
         """合并时个人交纳现金必须合计"""
         from decimal import Decimal
-        from app import merge_records_by_person
+        from tax_merge import merge_records_by_person
         recs = [self._mk(total=0, x3=608.5), self._mk(total=100, x3=200)]
         recs[0].职工号 = recs[1].职工号 = "1"
         merged = merge_records_by_person(recs)
@@ -433,7 +433,7 @@ class TestMergeByPayMonth:
     def test_merge_by_pay_month_groups_person_only(self):
         """by_pay_month=True 时 4 笔跨月记录合并为 1 笔，金额全部合计"""
         from decimal import Decimal
-        from app import merge_records_by_person
+        from tax_merge import merge_records_by_person
         merged = merge_records_by_person(self._wang4(), by_pay_month=True)
         assert len(merged) == 1
         m = merged[0]
@@ -447,14 +447,14 @@ class TestMergeByPayMonth:
 
     def test_merge_default_keeps_month_granularity(self):
         """默认(by_pay_month=False)仍按人+所属月份合并，跨月不合并"""
-        from app import merge_records_by_person
+        from tax_merge import merge_records_by_person
         merged = merge_records_by_person(self._wang4())
         assert len(merged) == 4
 
     def test_merge_pay_month_export_one_row_per_person(self, output_dir):
         """merge_mode=pay_month 时 正常工资薪金收入 每人一行，合并明细可追溯"""
         from decimal import Decimal
-        from app import merge_records_by_person
+        from tax_merge import merge_records_by_person
         raw = self._wang4()
         merged = merge_records_by_person(raw, by_pay_month=True)
         result = generate_normal_salary(

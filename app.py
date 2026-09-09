@@ -10,6 +10,7 @@ from templates_gen.labor_service import generate_labor_service
 from templates_gen.annual_bonus import generate_annual_bonus
 from templates_gen.personnel_info import generate_personnel_info
 from templates_gen.validation import validate_salary_records
+from tax_merge import merge_records_by_person, build_merge_suggestions
 
 app = Flask(__name__)
 OUTPUT_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "output")
@@ -19,57 +20,6 @@ os.makedirs(OUTPUT_DIR, exist_ok=True)
 # 仅在进程退出时关闭。不能在 teardown_appcontext 中调用 close_db(),
 # 否则每个请求后池被关闭, 后续所有数据库请求都会失败。
 atexit.register(close_db)
-
-
-def merge_records_by_person(records, by_pay_month: bool = False):
-    """按人合并多条工资记录为一笔，基准取时间上最后一个批次(批次号最大、流水号最大)。
-
-    by_pay_month=False: 按人+所属月份合并（现状，同人同月多笔合并，同一人可能多行）。
-    by_pay_month=True:  按人+发放月份合并（同一发放月份内每人一行，跨所属月份的收入/五险一金/个税全部合计）。
-                        仅适用于组合确认流程——所有组合共享同一发放月份(TC8M.ATC8G7)。
-    """
-    from copy import deepcopy
-    group_key = (lambda rec: (rec.职工号,)) if by_pay_month \
-        else (lambda rec: (rec.职工号, rec.工资所属年月))
-    groups = {}
-    for rec in records:
-        groups.setdefault(group_key(rec), []).append(rec)
-
-    merged = []
-    for key, recs in groups.items():
-        if by_pay_month:
-            # 跨所属月份合并时"最后批次"语义失效，基准取流水号最大(最新经办)的记录
-            base = max(recs, key=lambda r: r.tc930_id)
-        else:
-            base = max(recs, key=lambda r: (int(r.当月批次 or 0), r.tc930_id))
-        m = deepcopy(base)
-        for rec in recs:
-            if rec is base:
-                continue
-            m.应发工资 += rec.应发工资
-            m.实发工资 += rec.实发工资
-            m.个人所得税 += rec.个人所得税
-            m.工资总额 += rec.工资总额
-            m.独生子女费 += rec.独生子女费
-            m.采暖费 += rec.采暖费
-            m.奖金 += rec.奖金
-            m.养老个人 += rec.养老个人
-            m.医疗个人 += rec.医疗个人
-            m.失业个人 += rec.失业个人
-            m.公积金个人 += rec.公积金个人
-            m.补缴及退款保险金额个人 += rec.补缴及退款保险金额个人
-            m.大病险个人 += rec.大病险个人
-            m.补发3 += rec.补发3
-            m.个人交纳现金 += rec.个人交纳现金
-            m.个人其他调整 += rec.个人其他调整
-            m.个人欠款 += rec.个人欠款
-            m.扣款大病险 += rec.扣款大病险
-            m.税后工会会费 += rec.税后工会会费
-            m.个人代理费 += rec.个人代理费
-            m.意外险个人 += rec.意外险个人
-            m.经济补偿金 += rec.经济补偿金
-        merged.append(m)
-    return merged
 
 
 def _apply_scope_filter(combo_set, scope_map):
@@ -202,6 +152,23 @@ def api_tc8m_search():
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
+
+@app.route("/api/merge-suggestions", methods=["POST"])
+def api_merge_suggestions():
+    """生成前确认: 扫描待报组合中的跨月合并人员，给出翻倍/单倍判定建议。"""
+    try:
+        data = request.get_json()
+        pay_month = int(data.get("pay_month") or 0)
+        combos = data.get("combos") or []
+        if not pay_month or not combos:
+            return jsonify({"error": "请选择月份并勾选待报组合"}), 400
+        if any(not c.get("seq") for c in combos):
+            return jsonify({"error": "组合缺少批次号"}), 400
+        conn = get_connection()
+        return jsonify(build_merge_suggestions(conn, pay_month, combos))
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
 @app.route("/api/generate", methods=["POST"])
 def api_generate():
     try:
@@ -261,7 +228,14 @@ def api_generate():
             abnormal = [r for r in abnormal if _keep(r.get("ATB930"), r.get("ATC93AA"))]
         raw_records = records
         if merge_by_person:
-            records = merge_records_by_person(records, by_pay_month=merge_by_pay_month)
+            from config_db import upsert_merge_overrides
+            merge_choices = data.get("merge_choices") or {}
+            single_certs = {c for c, mode in merge_choices.items() if mode == "single"}
+            records = merge_records_by_person(records, by_pay_month=merge_by_pay_month,
+                                              single_certs=single_certs)
+            if data.get("persist_merge_choices") and merge_choices:
+                upsert_merge_overrides({c: m for c, m in merge_choices.items()
+                                        if m in ("double", "single")})
         warnings = []
         if confirmed_combos and merge_by_person:
             persons = list({r.职工号 for r in raw_records})
