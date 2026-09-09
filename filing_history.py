@@ -348,6 +348,7 @@ def import_filing_records(records):
 
 def get_filing_summary():
     """按 month,item_type 分组统计记录数，month 降序、item_type 升序。"""
+    init_db()  # 确保表存在（历史申报未导入过的库, merge/adjust 建议查询会先走到这里）
     conn = get_db()
     rows = conn.execute("""
         SELECT month, item_type, COUNT(*) AS count
@@ -365,6 +366,7 @@ def get_filing_records(month=0, item_type="", search="", page=1, page_size=50):
     month>0 精确匹配月份；item_type 非空精确匹配类型；search 模糊匹配
     姓名/证件号码/工号。返回记录不含 raw 字段（保持 payload 精简）。
     """
+    init_db()  # 确保表存在（历史申报未导入过的库, 页面查询不会报 no such table）
     conn = get_db()
     where = []
     params = []
@@ -400,6 +402,7 @@ def get_filing_map(month, item_type="税款计算"):
     单次查询不分页；若无记录返回空字典。UNIQUE(cert_no,month,item_type) 保证无重复，
     如遇重复则后者覆盖前者。
     """
+    init_db()  # 确保表存在（历史申报未导入过的库, 合并规则/多退少补建议查询不会报 no such table）
     conn = get_db()
     rows = conn.execute("""
         SELECT cert_no, name, emp_no, id_type, month, item_type,
