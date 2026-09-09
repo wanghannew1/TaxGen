@@ -20,12 +20,13 @@ def init_db():
         user=DB_CONFIG['user'],
         password=DB_CONFIG['password'],
         dsn=dsn,
-        min=1,
+        min=DB_CONFIG.get('pool_min', 0),
         max=10,
+        timeout=DB_CONFIG.get('pool_timeout', 300),
         disable_oob=True,
         tcp_connect_timeout=10,
     )
-    print(f"Database pool created: {dsn}")
+    print(f"Database pool created: {dsn} (min={_pool.min}, max={_pool.max}, timeout={_pool.timeout})")
 
 
 def get_connection():
