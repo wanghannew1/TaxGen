@@ -44,6 +44,13 @@ def init_db() -> None:
     if "salary_month_scope" not in cols:
         conn.execute(
             "ALTER TABLE special_unit_config ADD COLUMN salary_month_scope TEXT DEFAULT 'all'")
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS merge_override (
+            cert_no TEXT PRIMARY KEY,
+            mode TEXT DEFAULT 'double' CHECK (mode IN ('double', 'single')),
+            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+    """)
     conn.commit()
     conn.close()
 
@@ -177,3 +184,35 @@ def get_excluded_unit_codes() -> List[int]:
         "SELECT unit_code FROM special_unit_config WHERE exclude_all = 1").fetchall()
     conn.close()
     return [int(r["unit_code"]) for r in rows]
+
+
+# ---------------------------------------------------------------------------
+# merge_override: 三险一金合并规则（翻倍/单倍）用户确认选择持久化
+# cert_no 为主键（一人一种处理方式，跨月人员按人记忆，覆盖式更新）
+# ---------------------------------------------------------------------------
+
+def get_merge_overrides() -> dict:
+    """查询全部持久化的合并规则覆盖，返回 {cert_no: {'mode': ..., 'updated_at': ...}}。"""
+    conn = get_db()
+    rows = conn.execute(
+        "SELECT cert_no, mode, updated_at FROM merge_override").fetchall()
+    conn.close()
+    return {str(r["cert_no"]): {"mode": str(r["mode"] or "double"),
+                                "updated_at": str(r["updated_at"] or "")} for r in rows}
+
+
+def upsert_merge_overrides(choices: dict) -> None:
+    """写入/更新合并规则覆盖（用户"记住本次选择"）。choices: {cert_no: 'double'|'single'}。"""
+    if not choices:
+        return
+    conn = get_db()
+    for cert_no, mode in choices.items():
+        if mode not in ("double", "single"):
+            continue
+        conn.execute(
+            "INSERT INTO merge_override (cert_no, mode) VALUES (?, ?) "
+            "ON CONFLICT(cert_no) DO UPDATE SET mode = excluded.mode, "
+            "updated_at = CURRENT_TIMESTAMP",
+            (str(cert_no), mode))
+    conn.commit()
+    conn.close()
