@@ -1,7 +1,9 @@
 """Flask 主应用 - 个税模板填表工具"""
 import atexit
+import logging
 import os
 from datetime import datetime
+from logging.handlers import RotatingFileHandler
 from flask import Flask, render_template, request, jsonify, send_file
 from db import init_db, get_connection, close_db
 from queries import get_available_months, get_salary_records, get_personnel_info, get_suggestions, search_tc8m, get_abnormal_records, get_tc93_all_fields, get_tc93_field_comments, get_merge_warnings, get_pay_months, get_payroll_cert_numbers, get_tc90_salary_end_dates, get_payroll_personnel, get_labor_service_cert_numbers
@@ -17,10 +19,27 @@ app = Flask(__name__)
 OUTPUT_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "output")
 os.makedirs(OUTPUT_DIR, exist_ok=True)
 
+# 错误日志落盘 (logs/taxgen.log, 5MB×3 轮转), 后台定位问题用
+LOG_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "logs")
+os.makedirs(LOG_DIR, exist_ok=True)
+_file_handler = RotatingFileHandler(
+    os.path.join(LOG_DIR, "taxgen.log"), maxBytes=5 * 1024 * 1024,
+    backupCount=3, encoding="utf-8")
+_file_handler.setFormatter(logging.Formatter(
+    "%(asctime)s %(levelname)s [%(name)s] %(message)s"))
+logging.getLogger().addHandler(_file_handler)
+logging.getLogger().setLevel(logging.INFO)
+
 # 注意: 连接池在进程生命周期内保持打开 (oracledb 连接在 GC 时自动归还池),
 # 仅在进程退出时关闭。不能在 teardown_appcontext 中调用 close_db(),
 # 否则每个请求后池被关闭, 后续所有数据库请求都会失败。
 atexit.register(close_db)
+
+
+def _log_api_error(e):
+    """记录 API 异常堆栈到日志文件并返回统一错误响应。"""
+    logging.getLogger(__name__).exception("API error: %s", e)
+    return _log_api_error(e)
 
 
 def _apply_scope_filter(combo_set, scope_map):
@@ -116,7 +135,7 @@ def api_months():
         months = get_available_months(conn)
         return jsonify([{"value": m.value, "label": m.label} for m in months])
     except Exception as e:
-        return jsonify({"error": str(e)}), 500
+        return _log_api_error(e)
 
 @app.route("/api/suggestions/<int:month>")
 def api_suggestions(month):
@@ -136,7 +155,7 @@ def api_suggestions(month):
             } for c in combos],
         })
     except Exception as e:
-        return jsonify({"error": str(e)}), 500
+        return _log_api_error(e)
 
 @app.route("/api/tc8m/search")
 def api_tc8m_search():
@@ -151,7 +170,7 @@ def api_tc8m_search():
         results = search_tc8m(conn, unit_name, salary_month, pay_month, seq, status, handler)
         return jsonify({"results": results})
     except Exception as e:
-        return jsonify({"error": str(e)}), 500
+        return _log_api_error(e)
 
 
 @app.route("/api/merge-suggestions", methods=["POST"])
@@ -168,7 +187,7 @@ def api_merge_suggestions():
         conn = get_connection()
         return jsonify(build_merge_suggestions(conn, pay_month, combos))
     except Exception as e:
-        return jsonify({"error": str(e)}), 500
+        return _log_api_error(e)
 
 @app.route("/api/zero-suggestions", methods=["POST"])
 def api_zero_suggestions():
@@ -184,7 +203,7 @@ def api_zero_suggestions():
         conn = get_connection()
         return jsonify(build_zero_salary_suggestions(conn, pay_month, combos))
     except Exception as e:
-        return jsonify({"error": str(e)}), 500
+        return _log_api_error(e)
 
 @app.route("/api/generate", methods=["POST"])
 def api_generate():
@@ -364,7 +383,7 @@ def api_generate():
             "merge_warnings": warnings
         })
     except Exception as e:
-        return jsonify({"error": str(e)}), 500
+        return _log_api_error(e)
 
 @app.route("/api/download/<filename>")
 def api_download(filename):
@@ -374,7 +393,7 @@ def api_download(filename):
             return jsonify({"error": "文件不存在"}), 404
         return send_file(filepath, as_attachment=True)
     except Exception as e:
-        return jsonify({"error": str(e)}), 500
+        return _log_api_error(e)
 
 @app.route("/api/validate/<int:month>")
 def api_validate(month):
@@ -390,7 +409,7 @@ def api_validate(month):
             "details": report.details[:50]  # 只返回前50条失败记录
         })
     except Exception as e:
-        return jsonify({"error": str(e)}), 500
+        return _log_api_error(e)
 
 @app.route("/tax-return")
 def page_tax_return():
@@ -402,7 +421,7 @@ def api_pay_months():
         conn = get_connection()
         return jsonify([{"value": m.value, "label": m.label} for m in get_pay_months(conn)])
     except Exception as e:
-        return jsonify({"error": str(e)}), 500
+        return _log_api_error(e)
 
 @app.route("/api/tax-return/import", methods=["POST"])
 def api_tax_return_import():
@@ -425,7 +444,7 @@ def api_tax_return_import():
         import_records(records)
         return jsonify({"ok": True, "count": len(records), "months": months})
     except Exception as e:
-        return jsonify({"error": str(e)}), 500
+        return _log_api_error(e)
 
 @app.route("/api/tax-return/status")
 def api_tax_return_status():
@@ -439,7 +458,7 @@ def api_tax_return_status():
         result.pop("details", None)
         return jsonify(result)
     except Exception as e:
-        return jsonify({"error": str(e)}), 500
+        return _log_api_error(e)
 
 @app.route("/api/tax-return/details")
 def api_tax_return_details():
@@ -464,7 +483,7 @@ def api_tax_return_details():
         return jsonify({"total": total, "page": page, "page_size": page_size,
                         "details": details[start:start + page_size]})
     except Exception as e:
-        return jsonify({"error": str(e)}), 500
+        return _log_api_error(e)
 
 @app.route("/api/tax-return/export")
 def api_tax_return_export():
@@ -493,7 +512,7 @@ def api_tax_return_export():
         wb.save(os.path.join(OUTPUT_DIR, filename))
         return jsonify({"download_url": f"/api/download/{filename}"})
     except Exception as e:
-        return jsonify({"error": str(e)}), 500
+        return _log_api_error(e)
 
 @app.route("/tax-adjust")
 def page_tax_adjust():
@@ -519,7 +538,7 @@ def api_tax_adjust_compare():
         conn = get_connection()
         return jsonify(compare_tax(conn, month))
     except Exception as e:
-        return jsonify({"error": str(e)}), 500
+        return _log_api_error(e)
 
 @app.route("/api/tax-adjust/export")
 def api_tax_adjust_export():
@@ -549,7 +568,7 @@ def api_tax_adjust_export():
         wb.save(os.path.join(OUTPUT_DIR, filename))
         return jsonify({"download_url": f"/api/download/{filename}"})
     except Exception as e:
-        return jsonify({"error": str(e)}), 500
+        return _log_api_error(e)
 
 @app.route("/filing-history")
 def page_filing_history():
@@ -579,6 +598,7 @@ def api_filing_import():
                                 "item_type": item_type, "months": months, "error": None})
                 total += len(records)
             except Exception as e:
+                logging.getLogger(__name__).exception("filing import file error: %s", f.filename)
                 results.append({"filename": f.filename, "count": 0,
                                 "item_type": "", "months": [], "error": str(e)})
             finally:
@@ -586,7 +606,7 @@ def api_filing_import():
                     os.remove(tmp_path)
         return jsonify({"ok": True, "files": results, "total": total})
     except Exception as e:
-        return jsonify({"error": str(e)}), 500
+        return _log_api_error(e)
 
 @app.route("/api/filing/summary")
 def api_filing_summary():
@@ -597,7 +617,7 @@ def api_filing_summary():
             return jsonify(data)
         return jsonify({"groups": data})
     except Exception as e:
-        return jsonify({"error": str(e)}), 500
+        return _log_api_error(e)
 
 @app.route("/api/filing/records")
 def api_filing_records():
@@ -619,7 +639,7 @@ def api_filing_records():
         page_size = min(500, max(1, int(request.args.get("page_size", 50) or 50)))
         return jsonify(get_filing_records(month, item_type, search, page, page_size))
     except Exception as e:
-        return jsonify({"error": str(e)}), 500
+        return _log_api_error(e)
 
 @app.route("/personnel-compare")
 def page_personnel_compare():
@@ -643,7 +663,7 @@ def api_special_units_list():
         from config_db import get_special_units
         return jsonify({"units": get_special_units()})
     except Exception as e:
-        return jsonify({"error": str(e)}), 500
+        return _log_api_error(e)
 
 
 @app.route("/api/special-units", methods=["POST"])
@@ -662,7 +682,7 @@ def api_special_units_add():
                          salary_month_scope=salary_month_scope)
         return jsonify({"ok": True})
     except Exception as e:
-        return jsonify({"error": str(e)}), 500
+        return _log_api_error(e)
 
 
 @app.route("/api/special-units/<int:unit_code>/mode", methods=["POST"])
@@ -680,7 +700,7 @@ def api_special_units_mode(unit_code):
                             salary_month_scope=salary_month_scope if salary_month_scope is not None else None)
         return jsonify({"ok": True})
     except Exception as e:
-        return jsonify({"error": str(e)}), 500
+        return _log_api_error(e)
 
 
 @app.route("/api/special-units/template")
@@ -701,7 +721,7 @@ def api_special_units_template():
         wb.save(os.path.join(OUTPUT_DIR, filename))
         return jsonify({"download_url": f"/api/download/{filename}"})
     except Exception as e:
-        return jsonify({"error": str(e)}), 500
+        return _log_api_error(e)
 
 
 @app.route("/api/special-units/unit-list-export")
@@ -723,7 +743,7 @@ def api_special_units_unit_list_export():
         wb.save(os.path.join(OUTPUT_DIR, filename))
         return jsonify({"download_url": f"/api/download/{filename}", "count": len(units)})
     except Exception as e:
-        return jsonify({"error": str(e)}), 500
+        return _log_api_error(e)
 
 
 @app.route("/api/special-units/export")
@@ -745,7 +765,7 @@ def api_special_units_export():
         wb.save(os.path.join(OUTPUT_DIR, filename))
         return jsonify({"download_url": f"/api/download/{filename}"})
     except Exception as e:
-        return jsonify({"error": str(e)}), 500
+        return _log_api_error(e)
 
 
 @app.route("/api/special-units/import", methods=["POST"])
@@ -820,7 +840,7 @@ def api_special_units_import():
             resp["skipped"] = skipped
         return jsonify(resp)
     except Exception as e:
-        return jsonify({"error": str(e)}), 500
+        return _log_api_error(e)
 
 
 @app.route("/api/special-units/<int:unit_code>", methods=["DELETE"])
@@ -831,7 +851,7 @@ def api_special_units_delete(unit_code):
         delete_special_unit(unit_code)
         return jsonify({"ok": True})
     except Exception as e:
-        return jsonify({"error": str(e)}), 500
+        return _log_api_error(e)
 
 
 @app.route("/api/payroll-records")
@@ -849,7 +869,7 @@ def api_payroll_records():
         records = get_payroll_records(conn, start, end)
         return jsonify({"records": records, "count": len(records)})
     except Exception as e:
-        return jsonify({"error": str(e)}), 500
+        return _log_api_error(e)
 
 
 @app.route("/api/personnel-compare/filters")
@@ -870,7 +890,7 @@ def api_personnel_compare_filters():
         })
         return jsonify(options)
     except Exception as e:
-        return jsonify({"error": str(e)}), 500
+        return _log_api_error(e)
 
 
 @app.route("/api/personnel-compare/default-report-month")
@@ -881,7 +901,7 @@ def api_personnel_compare_default_month():
         conn = get_connection()
         return jsonify({"month": get_default_report_month(conn)})
     except Exception as e:
-        return jsonify({"error": str(e)}), 500
+        return _log_api_error(e)
 
 
 @app.route("/api/personnel-compare/latest-pay-date")
@@ -896,7 +916,7 @@ def api_personnel_compare_latest_pay_date():
             "pay_date": pay_date.strftime("%Y-%m-%d") if pay_date else None,
         })
     except Exception as e:
-        return jsonify({"error": str(e)}), 500
+        return _log_api_error(e)
 
 
 @app.route("/api/personnel-compare/compare", methods=["POST"])
@@ -1298,7 +1318,7 @@ def api_personnel_compare():
             "download_url": f"/api/download/{os.path.basename(result.file_path)}",
         })
     except Exception as e:
-        return jsonify({"error": str(e)}), 500
+        return _log_api_error(e)
 
 
 init_db()

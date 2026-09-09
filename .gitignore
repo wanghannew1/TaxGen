@@ -3,6 +3,7 @@ __pycache__/
 *.pyc
 .env
 output/
+logs/
 .pytest_cache/
 .omo/
 .sisyphus/
