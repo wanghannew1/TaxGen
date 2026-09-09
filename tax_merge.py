@@ -12,9 +12,14 @@
 
 用户确认后的选择可持久化（config_db.merge_override），下次默认沿用。
 """
-from queries import get_salary_records_by_combos
+from queries import get_salary_records_by_combos, get_unit_insurance_stats
 from filing_history import get_filing_map
 from config_db import get_merge_overrides
+
+
+# 主结算单元判定: 单元级属性 (该单元绝大多数人缴五险一金, 才作为人员分组归属)
+MAIN_UNIT_MIN_PEOPLE = 5      # 该单元至少 5 人发薪才统计覆盖度, 避免 1-2 人偶然
+MAIN_UNIT_INSURED_RATIO = 0.8  # 有保险人数占比 ≥80% 视为"绝大部分人缴五险一金"
 
 
 def merge_records_by_person(records, by_pay_month: bool = False,
@@ -79,6 +84,40 @@ def _prev_month_of(salary_months):
     return min(salary_months)
 
 
+def _main_unit_of(recs, main_units):
+    """判定跨单元发放人员归属的主结算单元。
+
+    主结算单元是**单元级属性**（用户 202608 澄清）：不判断本人当月是否在某单元
+    缴五险一金，而是看该结算单元在历史上是否绝大多数人缴五险一金；人员归属 =
+    本人发薪所涉单元 ∩ 主单元集合。若本人所有发薪单元都不是主单元
+    （如只在奖金/补贴单元发薪）→ 回落第一个发薪的结算单元（最早所属月，
+    平局取最小单元代码）。
+    """
+    unit_first_month = {}
+    for r in recs:
+        u = int(r.结算单元 or 0)
+        m = int(r.工资所属年月 or 0)
+        if u not in unit_first_month or m < unit_first_month[u]:
+            unit_first_month[u] = m
+    if not unit_first_month:
+        return 0
+    pool = {u for u in unit_first_month if u in main_units}
+    if not pool:
+        pool = set(unit_first_month)  # 全部非主单元 → 回落最早发薪单元
+    return min(pool, key=lambda u: (unit_first_month[u], u))
+
+
+def _slips_of(recs):
+    """某人全部工资单明细（跨单元/月/批次），按所属月升序。"""
+    slips = [{"unit": int(r.结算单元 or 0),
+              "unit_name": str(r.结算单元名称 or ""),
+              "salary_month": int(r.工资所属年月 or 0),
+              "seq": str(r.当月批次 or "")}
+             for r in recs]
+    slips.sort(key=lambda s: (s["salary_month"], s["unit"], s["seq"]))
+    return slips
+
+
 def _status_of(prev):
     """判定上月档案状态: '有报' | '零申报' | '未找到'。"""
     if prev is None:
@@ -107,8 +146,8 @@ def build_merge_suggestions(conn, pay_month, combos):
                  "prev_month", "prev_status", "prev_income", "prev_insurance", "be_flag",
                  "suggested", "reason", "confidence", "default_chosen", "persisted"}
             ],
-            "work_sheets": [   # 按工资单(结算单元-所属月-批次)分组, 供前端分组批量操作
-                {"unit", "unit_name", "salary_month", "seq", "count", "cert_nos"}
+            "work_sheets": [   # 按主结算单元分组的确认工作单, 供前端分组批量操作
+                {"unit", "unit_name", "count", "persons": [{...candidate}]}
             ]
         }
     """
@@ -125,6 +164,14 @@ def build_merge_suggestions(conn, pay_month, combos):
     if not checked:
         return {"pay_month": pay_month, "prev_month": None, "candidates": [],
                 "work_sheets": []}
+
+    # 主结算单元判定是单元级属性: 该单元在所属月范围内绝大多数人缴五险一金。
+    # 人员归属 = 本人发薪单元 ∩ 主单元集合; 全部非主单元 → 回落最早发薪单元。
+    stats = get_unit_insurance_stats(conn, sorted({r.结算单元 for r in checked}),
+                                     salary_months)
+    main_units = {u for u, s in stats.items()
+                  if s["people"] >= MAIN_UNIT_MIN_PEOPLE
+                  and s["insured"] / s["people"] >= MAIN_UNIT_INSURED_RATIO}
 
     by_person = {}
     for r in checked:
@@ -155,13 +202,13 @@ def build_merge_suggestions(conn, pay_month, combos):
         be_flag = any(float(r.补缴及退款保险金额个人 or 0) != 0 for r in recs)
 
         if be_flag:
-            suggested, reason, confidence = "single", "本月ATC93BE≠0（借支/补缴）→ 三险不得翻倍", "high"
+            suggested, reason, confidence = "single", "本月ATC93BE≠0（借支/补缴）→ 只报当月三险（不合并上报）", "high"
         elif status == "有报":
-            suggested, reason, confidence = "single", "上月已报三险 → 单倍（避免重复扣除）", "high"
+            suggested, reason, confidence = "single", "上月已报三险 → 只报当月（避免重复扣除）", "high"
         elif status == "未找到":
-            suggested, reason, confidence = "single", "上月未找到（历史0例翻倍）", "high"
+            suggested, reason, confidence = "single", "上月未找到 → 只报当月（历史0例合并上报）", "high"
         else:
-            suggested, reason, confidence = "double", "上月零申报 → 可翻倍合并（61%实证，请确认）", "medium"
+            suggested, reason, confidence = "double", "上月零申报 → 多笔三险合并上报（61%实证，请确认）", "medium"
 
         override = overrides.get(cert)
         if override:
@@ -174,12 +221,8 @@ def build_merge_suggestions(conn, pay_month, combos):
         base = recs[0]
         unit_names = {str(r.结算单元): str(r.结算单元名称 or "") for r in recs
                       if (r.结算单元, r.工资所属年月, r.当月批次) in combo_set}
-        for r in recs:
-            key = (int(r.结算单元 or 0), int(r.工资所属年月 or 0), str(r.当月批次 or ""))
-            if key in combo_set:
-                ws = work_sheets.setdefault(key, {"unit": key[0], "salary_month": key[1],
-                                                  "seq": key[2], "cert_nos": []})
-                ws["cert_nos"].append(cert)
+        main_unit = _main_unit_of(recs, main_units)
+        slips = _slips_of(recs)
         candidates.append({
             "cert_no": cert,
             "name": str(base.姓名 or ""),
@@ -187,6 +230,9 @@ def build_merge_suggestions(conn, pay_month, combos):
             "units": sorted(int(u) for u in unit_names),
             "unit_names": unit_names,
             "salary_months": sorted({r.工资所属年月 for r in recs}),
+            "main_unit": main_unit,
+            "main_unit_name": unit_names.get(str(main_unit), ""),
+            "slips": slips,
             "prev_month": pm,
             "prev_status": status,
             "prev_income": prev_income,
@@ -199,14 +245,21 @@ def build_merge_suggestions(conn, pay_month, combos):
             "persisted": persisted,
         })
 
-    for ws in work_sheets.values():
-        ws["cert_nos"] = sorted(set(ws["cert_nos"]))
-        ws["count"] = len(ws["cert_nos"])
-        ws["unit_name"] = next((c["unit_names"].get(str(ws["unit"]), "") for c in candidates
-                                if ws["unit"] in c["units"]), "")
-    sheet_list = [work_sheets[k] for k in sorted(work_sheets,
-                  key=lambda k: (work_sheets[k]["unit"], work_sheets[k]["salary_month"],
-                                 work_sheets[k]["seq"]))]
+    # 两级分组: 主结算单元大组(按五险一金判定) → 组内每人完整列出发薪工资单明细。
+    # 每人只归属一个主单元, 全局唯一不重复。
+    groups = {}
+    for c in candidates:
+        g = groups.setdefault(c["main_unit"], {
+            "unit": c["main_unit"],
+            "unit_name": c["main_unit_name"],
+            "persons": [],
+        })
+        g["persons"].append(c)
+    for g in groups.values():
+        g["persons"] = sorted(g["persons"], key=lambda p: (p["name"], p["cert_no"]))
+    sheet_list = [groups[u] for u in sorted(groups, key=lambda u: (groups[u]["unit_name"], u))]
+    for g in sheet_list:
+        g["count"] = len(g["persons"])
 
     return {"pay_month": pay_month,
             "prev_month": min(prev_maps) if prev_maps else None,

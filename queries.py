@@ -315,6 +315,53 @@ def get_salary_records_by_combos(conn, combos: List[Dict]) -> List[SalaryRecord]
     return records
 
 
+def get_unit_insurance_stats(conn, units, months) -> Dict[int, Dict[str, int]]:
+    """按结算单元统计五险一金覆盖度（去重人数 / 其中有保险人数）。
+
+    供合并确认"主结算单元"判定用：主结算单元是**单元级属性**——该结算单元
+    在所属月范围内绝大多数人员缴纳五险一金（不要求具体某个人当月也缴了保险）。
+    纯只读聚合查询，分批绑定变量。
+
+    Args:
+        conn: Oracle 连接（只读）
+        units: 结算单元代码列表（走勾选组合涉及的单元）
+        months: 所属月范围（如 [202605, 202606, 202607, 202608]）
+
+    Returns:
+        {unit: {"people": 去重人数, "insured": 其中缴五险一金人数}}
+    """
+    units = sorted({int(u) for u in units if u})
+    months = sorted({int(m) for m in months if m})
+    if not units or not months:
+        return {}
+    result = {}
+    sql_head = """
+        SELECT t93.ATB930 AS unit,
+               COUNT(DISTINCT t93.AAC001) AS people,
+               COUNT(DISTINCT CASE WHEN NVL(t93.BAA001, 0) + NVL(t93.BAA002, 0)
+                                        + NVL(t93.BAA003, 0) + NVL(t93.CAA002, 0) > 0
+                                   THEN t93.AAC001 END) AS insured
+        FROM TC93 t93
+        WHERE t93.ATC93G = '1'
+          AND t93.ATB930 IN ({unit_ph})
+          AND t93.ATC931 IN ({month_ph})
+        GROUP BY t93.ATB930
+    """
+    month_ph = ", ".join(f":m{i}" for i in range(len(months)))
+    month_params = {f"m{i}": m for i, m in enumerate(months)}
+    with conn.cursor() as cursor:
+        for start in range(0, len(units), _IN_BATCH_SIZE):
+            batch = units[start:start + _IN_BATCH_SIZE]
+            unit_ph = ", ".join(f":u{i}" for i in range(len(batch)))
+            params = {f"u{i}": u for i, u in enumerate(batch)}
+            params.update(month_params)
+            cursor.execute(sql_head.format(unit_ph=unit_ph, month_ph=month_ph), params)
+            for row in cursor.fetchall():
+                result[int(row[0] or 0)] = {"people": int(row[1] or 0),
+                                            "insured": int(row[2] or 0)}
+    return result
+
+
 def get_abnormal_records(conn, month: int) -> List[dict]:
     """查询因状态字段异常被过滤的TC93记录 (ATC93G≠1 或 NULL)。"""
     sql = """

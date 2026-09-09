@@ -234,7 +234,7 @@ def _merge_suggestions_to_xlsx(res: dict):
     wb = Workbook()
     ws = wb.active
     ws.title = "合并确认"
-    headers = ["工资单(结算单元-所属月-批次)", "姓名", "证件号", "职工号",
+    headers = ["工资单(结算单元-所属月-批次)", "姓名", "证件号", "职工号", "主结算单元",
                "上月状态", "建议", "置信度", "理由", "选择(翻倍/单倍)"]
     ws.append(headers)
     ws.freeze_panes = "A2"
@@ -246,30 +246,29 @@ def _merge_suggestions_to_xlsx(res: dict):
         cell.font = head_font
         cell.alignment = Alignment(horizontal="center", vertical="center")
 
-    sheet_key = lambda s: f"{s['unit_name'] or s['unit']}({s['unit']})·{s['salary_month']}·批次{s['seq']}"
-    slips_by_cert = {}
-    for s in res.get("work_sheets", []):
-        for cert in s["cert_nos"]:
-            slips_by_cert.setdefault(cert, []).append(sheet_key(s))
-    for c in res.get("candidates", []):
-        slips = slips_by_cert.get(c["cert_no"], [])
-        ws.append([
-            "；".join(slips),
-            c.get("name", ""),
-            c["cert_no"],
-            c.get("emp_no", ""),
-            c.get("prev_status", ""),
-            "翻倍" if c.get("suggested") == "double" else "单倍",
-            {"high": "高", "medium": "中", "low": "低"}.get(c.get("confidence"), ""),
-            c.get("reason", ""),
-            "翻倍" if c.get("default_chosen", c.get("suggested")) == "double" else "单倍",
-        ])
+    slip_key = lambda s: f"{s['unit_name'] or s['unit']}({s['unit']})·{s['salary_month']}·批次{s['seq']}"
+    main_name = lambda c: f"{c.get('main_unit_name') or c.get('main_unit')}({c.get('main_unit')})"
+    for g in res.get("work_sheets", []):
+        for c in g.get("persons", []):
+            slips = [slip_key(s) for s in c.get("slips", [])]
+            ws.append([
+                "；".join(slips),
+                c.get("name", ""),
+                c["cert_no"],
+                c.get("emp_no", ""),
+                main_name(c),
+                c.get("prev_status", ""),
+                "翻倍" if c.get("suggested") == "double" else "单倍",
+                {"high": "高", "medium": "中", "low": "低"}.get(c.get("confidence"), ""),
+                c.get("reason", ""),
+                "翻倍" if c.get("default_chosen", c.get("suggested")) == "double" else "单倍",
+            ])
 
-    width_map = {"A": 55, "B": 10, "C": 20, "D": 10, "E": 8, "F": 6,
-                 "G": 6, "H": 40, "I": 12}
+    width_map = {"A": 55, "B": 10, "C": 20, "D": 10, "E": 24, "F": 8,
+                 "G": 6, "H": 6, "I": 40, "J": 12}
     for col, w in width_map.items():
         ws.column_dimensions[col].width = w
-    ws.auto_filter.ref = f"A1:I{ws.max_row}"
+    ws.auto_filter.ref = f"A1:J{ws.max_row}"
 
     bio = BytesIO()
     wb.save(bio)

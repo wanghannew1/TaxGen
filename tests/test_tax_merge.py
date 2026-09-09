@@ -116,6 +116,7 @@ class TestBuildSuggestions:
     def patch_sources(self, monkeypatch):
         self.records = []
         self.filing = {}
+        self.unit_stats = {}   # {unit: {"people": n, "insured": m}} 默认空 → 全部非主单元
 
         def fake_salary(conn, combos):
             months = {int(c.get("salary_month", 0) or 0) for c in combos}
@@ -124,8 +125,12 @@ class TestBuildSuggestions:
         def fake_filing_map(month, item_type="税款计算"):
             return {k: v for k, v in self.filing.items()}
 
+        def fake_unit_stats(conn, units, months):
+            return self.unit_stats
+
         monkeypatch.setattr(tax_merge, "get_salary_records_by_combos", fake_salary)
         monkeypatch.setattr(tax_merge, "get_filing_map", fake_filing_map)
+        monkeypatch.setattr(tax_merge, "get_unit_insurance_stats", fake_unit_stats)
         monkeypatch.setattr(tax_merge, "get_merge_overrides", lambda: {})
 
     def test_cross_month_person_detected(self):
@@ -237,7 +242,7 @@ class TestBuildSuggestions:
         assert c["prev_month"] == 202604
 
     def test_work_sheets_grouped_by_salary_slip(self):
-        # 考察: 按 (结算单元-所属月-批次) 分组, 单月非候选(如C3)不进组
+        # 两级分组: 主结算单元大组, 组内每人列全部工资单明细; 单月非候选(如C3)不进组
         self.records = [
             _rec(cert="C1", sm=202605, tc930=1, unit=100, unit_name="第一医院"),
             _rec(cert="C1", sm=202606, tc930=2, unit=100, unit_name="第一医院"),
@@ -247,23 +252,29 @@ class TestBuildSuggestions:
         ]
         res = tax_merge.build_merge_suggestions(None, 202606, self.COMBOS)
         sheets = res["work_sheets"]
-        assert len(sheets) == 2                    # 202605 与 202606 两张工资单
-        by_month = {s["salary_month"]: s for s in sheets}
-        s1 = by_month[202605]
-        assert (s1["unit"], s1["seq"], s1["count"]) == (100, "1", 2)
-        assert s1["cert_nos"] == ["C1", "C2"]
-        assert s1["unit_name"] == "第一医院"
-        assert by_month[202606]["count"] == 2      # C3 单月非候选 → 不分组
-        assert by_month[202606]["cert_nos"] == ["C1", "C2"]
-        assert by_month[202606]["unit_name"] == "第一医院"
+        assert len(sheets) == 1                    # 同一结算单元跨两个月 → 1 个主单元大组
+        g = sheets[0]
+        assert (g["unit"], g["count"]) == (100, 2)
+        assert g["unit_name"] == "第一医院"        # C3 单月非候选 → 不分组
+        certs = sorted(p["cert_no"] for p in g["persons"])
+        assert certs == ["C1", "C2"]
+        p1 = next(p for p in g["persons"] if p["cert_no"] == "C1")
+        slips = [(s["unit"], s["salary_month"]) for s in p1["slips"]]
+        assert slips == [(100, 202605), (100, 202606)]
 
     def test_work_sheets_skip_non_combo_records(self):
-        # 同一人跨两个结算单元: 只有勾选组合内的记录进入分组/候选
+        # 同一人跨两个结算单元: 只有勾选组合内的记录进入候选;
+        # 主单元为单元级判定 (单元内绝大部分人缴五险一金), 与本人当月保险无关
         self.records = [
-            _rec(cert="C1", sm=202605, tc930=1, unit=100, unit_name="A单元"),
+            _rec(cert="C1", sm=202605, tc930=1, unit=100, unit_name="A单元",
+                 pension=Decimal("400"), medical=Decimal("100"),
+                 unemp=Decimal("15"), housing=Decimal("350")),
             _rec(cert="C1", sm=202606, tc930=2, unit=200, unit_name="B单元"),
             _rec(cert="C1", sm=3000, tc930=4, unit=300, unit_name="C单元"),
         ]
+        # 单元级覆盖度: A单元(100) 5/10 有人缴 → 非主单元; B单元(200) 9/10 → 主单元
+        self.unit_stats = {100: {"people": 10, "insured": 5},
+                           200: {"people": 10, "insured": 9}}
         res = tax_merge.build_merge_suggestions(None, 202606, [
             {"unit": 100, "salary_month": 202605, "seq": "1"},
             {"unit": 200, "salary_month": 202606, "seq": "1"},
@@ -271,6 +282,45 @@ class TestBuildSuggestions:
         c = res["candidates"][0]
         assert c["units"] == [100, 200]           # 3000 非勾选组合 → 不进候选
         assert c["unit_names"] == {"100": "A单元", "200": "B单元"}
+        assert c["main_unit"] == 200              # B单元覆盖度高 → 主单元=200
+        assert c["main_unit_name"] == "B单元"
         sheets = res["work_sheets"]
-        assert len(sheets) == 2                    # 两张勾选工资单, C(3000) 不在内
-        assert all(s["unit"] in (100, 200) for s in sheets)
+        assert len(sheets) == 1                    # 只按主单元 200 分 1 个大组
+        g = sheets[0]
+        assert (g["unit"], g["count"]) == (200, 1)
+        slips = [(s["unit"], s["salary_month"]) for s in g["persons"][0]["slips"]]
+        assert slips == [(100, 202605), (200, 202606)]   # 明细含全部勾选工资单
+
+    def test_main_unit_from_unit_coverage_not_personal(self):
+        # 郭颖媛场景: 本人所有记录保险=0, 但某发薪单元历史上绝大部分人缴五险一金
+        # → 该单元仍是主单元, 人员归属到它
+        self.records = [
+            _rec(cert="C1", sm=202605, tc930=1, unit=100, unit_name="吉大二院"),
+            _rec(cert="C1", sm=202606, tc930=2, unit=200, unit_name="护士节奖金"),
+        ]
+        self.unit_stats = {100: {"people": 178, "insured": 177},   # 99%
+                           200: {"people": 724, "insured": 0}}
+        res = tax_merge.build_merge_suggestions(None, 202606, [
+            {"unit": 100, "salary_month": 202605, "seq": "1"},
+            {"unit": 200, "salary_month": 202606, "seq": "1"},
+        ])
+        c = res["candidates"][0]
+        assert c["main_unit"] == 100              # 单元级覆盖度高, 与本人当月保险无关
+        assert c["main_unit_name"] == "吉大二院"
+
+    def test_main_unit_fallback_earliest_payroll_when_none_main(self):
+        # 所有发薪单元都非主单元 (如只在奖金/补贴单元发薪) → 回落最早发薪单元
+        self.records = [
+            _rec(cert="C1", sm=202605, tc930=1, unit=100, unit_name="助培奖金"),
+            _rec(cert="C1", sm=202606, tc930=2, unit=200, unit_name="护士节奖金",
+                 pension=Decimal("400")),
+        ]
+        self.unit_stats = {100: {"people": 484, "insured": 0},
+                           200: {"people": 724, "insured": 0}}
+        res = tax_merge.build_merge_suggestions(None, 202606, [
+            {"unit": 100, "salary_month": 202605, "seq": "1"},
+            {"unit": 200, "salary_month": 202606, "seq": "1"},
+        ])
+        c = res["candidates"][0]
+        assert c["main_unit"] == 100              # 全部非主单元 → 最早发薪单元
+        assert c["main_unit_name"] == "助培奖金"

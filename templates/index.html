@@ -290,6 +290,20 @@
         .ws-group-card.collapsed .ws-group-body { display: none; }
         .ws-group-table { margin-bottom: 0; }
         .ws-group-table td, .ws-group-table th { white-space: nowrap; padding: .35rem .5rem; }
+        /* 员工卡片: 每个员工一块, 头部信息 + 发薪工资单明细 + 理由 */
+        .ws-group-body { overflow-x: auto; max-height: 60vh; overflow-y: auto; }
+        .person-card { border-bottom: 1px solid #e9ecef; }
+        .person-card:last-child { border-bottom: none; }
+        .person-card .btn { flex-shrink: 0; }
+        .person-head { display: flex; align-items: center; gap: .75rem; padding: .4rem .75rem; flex-wrap: nowrap; }
+        .person-head .person-name { font-weight: 600; min-width: 80px; }
+        .person-head .person-cert { color: #6c757d; font-size: .82rem; }
+        .person-head .merge-choice { width: 110px; flex-shrink: 0; }
+        .person-slips { display: flex; flex-wrap: nowrap; gap: .35rem; padding: 0 .75rem .35rem;
+            overflow-x: auto; font-size: .82rem; color: #495057; }
+        .person-slips .slip-chip { white-space: nowrap; background: #eef4ff; border: 1px solid #d6e4ff;
+            border-radius: .25rem; padding: .1rem .4rem; }
+        .person-reason { padding: 0 .75rem .45rem; font-size: .82rem; color: #6c757d; }
     </style>
 </head>
 <body>
@@ -626,11 +640,17 @@
                 </div>
                 <div class="modal-body">
                     <p class="text-muted small" id="mergeModalSubtitle"></p>
+                    <div class="alert alert-info py-2 px-3 mb-2 small">
+                        <i class="bi bi-info-circle me-1"></i>
+                        <strong>翻倍</strong>=把多笔工资单的三险一金<strong>合并上报</strong>（当月只报一笔，含全部所属月的三险）；
+                        <strong>单倍</strong>=只上报<strong>所属月份为当月</strong>的三险一金（不合并前几个月的，前月三险已在旧档申报）。
+                        按主结算单元分组（该单元绝大多数人缴五险一金）；下拉框可逐人调整。
+                    </div>
                     <div class="d-flex gap-2 mb-2">
                         <button type="button" class="btn btn-sm btn-outline-primary" id="btnMergeAllSuggested">全部按建议</button>
                         <button type="button" class="btn btn-sm btn-outline-success" id="btnMergeAllDouble">全部翻倍</button>
                         <button type="button" class="btn btn-sm btn-outline-danger" id="btnMergeAllSingle">全部单倍</button>
-                        <span class="text-muted small ms-2 align-self-center">共 <span id="mergeTotalCount">0</span> 人，按工资单分组；用 Excel 大量修改后导回</span>
+                        <span class="text-muted small ms-2 align-self-center">共 <span id="mergeTotalCount">0</span> 人，按主结算单元分组；用 Excel 大量修改后导回</span>
                     </div>
                     <div class="form-check mb-2">
                         <input class="form-check-input" type="checkbox" id="persistMerge">
@@ -787,7 +807,9 @@
                             </h2>
                             <div id="guideSecMerge" class="accordion-collapse collapse" data-bs-parent="#guideAccordion">
                                 <div class="accordion-body">
-                                    <p class="small text-muted mb-2">同一人在待报批次中跨了多个<strong>所属月</strong>时，其三险一金在报送文件中是"单倍"还是"翻倍"需要人工确认。</p>
+                                    <p class="small text-muted mb-2">同一人在待报批次中跨了多个<strong>所属月</strong>时，其三险一金需要人工确认：
+                            <strong>翻倍</strong>=把多笔工资单的三险一金<strong>合并上报</strong>；
+                            <strong>单倍</strong>=只上报<strong>所属月份为当月</strong>的三险一金（不合并前几个月的）。</p>
                                     <ol class="mb-2">
                                         <li>确认待报列表中<strong>勾选了本次要报送的批次</strong>（未勾选的不参与检查）。</li>
                                         <li>点「检查合并规则并确认」，弹窗列出每个跨月人员：姓名、证件号、涉及结算单元、所属月、上月档案状态、系统建议、置信度、理由。</li>
@@ -886,25 +908,25 @@
                                                     <td>上月有报（三险&gt;0）</td>
                                                     <td><span class="badge text-bg-primary">单倍</span></td>
                                                     <td><span class="badge text-bg-success">高</span></td>
-                                                    <td class="small">三险已在累计专项扣除中体现，翻倍会虚增扣除</td>
+                                                    <td class="small">三险已在累计专项扣除中体现，合并上报会虚增扣除</td>
                                                 </tr>
                                                 <tr>
                                                     <td>上月零申报（收入=0 且三险=0）</td>
                                                     <td><span class="badge text-bg-warning">翻倍</span></td>
                                                     <td><span class="badge text-bg-warning">中</span></td>
-                                                    <td class="small">61% 历史实证翻倍，但存在例外，<strong>务必人工核实</strong></td>
+                                                    <td class="small">61% 历史实证合并上报，但存在例外，<strong>务必人工核实</strong></td>
                                                 </tr>
                                                 <tr>
                                                     <td>上月未找到（档案中无此人）</td>
                                                     <td><span class="badge text-bg-primary">单倍</span></td>
                                                     <td><span class="badge text-bg-success">高</span></td>
-                                                    <td class="small">历史 0 例翻倍；多属特殊单元本月也不报</td>
+                                                    <td class="small">历史 0 例合并上报；多属特殊单元本月也不报</td>
                                                 </tr>
                                                 <tr class="table-danger">
                                                     <td>本月 ATC93BE≠0（借支/补缴）</td>
                                                     <td><span class="badge text-bg-primary">单倍</span></td>
                                                     <td><span class="badge text-bg-success">高</span></td>
-                                                    <td class="small"><i class="bi bi-exclamation-triangle-fill text-danger me-1"></i>三险已通过借支在收入侧扣除，翻倍=重复扣除（建议不可改，属数据事实）</td>
+                                                    <td class="small"><i class="bi bi-exclamation-triangle-fill text-danger me-1"></i>三险已通过借支在收入侧扣除，合并上报=重复扣除（建议不可改，属数据事实）</td>
                                                 </tr>
                                             </tbody>
                                         </table>
@@ -1231,48 +1253,41 @@
         function renderMergeGroups(data) {
             mergeCandidatesData = data.candidates || [];
             mergeWorkSheetsData = data.work_sheets || [];
-            const candByCert = new Map(mergeCandidatesData.map(c => [c.cert_no, c]));
             const blocks = [];
             mergeWorkSheetsData.forEach((ws, wi) => {
-                const rows = [];
-                ws.cert_nos.forEach((cert, ri) => {
-                    const c = candByCert.get(cert);
-                    if (!c) return;
+                const personBlocks = (ws.persons || []).map(c => {
                     const confClass = c.confidence === 'high' ? 'text-success'
                         : (c.confidence === 'medium' ? 'text-warning' : 'text-danger');
                     const confText = c.confidence === 'high' ? '高'
                         : (c.confidence === 'medium' ? '中' : '低');
                     const persistedBadge = c.persisted ? ' <span class="badge bg-warning text-dark">已记住</span>' : '';
-                    const bePrefix = c.be_flag ? '<span class="text-danger">⚠BE借支</span> ' : '';
-                    const unitNames = Object.entries(c.unit_names || {})
-                        .map(([u, n]) => `${n}(${u})`).join('、') || (c.units || []).join('、');
-                    const months = (c.salary_months || []).join('、');
+                    const bePrefix = c.be_flag ? '<span class="text-danger">BE借支</span>' : '';
                     const chosen = mergeChoices[c.cert_no] || c.default_chosen || c.suggested;
-                    rows.push(`<tr>
-                        <td>${ri + 1}</td>
-                        <td>${c.name || ''}</td>
-                        <td>${c.cert_no || ''}</td>
-                        <td>${c.emp_no || ''}</td>
-                        <td>${unitNames}</td>
-                        <td>${months}</td>
-                        <td>${c.prev_status || ''}</td>
-                        <td>${c.suggested === 'double' ? '翻倍' : '单倍'}${persistedBadge}</td>
-                        <td class="${confClass}">${confText}</td>
-                        <td>${bePrefix}${c.reason || ''}</td>
-                        <td>
+                    const slips = (c.slips || []).map(s =>
+                        `<span class="slip-chip">${s.unit_name || s.unit}(${s.unit})·${s.salary_month}·批次${s.seq}</span>`
+                    ).join('');
+                    return `<div class="person-card">
+                        <div class="person-head">
+                            <span class="person-name">${c.name || ''}</span>
+                            <span class="person-cert">${c.cert_no || ''}${c.emp_no ? ` / ${c.emp_no}` : ''}</span>
+                            <span>上月: ${c.prev_status || ''}</span>
+                            <span class="${confClass}">建议${c.suggested === 'double' ? '翻倍' : '单倍'}·${confText}</span>
+                            ${persistedBadge}
+                            ${bePrefix}
                             <select class="form-select form-select-sm merge-choice" data-cert="${c.cert_no}">
                                 <option value="double" ${chosen === 'double' ? 'selected' : ''}>翻倍</option>
                                 <option value="single" ${chosen === 'single' ? 'selected' : ''}>单倍</option>
                             </select>
-                        </td>
-                    </tr>`);
+                        </div>
+                        <div class="person-slips">${slips}</div>
+                        <div class="person-reason">${c.reason || ''}</div>
+                    </div>`;
                 });
-                if (rows.length === 0) return;
                 blocks.push(`<div class="ws-group-card" data-ws-index="${wi}">
                     <div class="ws-group-head d-flex justify-content-between align-items-center">
                         <span><i class="bi bi-chevron-down ws-toggle me-1"></i>
                             <b>${ws.unit_name || ws.unit}（${ws.unit}）</b>
-                            <span class="text-muted">所属 ${ws.salary_month} · 批次 ${ws.seq} · ${ws.count}人</span>
+                            <span class="text-muted">共 ${ws.count} 人</span>
                         </span>
                         <span class="d-flex gap-1">
                             <button type="button" class="btn btn-sm btn-outline-primary" data-ws-action="suggested">本组按建议</button>
@@ -1280,16 +1295,7 @@
                             <button type="button" class="btn btn-sm btn-outline-danger" data-ws-action="single">本组单倍</button>
                         </span>
                     </div>
-                    <div class="ws-group-body">
-                        <table class="table table-striped table-hover ws-group-table">
-                            <thead><tr>
-                                <th>#</th><th>姓名</th><th>证件号码</th><th>职工号</th>
-                                <th>结算单元</th><th>所属月</th><th>上月档案状态</th>
-                                <th>建议</th><th>置信度</th><th>理由</th><th>选择</th>
-                            </tr></thead>
-                            <tbody>${rows.join('')}</tbody>
-                        </table>
-                    </div>
+                    <div class="ws-group-body">${personBlocks.join('')}</div>
                 </div>`);
             });
             mergeWorkSheets.innerHTML = blocks.join('');
@@ -1315,7 +1321,7 @@
             const seen = new Set();
             selects.forEach(sel => {
                 const cert = sel.dataset.cert;
-                if (seen.has(cert)) return; // 同一人只处理一次, 由 syncMergeChoice 全局同步所有组副本
+                if (seen.has(cert)) return; // 每人全局唯一, 组内去重后由 syncMergeChoice 同步 (幂等)
                 seen.add(cert);
                 const value = (mode === 'double' || mode === 'single') ? mode
                     : ((candByCert.get(cert) || {}).suggested || 'double');
