@@ -5,6 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>个税填报服务</title>
     <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.3/font/bootstrap-icons.min.css">
     <style>
         :root {
             --primary: #1a5276;
@@ -257,6 +258,28 @@
                 display: none;
             }
         }
+
+        #guideModal .guide-step-card {
+            border: 1px solid #dee2e6;
+            border-radius: 0.5rem;
+            padding: 0.75rem;
+            height: 100%;
+            background: #fff;
+        }
+
+        #guideModal .guide-step-num {
+            width: 1.75rem;
+            height: 1.75rem;
+            border-radius: 50%;
+            background: var(--primary);
+            color: #fff;
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 0.8rem;
+            font-weight: 600;
+            flex-shrink: 0;
+        }
     </style>
 </head>
 <body>
@@ -274,6 +297,7 @@
             <a href="/special-units" class="btn btn-outline-primary">特殊结算单元配置</a>
             <a href="/filing-history" class="btn btn-outline-primary">历史申报库</a>
             <a href="/tax-adjust" class="btn btn-outline-primary">多退少补</a>
+            <button type="button" class="btn btn-outline-info" data-bs-toggle="modal" data-bs-target="#guideModal"><i class="bi bi-question-circle me-1"></i>使用说明</button>
         </div>
 
         <!-- Step 1: Template Selection -->
@@ -645,6 +669,368 @@
                 </div>
                 <div class="modal-footer">
                     <button type="button" class="btn btn-primary" id="btnZeroConfirm">确认并关闭</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- 使用说明 Modal（静态图文引导，无动态数据） -->
+    <div class="modal fade" id="guideModal" tabindex="-1" aria-labelledby="guideModalLabel" aria-hidden="true">
+        <div class="modal-dialog modal-xl modal-dialog-scrollable">
+            <div class="modal-content">
+                <div class="modal-header">
+                    <h5 class="modal-title" id="guideModalLabel"><i class="bi bi-info-circle me-2 text-primary"></i>使用说明</h5>
+                    <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="关闭"></button>
+                </div>
+                <div class="modal-body">
+                    <!-- 速览：7 步流程 -->
+                    <div class="d-flex align-items-center mb-3">
+                        <i class="bi bi-lightning-charge-fill text-primary me-2"></i>
+                        <h6 class="mb-0 fw-bold">一次完整报税流程速览</h6>
+                    </div>
+                    <div class="row g-2 mb-4">
+                        <div class="col-6 col-md-4 col-lg-3">
+                            <div class="guide-step-card d-flex gap-2">
+                                <span class="guide-step-num">1</span>
+                                <div>
+                                    <div class="fw-semibold"><i class="bi bi-calendar-month text-primary me-1"></i>选发放月份</div>
+                                    <small class="text-muted">顶部「发放月份」下拉框，确定本次报送哪批工资</small>
+                                </div>
+                            </div>
+                        </div>
+                        <div class="col-6 col-md-4 col-lg-3">
+                            <div class="guide-step-card d-flex gap-2">
+                                <span class="guide-step-num">2</span>
+                                <div>
+                                    <div class="fw-semibold"><i class="bi bi-search text-primary me-1"></i>搜索批次</div>
+                                    <small class="text-muted">按结算单元/所属月/批次号/经办人搜索 TC8M 批次</small>
+                                </div>
+                            </div>
+                        </div>
+                        <div class="col-6 col-md-4 col-lg-3">
+                            <div class="guide-step-card d-flex gap-2">
+                                <span class="guide-step-num">3</span>
+                                <div>
+                                    <div class="fw-semibold"><i class="bi bi-list-check text-primary me-1"></i>加入待报列表</div>
+                                    <small class="text-muted">勾选批次 →「添加到待报列表」，可多次搜索累计</small>
+                                </div>
+                            </div>
+                        </div>
+                        <div class="col-6 col-md-4 col-lg-3">
+                            <div class="guide-step-card d-flex gap-2">
+                                <span class="guide-step-num">4</span>
+                                <div>
+                                    <div class="fw-semibold"><i class="bi bi-shuffle text-primary me-1"></i>检查合并规则</div>
+                                    <small class="text-muted">处理跨月发放人员三险一金翻倍/单倍，逐人确认</small>
+                                </div>
+                            </div>
+                        </div>
+                        <div class="col-6 col-md-4 col-lg-3">
+                            <div class="guide-step-card d-flex gap-2">
+                                <span class="guide-step-num">5</span>
+                                <div>
+                                    <div class="fw-semibold"><i class="bi bi-file-earmark-minus text-primary me-1"></i>检查零申报</div>
+                                    <small class="text-muted">确认本期收入为0人员是否生成零申报</small>
+                                </div>
+                            </div>
+                        </div>
+                        <div class="col-6 col-md-4 col-lg-3">
+                            <div class="guide-step-card d-flex gap-2">
+                                <span class="guide-step-num">6</span>
+                                <div>
+                                    <div class="fw-semibold"><i class="bi bi-file-earmark-excel text-primary me-1"></i>生成</div>
+                                    <small class="text-muted">「生成报税数据」产出 Excel 模板 + 验证报告</small>
+                                </div>
+                            </div>
+                        </div>
+                        <div class="col-6 col-md-4 col-lg-3">
+                            <div class="guide-step-card d-flex gap-2">
+                                <span class="guide-step-num">7</span>
+                                <div>
+                                    <div class="fw-semibold"><i class="bi bi-download text-primary me-1"></i>下载/验证</div>
+                                    <small class="text-muted">下载 4 类模板文件，查看验证通过/失败统计</small>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- 分区详解 accordion -->
+                    <div class="d-flex align-items-center mb-3">
+                        <i class="bi bi-journal-text text-primary me-2"></i>
+                        <h6 class="mb-0 fw-bold">分区详解</h6>
+                    </div>
+                    <div class="accordion mb-4" id="guideAccordion">
+                        <div class="accordion-item">
+                            <h2 class="accordion-header">
+                                <button class="accordion-button" type="button" data-bs-toggle="collapse" data-bs-target="#guideSecSearch" aria-expanded="true" aria-controls="guideSecSearch">
+                                    <i class="bi bi-search me-2 text-primary"></i>搜索批次并加入待报列表
+                                </button>
+                            </h2>
+                            <div id="guideSecSearch" class="accordion-collapse collapse show" data-bs-parent="#guideAccordion">
+                                <div class="accordion-body">
+                                    <ul class="mb-2">
+                                        <li><strong>发放月份</strong>：下拉框选择，决定搜索哪个月发放的批次。</li>
+                                        <li><strong>搜索条件</strong>：结算单元名称（模糊）、所属月份（YYYYMM）、批次号、经办人，均为可选；「仅已发放」默认勾选，只显示可报送的批次。</li>
+                                        <li>搜索结果按结算单元分组，<strong>勾选要报送的批次 → 点「添加到待报列表」</strong>。</li>
+                                        <li>「结算单元 + 所属月份 + 批次」三元组是最小报送单位（一个"组合"）；待报列表可筛选、全选、删除。</li>
+                                    </ul>
+                                    <div class="alert alert-warning py-2 mb-0 small">
+                                        <i class="bi bi-exclamation-triangle me-1"></i>多次搜索可累计添加。若一单元有多笔所属月工资（如 5 月与 6 月工资同在 7 月发放），应<strong>全部加入</strong>待报列表——这是跨月合并检查的前提。
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                        <div class="accordion-item">
+                            <h2 class="accordion-header">
+                                <button class="accordion-button collapsed" type="button" data-bs-toggle="collapse" data-bs-target="#guideSecMerge" aria-expanded="false" aria-controls="guideSecMerge">
+                                    <i class="bi bi-shuffle me-2 text-primary"></i>检查合并规则（三险一金）
+                                </button>
+                            </h2>
+                            <div id="guideSecMerge" class="accordion-collapse collapse" data-bs-parent="#guideAccordion">
+                                <div class="accordion-body">
+                                    <p class="small text-muted mb-2">同一人在待报批次中跨了多个<strong>所属月</strong>时，其三险一金在报送文件中是"单倍"还是"翻倍"需要人工确认。</p>
+                                    <ol class="mb-2">
+                                        <li>确认待报列表中<strong>勾选了本次要报送的批次</strong>（未勾选的不参与检查）。</li>
+                                        <li>点「检查合并规则并确认」，弹窗列出每个跨月人员：姓名、证件号、涉及结算单元、所属月、上月档案状态、系统建议、置信度、理由。</li>
+                                        <li>为每人选定「翻倍」或「单倍」：逐个调整下拉框，或用批量按钮<strong>全部按建议（推荐）/ 全部翻倍 / 全部单倍</strong>。</li>
+                                        <li>（可选）勾选「记住本次选择」持久化到配置，下月同一人默认沿用（带黄色「已记住」徽标）。</li>
+                                        <li>点「确认并关闭」，待报列表出现绿色标记「已确认 N 人合并规则」。</li>
+                                    </ol>
+                                    <div class="alert alert-info py-2 mb-0 small">
+                                        <i class="bi bi-info-circle me-1"></i>系统建议仅供快速处理，最终以你在下拉框中的选择为准；标黄（置信度=中）的"翻倍"建议最需人工核实。
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                        <div class="accordion-item">
+                            <h2 class="accordion-header">
+                                <button class="accordion-button collapsed" type="button" data-bs-toggle="collapse" data-bs-target="#guideSecZero" aria-expanded="false" aria-controls="guideSecZero">
+                                    <i class="bi bi-file-earmark-minus me-2 text-primary"></i>检查零申报（本期收入为0人员）
+                                </button>
+                            </h2>
+                            <div id="guideSecZero" class="accordion-collapse collapse" data-bs-parent="#guideAccordion">
+                                <div class="accordion-body">
+                                    <p class="small text-muted mb-2">待报批次中存在<strong>本期收入为0</strong>但出现在工资单中的人员，是否生成零申报记录需要确认。</p>
+                                    <ol class="mb-2">
+                                        <li>点「检查零申报并确认」，弹窗按结算单元分组卡片展示，组头含单元名称/代码、配置徽标、共 N 条/合计金额。</li>
+                                        <li>确认方式：整行逐个调整下拉框；三个全局批量按钮（全部按建议/全部生成/全部不生成）；每个卡片右上角也有按单元批量按钮。</li>
+                                        <li>（可选）勾选「记住本次选择」持久化到配置。</li>
+                                        <li>点「确认并关闭」，出现绿色标记「已确认 N 人零申报」。</li>
+                                    </ol>
+                                    <div class="alert alert-info py-2 mb-0 small">
+                                        <i class="bi bi-info-circle me-1"></i>在「特殊结算单元配置」页配置过<strong>完全排除</strong>（exclude_all）的单元，人员不会出现在弹窗中，直接不生成。
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                        <div class="accordion-item">
+                            <h2 class="accordion-header">
+                                <button class="accordion-button collapsed" type="button" data-bs-toggle="collapse" data-bs-target="#guideSecGenerate" aria-expanded="false" aria-controls="guideSecGenerate">
+                                    <i class="bi bi-file-earmark-excel me-2 text-primary"></i>生成报税数据
+                                </button>
+                            </h2>
+                            <div id="guideSecGenerate" class="accordion-collapse collapse" data-bs-parent="#guideAccordion">
+                                <div class="accordion-body">
+                                    <ul class="mb-2">
+                                        <li><strong>合并多条工资记录</strong>（默认勾选）：按人+发放月份合并（每人一行，全部合计，翻倍三险在此体现）或按人+所属月份合并（同人可能多行）。</li>
+                                        <li><strong>年平均工资总额</strong>（默认 120000 元）：用于判断解除劳动合同一次性补偿金是否达 3 倍年平均工资的交税标准。</li>
+                                        <li>已做过合并规则/零申报确认时，选择会自动带入。</li>
+                                        <li>点「生成报税数据」→ 等待生成（批次多时约 2-10 秒）→ 结果区显示 4 类文件：正常工资薪金所得（30 列主表）、劳务报酬所得（14 列）、全年一次性奖金收入（11 列，仅奖金&gt;0）、人员信息采集导入模板（51 列）。</li>
+                                    </ul>
+                                    <div class="alert alert-warning py-2 mb-0 small">
+                                        <i class="bi bi-exclamation-triangle me-1"></i>验证失败通常因应发工资=0 但实发≠0（非正常工资薪金类），可在验证报告（/api/validate/月份）中查看失败明细。
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                        <div class="accordion-item">
+                            <h2 class="accordion-header">
+                                <button class="accordion-button collapsed" type="button" data-bs-toggle="collapse" data-bs-target="#guideSecHistory" aria-expanded="false" aria-controls="guideSecHistory">
+                                    <i class="bi bi-database me-2 text-primary"></i>历史申报库（可选但强烈建议）
+                                </button>
+                            </h2>
+                            <div id="guideSecHistory" class="accordion-collapse collapse" data-bs-parent="#guideAccordion">
+                                <div class="accordion-body">
+                                    <ul class="mb-0">
+                                        <li>入口：主页面右上角「历史申报库」。保存税务局个税端导出的历史申报文件，供<strong>合并规则判定</strong>和<strong>回盘比对</strong>使用（数据存本地 SQLite，不写 Oracle）。</li>
+                                        <li>导入：个税端导出 Excel → 历史申报库页选择文件（可多选）→ 上传；系统按<strong>表头自动识别</strong> 4 类文件（税款计算/正常工资薪金/劳务报酬/全年一次性奖金），单文件失败不影响其他文件。</li>
+                                        <li>合并规则判定只用<strong>税款计算</strong>类；建议导入最近 1-2 个申报期的税款计算文件即可；同人同月同类型重复导入自动覆盖。</li>
+                                        <li><strong>不导入也能用</strong>：合并规则全部判"上月未找到"→ 单倍（保守，不虚增），但导入后零申报人员会得到"翻倍"建议（61% 实证），避免漏报三险。</li>
+                                    </ul>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- 判定规则表 -->
+                    <div class="d-flex align-items-center mb-3">
+                        <i class="bi bi-table text-primary me-2"></i>
+                        <h6 class="mb-0 fw-bold">判定规则速查</h6>
+                    </div>
+                    <div class="row g-3 mb-4">
+                        <div class="col-lg-7">
+                            <div class="card h-100">
+                                <div class="card-header bg-white fw-semibold"><i class="bi bi-shuffle me-1 text-primary"></i>合并规则判定（跨月人员三险一金）</div>
+                                <div class="card-body p-0">
+                                    <div class="table-responsive">
+                                        <table class="table table-bordered table-sm mb-0 align-middle">
+                                            <thead class="table-light">
+                                                <tr>
+                                                    <th>上月档案状态</th>
+                                                    <th>系统建议</th>
+                                                    <th>置信度</th>
+                                                    <th>理由</th>
+                                                </tr>
+                                            </thead>
+                                            <tbody>
+                                                <tr>
+                                                    <td>上月有报（三险&gt;0）</td>
+                                                    <td><span class="badge text-bg-primary">单倍</span></td>
+                                                    <td><span class="badge text-bg-success">高</span></td>
+                                                    <td class="small">三险已在累计专项扣除中体现，翻倍会虚增扣除</td>
+                                                </tr>
+                                                <tr>
+                                                    <td>上月零申报（收入=0 且三险=0）</td>
+                                                    <td><span class="badge text-bg-warning">翻倍</span></td>
+                                                    <td><span class="badge text-bg-warning">中</span></td>
+                                                    <td class="small">61% 历史实证翻倍，但存在例外，<strong>务必人工核实</strong></td>
+                                                </tr>
+                                                <tr>
+                                                    <td>上月未找到（档案中无此人）</td>
+                                                    <td><span class="badge text-bg-primary">单倍</span></td>
+                                                    <td><span class="badge text-bg-success">高</span></td>
+                                                    <td class="small">历史 0 例翻倍；多属特殊单元本月也不报</td>
+                                                </tr>
+                                                <tr class="table-danger">
+                                                    <td>本月 ATC93BE≠0（借支/补缴）</td>
+                                                    <td><span class="badge text-bg-primary">单倍</span></td>
+                                                    <td><span class="badge text-bg-success">高</span></td>
+                                                    <td class="small"><i class="bi bi-exclamation-triangle-fill text-danger me-1"></i>三险已通过借支在收入侧扣除，翻倍=重复扣除（建议不可改，属数据事实）</td>
+                                                </tr>
+                                            </tbody>
+                                        </table>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                        <div class="col-lg-5">
+                            <div class="card h-100">
+                                <div class="card-header bg-white fw-semibold"><i class="bi bi-file-earmark-minus me-1 text-primary"></i>零申报判定（本期收入为0人员）</div>
+                                <div class="card-body p-0">
+                                    <div class="table-responsive">
+                                        <table class="table table-bordered table-sm mb-0 align-middle">
+                                            <thead class="table-light">
+                                                <tr>
+                                                    <th>场景</th>
+                                                    <th>建议</th>
+                                                    <th>理由</th>
+                                                </tr>
+                                            </thead>
+                                            <tbody>
+                                                <tr>
+                                                    <td>配置「工资为0不增员不报税」</td>
+                                                    <td><span class="badge text-bg-secondary">不生成</span></td>
+                                                    <td class="small">该单元人员工资为0时不报税</td>
+                                                </tr>
+                                                <tr>
+                                                    <td>普通结算单元</td>
+                                                    <td><span class="badge text-bg-primary">生成</span></td>
+                                                    <td class="small">本期收入为0，默认生成零申报</td>
+                                                </tr>
+                                            </tbody>
+                                        </table>
+                                    </div>
+                                </div>
+                                <div class="card-footer bg-white small text-muted">
+                                    <i class="bi bi-info-circle me-1"></i>置信度颜色：高=绿、中=黄、低=红；标黄的"翻倍"建议最需人工核实。
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- FAQ -->
+                    <div class="d-flex align-items-center mb-3">
+                        <i class="bi bi-question-circle text-primary me-2"></i>
+                        <h6 class="mb-0 fw-bold">常见问题（FAQ）</h6>
+                    </div>
+                    <div class="accordion mb-2" id="guideFaq">
+                        <div class="accordion-item">
+                            <h2 class="accordion-header">
+                                <button class="accordion-button collapsed" type="button" data-bs-toggle="collapse" data-bs-target="#faq1" aria-expanded="false" aria-controls="faq1">
+                                    <i class="bi bi-database me-2 text-primary"></i>要不要导入历史申报数据？
+                                </button>
+                            </h2>
+                            <div id="faq1" class="accordion-collapse collapse" data-bs-parent="#guideFaq">
+                                <div class="accordion-body small">
+                                    <strong>不是必须</strong>。未导入时系统判定保守（上月"未找到"→ 单倍），可正常完成整个流程。但导入后：上月<strong>零申报</strong>的人会得到"翻倍"建议（61% 实证），避免漏报三险；上月<strong>有报</strong>的人会明确"单倍"，避免虚增扣除。建议上线初期一次性导入上个申报期文件。
+                                </div>
+                            </div>
+                        </div>
+                        <div class="accordion-item">
+                            <h2 class="accordion-header">
+                                <button class="accordion-button collapsed" type="button" data-bs-toggle="collapse" data-bs-target="#faq2" aria-expanded="false" aria-controls="faq2">
+                                    <i class="bi bi-lightbulb me-2 text-primary"></i>程序建议一定是正确的吗？
+                                </button>
+                            </h2>
+                            <div id="faq2" class="accordion-collapse collapse" data-bs-parent="#guideFaq">
+                                <div class="accordion-body small">
+                                    <strong>不是</strong>。系统是"建议工具"：给你提示 + 理由 + 置信度，<strong>最终每个人员的翻倍/单倍、零申报生成/跳过都由你在弹窗中确认</strong>。标黄（置信度=中）的"翻倍"建议最需人工核实——历史数据显示 61% 翻倍、其余 39% 是其他情况。
+                                </div>
+                            </div>
+                        </div>
+                        <div class="accordion-item">
+                            <h2 class="accordion-header">
+                                <button class="accordion-button collapsed" type="button" data-bs-toggle="collapse" data-bs-target="#faq3" aria-expanded="false" aria-controls="faq3">
+                                    <i class="bi bi-hourglass-split me-2 text-primary"></i>一直显示"检查中..."是死机了吗？
+                                </button>
+                            </h2>
+                            <div id="faq3" class="accordion-collapse collapse" data-bs-parent="#guideFaq">
+                                <div class="accordion-body small">
+                                    一般不是。跨多所属月、多批次时检查需要几秒（全量 528 组合约 2 秒）。若超过 30 秒仍无响应，查看服务日志 <code>logs/taxgen.log</code> 找异常堆栈。
+                                </div>
+                            </div>
+                        </div>
+                        <div class="accordion-item">
+                            <h2 class="accordion-header">
+                                <button class="accordion-button collapsed" type="button" data-bs-toggle="collapse" data-bs-target="#faq4" aria-expanded="false" aria-controls="faq4">
+                                    <i class="bi bi-bookmark-check me-2 text-primary"></i>"记住本次选择"是什么意思？
+                                </button>
+                            </h2>
+                            <div id="faq4" class="accordion-collapse collapse" data-bs-parent="#guideFaq">
+                                <div class="accordion-body small">
+                                    把该人员的翻倍/单倍、零申报生成/跳过选择<strong>永久存入本地配置（SQLite）</strong>。下月该人再次跨月/零申报时，下拉框默认选中记忆值并带「已记住」徽标。取消勾选则不记忆，只生效本次。
+                                </div>
+                            </div>
+                        </div>
+                        <div class="accordion-item">
+                            <h2 class="accordion-header">
+                                <button class="accordion-button collapsed" type="button" data-bs-toggle="collapse" data-bs-target="#faq5" aria-expanded="false" aria-controls="faq5">
+                                    <i class="bi bi-layers me-2 text-primary"></i>一个单元有多个月份的工资（都在本月发放），怎么处理？
+                                </button>
+                            </h2>
+                            <div id="faq5" class="accordion-collapse collapse" data-bs-parent="#guideFaq">
+                                <div class="accordion-body small">
+                                    全部加入待报列表 → 点「检查合并规则」→ 跨月人员会全部列出并逐人确认 → 生成时选"按人+发放月份合并"。这正是跨月合并的标准流程。
+                                </div>
+                            </div>
+                        </div>
+                        <div class="accordion-item">
+                            <h2 class="accordion-header">
+                                <button class="accordion-button collapsed" type="button" data-bs-toggle="collapse" data-bs-target="#faq6" aria-expanded="false" aria-controls="faq6">
+                                    <i class="bi bi-file-earmark-excel me-2 text-primary"></i>生成的文件和手工报的数对不上？
+                                </button>
+                            </h2>
+                            <div id="faq6" class="accordion-collapse collapse" data-bs-parent="#guideFaq">
+                                <div class="accordion-body small">
+                                    先核对：1) 待报列表是否<strong>包含全部</strong>相关批次（漏批次=少人）；2) 合并规则弹窗是否已确认（未确认的跨月人员按单倍，可能少三险）；3) 合并粒度选的是"发放月合并"还是"所属月合并"。
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+                <div class="modal-footer">
+                    <span class="text-muted small me-auto"><i class="bi bi-journal-text me-1"></i>详细图文说明见 docs/操作指南.md</span>
+                    <button type="button" class="btn btn-primary" data-bs-dismiss="modal"><i class="bi bi-check2-circle me-1"></i>知道了</button>
                 </div>
             </div>
         </div>
