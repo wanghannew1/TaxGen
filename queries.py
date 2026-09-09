@@ -210,6 +210,111 @@ def get_salary_records(conn, month: int) -> List[SalaryRecord]:
     return records
 
 
+def get_salary_records_by_combos(conn, combos: List[Dict]) -> List[SalaryRecord]:
+    """按 (结算单元, 工资所属年月, 批次) 组合过滤查询正常工资记录。
+
+    供生成前建议接口（合并规则/零申报）使用：前端勾选的是组合列表，
+    直接在 SQL 层用 row-value IN 过滤，避免全月全量拉取后再内存过滤
+    （528 个组合跨 20 个所属月时全量拉取 34 万条，仅 1.5 万条是目标）。
+
+    combos: [{"unit", "salary_month", "seq"}, ...]；重复组合自动去重。
+    """
+    combo_set = {(int(c.get("unit", 0) or 0), int(c.get("salary_month", 0) or 0),
+                  str(c.get("seq", "") or "")) for c in combos}
+    if not combo_set:
+        return []
+    combos_list = sorted(combo_set)
+    sql_head = """
+        SELECT
+          t93.AAC001,
+          t93.AAC003 AS 姓名,
+          ac01.AAC002 AS 身份证,
+          t93.ATC931 AS 工资所属年月,
+          t93.ATC93X AS 基本工资,
+          t93.ATC933 AS 应发工资,
+          t93.ATC93C AS 实发金额,
+          t93.ATC93D AS 个人所得税,
+          t93.ATC93AA AS 工资总额,
+          t93.ATC93W4 AS 独生子女费,
+          t93.ATC93W21 AS 采暖费,
+          t93.ATC93W1 AS 奖金,
+          t93.ATB930 AS 结算单元,
+          t93.ATC937 AS 工资发放次数,
+          t93.ATC93W2 AS 加班费,
+          t93.ATC93W3 AS 餐补,
+          t93.ATC93W9 AS 岗位工资,
+          t93.ATC93W10 AS 绩效奖金,
+          t93.BAA001 AS 养老个人,
+          t93.BAA002 AS 医疗个人,
+          t93.BAA003 AS 失业个人,
+          t93.CAA002 AS 公积金个人,
+          t93.ATC93BE AS 补缴及退款保险差额个人,
+          t93.ATC93BD AS 大病险个人,
+          t93.ATC936 AS 本次免税,
+          t93.ATC93X3 AS 个人交纳现金,
+          t93.ATC93AG AS 个人其他调整,
+          t93.ATC93E AS 个人欠款,
+          t93.ATC93Y2 AS 扣款大病险,
+          t93.ATC93Z2 AS 税后工会会费,
+          t93.BAA300 AS 个人代理费,
+          t93.ATC93BH AS 意外险个人,
+          t93.ATC930 AS tc930_id,
+          t93.ATB931 AS 结算单元名称,
+          t93.ATC93M AS 经济补偿金
+        FROM TC93 t93
+        LEFT JOIN AC01 ac01 ON t93.AAC001 = ac01.AAC001
+        WHERE t93.ATC93G = '1'
+    """
+    records = []
+    with conn.cursor() as cursor:
+        for batch_start in range(0, len(combos_list), _IN_BATCH_SIZE):
+            batch = combos_list[batch_start:batch_start + _IN_BATCH_SIZE]
+            pairs = ", ".join(f"(:u{i}, :m{i}, :s{i})" for i in range(len(batch)))
+            params = {}
+            for i, (unit, month, seq) in enumerate(batch):
+                params[f"u{i}"] = unit
+                params[f"m{i}"] = month
+                params[f"s{i}"] = seq
+            sql = (sql_head +
+                   f"  AND (t93.ATB930, t93.ATC931, t93.ATC937) IN ({pairs})\n"
+                   "  ORDER BY t93.AAC003")
+            cursor.execute(sql, params)
+            for row in cursor.fetchall():
+                records.append(SalaryRecord(
+                    职工号=str(row[0] or ""),
+                    姓名=str(row[1] or ""),
+                    身份证=str(row[2] or ""),
+                    工资所属年月=int(row[3] or 0),
+                    结算单元=int(row[12] or 0),
+                    当月批次=str(row[13] or ""),
+                    应发工资=Decimal(str(row[5] or 0)),
+                    实发工资=Decimal(str(row[6] or 0)),
+                    个人所得税=Decimal(str(row[7] or 0)),
+                    工资总额=Decimal(str(row[8] or 0)),
+                    独生子女费=Decimal(str(row[9] or 0)),
+                    采暖费=Decimal(str(row[10] or 0)),
+                    奖金=Decimal(str(row[11] or 0)),
+                    养老个人=Decimal(str(row[18] or 0)),
+                    医疗个人=Decimal(str(row[19] or 0)),
+                    失业个人=Decimal(str(row[20] or 0)),
+                    公积金个人=Decimal(str(row[21] or 0)),
+                    补缴及退款保险金额个人=Decimal(str(row[22] or 0)),
+                    大病险个人=Decimal(str(row[23] or 0)),
+                    补发3=Decimal(str(row[24] or 0)),
+                    个人交纳现金=Decimal(str(row[25] or 0)),
+                    个人其他调整=Decimal(str(row[26] or 0)),
+                    个人欠款=Decimal(str(row[27] or 0)),
+                    扣款大病险=Decimal(str(row[28] or 0)),
+                    税后工会会费=Decimal(str(row[29] or 0)),
+                    个人代理费=Decimal(str(row[30] or 0)),
+                    意外险个人=Decimal(str(row[31] or 0)),
+                    tc930_id=int(row[32] or 0),
+                    结算单元名称=str(row[33] or ""),
+                    经济补偿金=Decimal(str(row[34] or 0)),
+                ))
+    return records
+
+
 def get_abnormal_records(conn, month: int) -> List[dict]:
     """查询因状态字段异常被过滤的TC93记录 (ATC93G≠1 或 NULL)。"""
     sql = """

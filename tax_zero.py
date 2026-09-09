@@ -13,7 +13,7 @@
 """
 from decimal import Decimal
 
-from queries import get_salary_records
+from queries import get_salary_records_by_combos
 from config_db import get_zero_overrides, get_zero_salary_unit_codes, get_excluded_unit_codes
 from templates_gen.formulas import calc_本期收入
 
@@ -65,9 +65,7 @@ def build_zero_salary_suggestions(conn, pay_month, combos):
     if not combo_set or not salary_months:
         return {"pay_month": pay_month, "units": []}
 
-    records = []
-    for sm in salary_months:
-        records.extend(get_salary_records(conn, sm))
+    records = get_salary_records_by_combos(conn, combos)
     checked = [r for r in records
                if (_unit_of(r), r.工资所属年月, r.当月批次) in combo_set]
 

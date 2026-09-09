@@ -12,7 +12,7 @@
 
 用户确认后的选择可持久化（config_db.merge_override），下次默认沿用。
 """
-from queries import get_salary_records
+from queries import get_salary_records_by_combos
 from filing_history import get_filing_map
 from config_db import get_merge_overrides
 
@@ -115,9 +115,7 @@ def build_merge_suggestions(conn, pay_month, combos):
     if not combo_set or not salary_months:
         return {"pay_month": pay_month, "prev_month": None, "candidates": []}
 
-    records = []
-    for sm in salary_months:
-        records.extend(get_salary_records(conn, sm))
+    records = get_salary_records_by_combos(conn, combos)
     checked = [r for r in records
                if (r.结算单元, r.工资所属年月, r.当月批次) in combo_set]
     if not checked:
