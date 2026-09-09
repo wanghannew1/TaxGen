@@ -116,13 +116,14 @@ class TestBuildSuggestions:
         self.records = []
         self.filing = {}
 
-        def fake_salary(conn, sm):
-            return [r for r in self.records if r.工资所属年月 == sm]
+        def fake_salary(conn, combos):
+            months = {int(c.get("salary_month", 0) or 0) for c in combos}
+            return [r for r in self.records if r.工资所属年月 in months]
 
         def fake_filing_map(month, item_type="税款计算"):
             return {k: v for k, v in self.filing.items()}
 
-        monkeypatch.setattr(tax_merge, "get_salary_records", fake_salary)
+        monkeypatch.setattr(tax_merge, "get_salary_records_by_combos", fake_salary)
         monkeypatch.setattr(tax_merge, "get_filing_map", fake_filing_map)
         monkeypatch.setattr(tax_merge, "get_merge_overrides", lambda: {})
 

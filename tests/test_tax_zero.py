@@ -47,10 +47,11 @@ class TestBuildSuggestions:
     def patch_sources(self, monkeypatch):
         self.records = []
 
-        def fake_salary(conn, sm):
-            return [r for r in self.records if r.工资所属年月 == sm]
+        def fake_salary(conn, combos):
+            months = {int(c.get("salary_month", 0) or 0) for c in combos}
+            return [r for r in self.records if r.工资所属年月 in months]
 
-        monkeypatch.setattr(tax_zero, "get_salary_records", fake_salary)
+        monkeypatch.setattr(tax_zero, "get_salary_records_by_combos", fake_salary)
         monkeypatch.setattr(tax_zero, "get_zero_salary_unit_codes",
                             lambda: [101])       # 101 为配置"工资为0不申报"单元
         monkeypatch.setattr(tax_zero, "get_excluded_unit_codes",
