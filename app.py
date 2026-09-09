@@ -11,6 +11,7 @@ from templates_gen.annual_bonus import generate_annual_bonus
 from templates_gen.personnel_info import generate_personnel_info
 from templates_gen.validation import validate_salary_records
 from tax_merge import merge_records_by_person, build_merge_suggestions
+from tax_zero import build_zero_salary_suggestions, filter_zero_records, filter_zero_dicts
 
 app = Flask(__name__)
 OUTPUT_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "output")
@@ -169,6 +170,22 @@ def api_merge_suggestions():
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
+@app.route("/api/zero-suggestions", methods=["POST"])
+def api_zero_suggestions():
+    """生成前确认: 扫描待报组合中本期收入=0 的人员，给出零申报生成/不生成建议。"""
+    try:
+        data = request.get_json()
+        pay_month = int(data.get("pay_month") or 0)
+        combos = data.get("combos") or []
+        if not pay_month or not combos:
+            return jsonify({"error": "请选择月份并勾选待报组合"}), 400
+        if any(not c.get("seq") for c in combos):
+            return jsonify({"error": "组合缺少批次号"}), 400
+        conn = get_connection()
+        return jsonify(build_zero_salary_suggestions(conn, pay_month, combos))
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
 @app.route("/api/generate", methods=["POST"])
 def api_generate():
     try:
@@ -216,7 +233,18 @@ def api_generate():
         from config_db import get_zero_salary_unit_codes, get_excluded_unit_codes
         zero_codes = set(get_zero_salary_unit_codes())
         excl_codes = set(get_excluded_unit_codes())
-        if zero_codes or excl_codes:
+        zero_choices = data.get("zero_choices") or {}
+        if zero_choices:
+            # 用户已通过零申报确认面板明确选择: 以面板选择取代配置自动排除
+            # (包含"工资为0不申报"配置单元的可反转恢复); excl_codes 恒排除。
+            from config_db import upsert_zero_overrides as _persist_zero_choices
+            records = filter_zero_records(records, zero_choices, excl_codes)
+            tc93_all = filter_zero_dicts(tc93_all, zero_choices, excl_codes)
+            abnormal = filter_zero_dicts(abnormal, zero_choices, excl_codes)
+            if data.get("persist_zero_choices") and zero_choices:
+                _persist_zero_choices({c: m for c, m in zero_choices.items()
+                                       if m in ("declare", "skip")})
+        elif zero_codes or excl_codes:
             def _keep(unit, salary_total):
                 if unit in excl_codes:
                     return False

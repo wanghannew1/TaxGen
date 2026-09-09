@@ -478,6 +478,8 @@
                     </div>
                     <button id="btnMergeCheck" class="btn btn-outline-warning w-100 mt-2">检查合并规则并确认</button>
                     <span id="mergeConfirmedBadge" class="text-success small mt-1" style="display:none;"></span>
+                    <button id="btnZeroCheck" class="btn btn-outline-info w-100 mt-2">检查零申报并确认</button>
+                    <span id="zeroConfirmedBadge" class="text-success small mt-1" style="display:none;"></span>
                     <div class="d-flex align-items-center gap-2 mb-2">
                         <label class="form-label form-label-sm mb-0" for="annualAvgWage">
                             年平均工资总额
@@ -620,6 +622,34 @@
         </div>
     </div>
 
+    <!-- 零申报确认 Modal (本期收入=0 人员是否生成零申报) -->
+    <div class="modal fade" id="zeroConfirmModal" tabindex="-1" aria-labelledby="zeroConfirmModalLabel" aria-hidden="true">
+        <div class="modal-dialog modal-xl modal-dialog-scrollable">
+            <div class="modal-content">
+                <div class="modal-header">
+                    <h5 class="modal-title" id="zeroConfirmModalLabel">零申报确认（本期收入为0人员）</h5>
+                    <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="关闭"></button>
+                </div>
+                <div class="modal-body">
+                    <p class="text-muted small" id="zeroModalSubtitle"></p>
+                    <div class="d-flex gap-2 mb-3">
+                        <button type="button" class="btn btn-sm btn-outline-primary" id="btnZeroAllSuggested">全部按建议</button>
+                        <button type="button" class="btn btn-sm btn-outline-success" id="btnZeroAllDeclare">全部生成零申报</button>
+                        <button type="button" class="btn btn-sm btn-outline-danger" id="btnZeroAllSkip">全部不生成</button>
+                    </div>
+                    <div class="form-check mb-3">
+                        <input class="form-check-input" type="checkbox" id="persistZero">
+                        <label class="form-check-label" for="persistZero">记住本次选择（持久化到配置）</label>
+                    </div>
+                    <div id="zeroUnitsContainer"></div>
+                </div>
+                <div class="modal-footer">
+                    <button type="button" class="btn btn-primary" id="btnZeroConfirm">确认并关闭</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
     <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
     <script>
         const monthSelect = document.getElementById('monthSelect');
@@ -678,12 +708,25 @@
         const btnMergeAllDouble = document.getElementById('btnMergeAllDouble');
         const btnMergeAllSingle = document.getElementById('btnMergeAllSingle');
         const btnMergeConfirm = document.getElementById('btnMergeConfirm');
+        const btnZeroCheck = document.getElementById('btnZeroCheck');
+        const zeroConfirmedBadge = document.getElementById('zeroConfirmedBadge');
+        const zeroConfirmModal = document.getElementById('zeroConfirmModal');
+        const zeroModalSubtitle = document.getElementById('zeroModalSubtitle');
+        const zeroUnitsContainer = document.getElementById('zeroUnitsContainer');
+        const persistZeroCb = document.getElementById('persistZero');
+        const btnZeroAllSuggested = document.getElementById('btnZeroAllSuggested');
+        const btnZeroAllDeclare = document.getElementById('btnZeroAllDeclare');
+        const btnZeroAllSkip = document.getElementById('btnZeroAllSkip');
+        const btnZeroConfirm = document.getElementById('btnZeroConfirm');
         let searchResults = [];
         let tempList = [];
         let importedNames = [];
         let mergeChoices = {};
         let persistMergeChoices = false;
         let mergeCandidatesData = [];
+        let zeroChoices = {};
+        let persistZeroChoices = false;
+        let zeroUnitsData = [];
 
         document.addEventListener('DOMContentLoaded', function() {
             suggestionsCard.style.display = 'block';
@@ -716,6 +759,15 @@
         btnMergeAllDouble.addEventListener('click', () => setAllMergeChoices('double'));
         btnMergeAllSingle.addEventListener('click', () => setAllMergeChoices('single'));
         btnMergeConfirm.addEventListener('click', confirmMergeChoices);
+        btnZeroCheck.addEventListener('click', checkZeroSalary);
+        btnZeroAllSuggested.addEventListener('click', () => setAllZeroChoices('suggested'));
+        btnZeroAllDeclare.addEventListener('click', () => setAllZeroChoices('declare'));
+        btnZeroAllSkip.addEventListener('click', () => setAllZeroChoices('skip'));
+        btnZeroConfirm.addEventListener('click', confirmZeroChoices);
+        zeroUnitsContainer.addEventListener('click', function(e) {
+            const btn = e.target.closest('[data-unit-action]');
+            if (btn) setZeroUnitChoices(parseInt(btn.dataset.unitIndex), btn.dataset.unitAction);
+        });
         btnSearch.addEventListener('click', doSearch);
         btnAddToList.addEventListener('click', addToList);
         btnSearchSelectAll.addEventListener('click', () => { setSearchCheckboxes(true); });
@@ -739,6 +791,10 @@
             persistMergeChoices = false;
             mergeConfirmedBadge.style.display = 'none';
             mergeConfirmedBadge.textContent = '';
+            zeroChoices = {};
+            persistZeroChoices = false;
+            zeroConfirmedBadge.style.display = 'none';
+            zeroConfirmedBadge.textContent = '';
         });
 
         function checkMergeRules() {
@@ -822,6 +878,129 @@
             mergeConfirmedBadge.textContent = `已确认 ${n} 人合并规则`;
             mergeConfirmedBadge.style.display = 'block';
             bootstrap.Modal.getInstance(mergeConfirmModal).hide();
+        }
+
+        function checkZeroSalary() {
+            hideError();
+            const month = monthSelect.value;
+            if (!month) { showError('请选择月份'); return; }
+            if (tempList.length === 0) { showError('请先搜索并添加报税批次到待报列表'); return; }
+            const confirmedCombos = getSelectedListCombos();
+            if (confirmedCombos.length === 0) { showError('请在待报列表中勾选要报送的批次'); return; }
+
+            btnZeroCheck.disabled = true;
+            btnZeroCheck.textContent = '检查中...';
+            fetch('/api/zero-suggestions', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ pay_month: parseInt(month), combos: confirmedCombos })
+            })
+            .then(async resp => {
+                const data = await resp.json();
+                if (!resp.ok || data.error) { showError(data.error || '检查零申报失败，请稍后重试'); return; }
+                const total = (data.units || []).reduce((s, u) => s + u.count, 0);
+                if (!data.units || data.units.length === 0) { alert('本月无本期收入为0的人员'); return; }
+                renderZeroSuggestions(data);
+                zeroModalSubtitle.textContent = `本月共 ${total} 条本期收入为0的记录，${data.units.length} 个结算单元`;
+                bootstrap.Modal.getOrCreateInstance(zeroConfirmModal).show();
+            })
+            .catch(e => showError(`检查零申报失败: ${e.message}`))
+            .finally(() => {
+                btnZeroCheck.disabled = false;
+                btnZeroCheck.textContent = '检查零申报并确认';
+            });
+        }
+
+        function renderZeroSuggestions(data) {
+            zeroUnitsData = data.units;
+            zeroUnitsContainer.innerHTML = '';
+            data.units.forEach((unit, ui) => {
+                const cfgBadge = unit.config === 'zero_salary_no_add'
+                    ? '<span class="badge bg-warning text-dark">配置不申报</span>'
+                    : '<span class="badge bg-secondary">普通单元</span>';
+                const rows = unit.persons.map(p => {
+                    const persistedBadge = p.persisted ? ' <span class="badge bg-warning text-dark">已记住</span>' : '';
+                    const suggestedText = p.suggested === 'skip' ? '不生成' : '生成';
+                    const months = (p.salary_months || []).join('、');
+                    return `
+                        <tr>
+                            <td>${p.name || ''}</td>
+                            <td>${p.cert_no || ''}</td>
+                            <td>${p.emp_no || ''}</td>
+                            <td>${months}</td>
+                            <td>${p.income_total.toLocaleString('zh-CN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</td>
+                            <td>${suggestedText}${persistedBadge}</td>
+                            <td>${p.reason || ''}</td>
+                            <td>
+                                <select class="form-select form-select-sm zero-choice" id="zc_${ui}_${p.cert_no}">
+                                    <option value="declare" ${p.default_chosen === 'declare' ? 'selected' : ''}>生成</option>
+                                    <option value="skip" ${p.default_chosen === 'skip' ? 'selected' : ''}>不生成</option>
+                                </select>
+                            </td>
+                        </tr>`;
+                }).join('');
+                zeroUnitsContainer.innerHTML += `
+                    <div class="card mb-3 border">
+                        <div class="card-header py-2 d-flex justify-content-between align-items-center">
+                            <span class="fw-bold">${unit.unit_name || unit.unit}（${unit.unit}）${cfgBadge}
+                                <span class="text-muted fw-normal">共 ${unit.count} 条 / 合计 ${unit.income_total.toLocaleString('zh-CN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} 元</span>
+                            </span>
+                            <span class="d-flex gap-2">
+                                <button type="button" class="btn btn-sm btn-outline-primary" data-unit-action="suggested" data-unit-index="${ui}">按建议</button>
+                                <button type="button" class="btn btn-sm btn-outline-success" data-unit-action="declare" data-unit-index="${ui}">全部生成</button>
+                                <button type="button" class="btn btn-sm btn-outline-danger" data-unit-action="skip" data-unit-index="${ui}">全部不生成</button>
+                            </span>
+                        </div>
+                        <div class="card-body p-0">
+                            <table class="table table-striped table-hover mb-0 zero-unit-table">
+                                <thead>
+                                    <tr>
+                                        <th>姓名</th>
+                                        <th>证件号码</th>
+                                        <th>职工号</th>
+                                        <th>所属月</th>
+                                        <th>本期收入</th>
+                                        <th>建议</th>
+                                        <th>理由</th>
+                                        <th>选择</th>
+                                    </tr>
+                                </thead>
+                                <tbody>${rows}</tbody>
+                            </table>
+                        </div>
+                    </div>`;
+            });
+        }
+
+        function setZeroUnitChoices(unitIndex, mode) {
+            const unit = zeroUnitsData[unitIndex];
+            if (!unit) return;
+            document.querySelectorAll('#zeroUnitsContainer .zero-choice').forEach(sel => {
+                const idx = sel.id.replace('zc_', '').split('_')[0];
+                if (idx !== String(unitIndex)) return;
+                if (mode === 'declare') { sel.value = 'declare'; return; }
+                if (mode === 'skip') { sel.value = 'skip'; return; }
+                const certNo = sel.id.replace(`zc_${unitIndex}_`, '');
+                const p = unit.persons.find(x => x.cert_no === certNo);
+                sel.value = p ? p.suggested : 'declare';
+            });
+        }
+
+        function setAllZeroChoices(mode) {
+            zeroUnitsData.forEach((_, ui) => setZeroUnitChoices(ui, mode));
+        }
+
+        function confirmZeroChoices() {
+            zeroChoices = {};
+            document.querySelectorAll('#zeroUnitsContainer .zero-choice').forEach(sel => {
+                const certNo = sel.id.replace(/^zc_\d+_/, '');
+                zeroChoices[certNo] = sel.value;
+            });
+            persistZeroChoices = persistZeroCb.checked;
+            const n = Object.keys(zeroChoices).length;
+            zeroConfirmedBadge.textContent = `已确认 ${n} 人零申报`;
+            zeroConfirmedBadge.style.display = 'block';
+            bootstrap.Modal.getInstance(zeroConfirmModal).hide();
         }
 
         function showError(message) {
@@ -1266,6 +1445,10 @@
                 if (Object.keys(mergeChoices).length > 0) {
                     body.merge_choices = mergeChoices;
                     body.persist_merge_choices = persistMergeChoices;
+                }
+                if (Object.keys(zeroChoices).length > 0) {
+                    body.zero_choices = zeroChoices;
+                    body.persist_zero_choices = persistZeroChoices;
                 }
                 const resp = await fetch('/api/generate', {
                     method: 'POST',
