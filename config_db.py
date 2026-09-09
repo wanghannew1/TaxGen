@@ -51,6 +51,13 @@ def init_db() -> None:
             updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         )
     """)
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS zero_override (
+            cert_no TEXT PRIMARY KEY,
+            mode TEXT DEFAULT 'declare' CHECK (mode IN ('declare', 'skip')),
+            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+    """)
     conn.commit()
     conn.close()
 
@@ -211,6 +218,39 @@ def upsert_merge_overrides(choices: dict) -> None:
             continue
         conn.execute(
             "INSERT INTO merge_override (cert_no, mode) VALUES (?, ?) "
+            "ON CONFLICT(cert_no) DO UPDATE SET mode = excluded.mode, "
+            "updated_at = CURRENT_TIMESTAMP",
+            (str(cert_no), mode))
+    conn.commit()
+    conn.close()
+
+
+# ---------------------------------------------------------------------------
+# zero_override: 零申报（工资为0人员是否生成零申报）用户确认选择持久化
+# cert_no 为主键（一人一种处理方式，覆盖式更新）
+# mode: 'declare'=生成零申报 | 'skip'=不生成（跳过该人零申报记录）
+# ---------------------------------------------------------------------------
+
+def get_zero_overrides() -> dict:
+    """查询全部持久化的零申报选择覆盖，返回 {cert_no: {'mode': ..., 'updated_at': ...}}。"""
+    conn = get_db()
+    rows = conn.execute(
+        "SELECT cert_no, mode, updated_at FROM zero_override").fetchall()
+    conn.close()
+    return {str(r["cert_no"]): {"mode": str(r["mode"] or "declare"),
+                                "updated_at": str(r["updated_at"] or "")} for r in rows}
+
+
+def upsert_zero_overrides(choices: dict) -> None:
+    """写入/更新零申报选择覆盖（用户"记住本次选择"）。choices: {cert_no: 'declare'|'skip'}。"""
+    if not choices:
+        return
+    conn = get_db()
+    for cert_no, mode in choices.items():
+        if mode not in ("declare", "skip"):
+            continue
+        conn.execute(
+            "INSERT INTO zero_override (cert_no, mode) VALUES (?, ?) "
             "ON CONFLICT(cert_no) DO UPDATE SET mode = excluded.mode, "
             "updated_at = CURRENT_TIMESTAMP",
             (str(cert_no), mode))
