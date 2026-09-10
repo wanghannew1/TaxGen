@@ -45,7 +45,7 @@ def _log_api_error(e):
 def _apply_scope_filter(combo_set, scope_map):
     """按结算单元 salary_month_scope 配置过滤组合集合。
 
-    默认 'all' 保留全部所属月(翻倍合并); 'latest_N' 仅保留所属月最大的 N 个月,
+    默认 'all' 保留全部所属月(多月合并); 'latest_N' 仅保留所属月最大的 N 个月,
     'first_N' 仅保留所属月最小的 N 个月。非法配置回退 'all' 全保留, 避免丢数据。
     """
     if not scope_map:
@@ -175,7 +175,7 @@ def api_tc8m_search():
 
 @app.route("/api/merge-suggestions", methods=["POST"])
 def api_merge_suggestions():
-    """生成前确认: 扫描待报组合中的跨月合并人员，给出翻倍/单倍判定建议。"""
+    """生成前确认: 扫描待报组合中的跨月合并人员，给出多月/当月判定建议。"""
     try:
         data = request.get_json()
         pay_month = int(data.get("pay_month") or 0)
@@ -236,7 +236,7 @@ def _merge_suggestions_to_xlsx(res: dict):
     ws.title = "合并确认"
     headers = ["工资单(结算单元-所属月-批次)", "姓名", "证件号", "职工号", "主结算单元",
                "上月状态", "建议", "置信度", "理由",
-               "本期收入合计", "三险-翻倍", "三险-单倍", "选择(翻倍/单倍)"]
+               "本期收入合计", "三险-多月", "三险-当月", "选择(当月/多月)"]
     ws.append(headers)
     ws.freeze_panes = "A2"
     head_fill = PatternFill("solid", fgColor="DDEBF7")
@@ -259,13 +259,13 @@ def _merge_suggestions_to_xlsx(res: dict):
                 c.get("emp_no", ""),
                 main_name(c),
                 c.get("prev_status", ""),
-                "翻倍" if c.get("suggested") == "double" else "单倍",
+                "多月" if c.get("suggested") == "double" else "当月",
                 {"high": "高", "medium": "中", "low": "低"}.get(c.get("confidence"), ""),
                 c.get("reason", ""),
                 c.get("income_total", 0),
                 c.get("insurance_double", 0),
                 c.get("insurance_single", 0),
-                "翻倍" if c.get("default_chosen", c.get("suggested")) == "double" else "单倍",
+                "多月" if c.get("default_chosen", c.get("suggested")) == "double" else "当月",
             ])
 
     width_map = {"A": 55, "B": 10, "C": 20, "D": 10, "E": 24, "F": 8,
@@ -284,7 +284,7 @@ def _merge_suggestions_to_xlsx(res: dict):
 
 @app.route("/api/merge-suggestions/import", methods=["POST"])
 def api_merge_suggestions_import():
-    """导回合并确认 Excel: 解析"选择(翻倍/单倍)"列, 按证件号返回 {cert_no: mode}。"""
+    """导回合并确认 Excel: 解析"选择(当月/多月)"列, 按证件号返回 {cert_no: mode}。"""
     try:
         f = request.files.get("file")
         if not f or not f.filename:
@@ -296,21 +296,23 @@ def api_merge_suggestions_import():
         if not rows:
             return jsonify({"error": "文件为空"}), 400
         header = [str(h or "").strip() for h in rows[0]]
-        if "证件号" not in header or "选择(翻倍/单倍)" not in header:
-            return jsonify({"error": "列不匹配: 需要 证件号 与 选择(翻倍/单倍) 列（请用本系统导出的 Excel 修改）"}), 400
+        mode_col = next((h for h in header if h in ("选择(当月/多月)", "选择(翻倍/单倍)")), None)
+        if "证件号" not in header or not mode_col:
+            return jsonify({"error": "列不匹配: 需要 证件号 与 选择(当月/多月) 列（请用本系统导出的 Excel 修改；旧版列名 选择(翻倍/单倍) 也支持）"}), 400
         i_cert = header.index("证件号")
-        i_mode = header.index("选择(翻倍/单倍)")
+        i_mode = header.index(mode_col)
         choices = {}
         for r in rows[1:]:
             cert = str(r[i_cert] or "").strip()
             mode_raw = str(r[i_mode] or "").strip()
             if not cert or not mode_raw:
                 continue
-            mode = "double" if "翻倍" in mode_raw else ("single" if "单倍" in mode_raw else "")
+            mode = "double" if ("多月" in mode_raw or "翻倍" in mode_raw) \
+                else ("single" if ("当月" in mode_raw or "单倍" in mode_raw) else "")
             if mode:
                 choices[cert] = mode
             elif cert:
-                return jsonify({"error": f"证件号 {cert} 的选择列含无法识别值: '{mode_raw}'（仅支持 翻倍/单倍）"}), 400
+                return jsonify({"error": f"证件号 {cert} 的选择列含无法识别值: '{mode_raw}'（仅支持 当月/多月）"}), 400
         if not choices:
             return jsonify({"error": "未解析到任何有效的选择记录"}), 400
         return jsonify({"count": len(choices), "choices": choices})
