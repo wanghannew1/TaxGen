@@ -1,27 +1,31 @@
-"""tax_merge.py - 三险一金合并规则（多月/当月）判定建议
+"""tax_merge.py - 三险一金合并规则（多月/单月/不报）判定建议
 
 核心问题：同一发放月内同人跨多个所属月（双月同发/跨月补报）合并申报时，
-三险一金应多月合并（上月三险并入本月）还是当月（只报本月所属月三险）？
+三险一金应多月合并（上月三险并入本月）还是单月（只报一个月所属月三险）？
+用户还可手动选"不报"（三险按 0 报，如本人当月确无工资）。
 
-术语（2026-09-10 改名，issue IKEMCM/#6 后续）："多月"= 各所属月三险全部并入
-本期（原"翻倍"，并非金额×2）；"当月"= 只报所属月==发放月的三险（原"单倍"）。
+术语（2026-09-10 改名）："多月"= 各所属月三险全部并入本期（原"翻倍"，并非金额×2）；
+"单月"= 只报一个月的三险（原"单倍"/原"当月"）——优先指所属月==发放月的记录；
+甲方压月发工资时发放月内没有所属月==发放月的记录，缺省取最新所属月。
+"不报"= 三险一金全部按 0（用户手动备选，不默认；2026-09-10 用户确认）。
 
-当月取数口径：当月（所属月==发放月，缺省取最新所属月）**全部记录**的三险之和，
+单月取数口径：所属月==发放月（缺省取最新所属月）**全部记录**的三险之和，
 而非 tc930_id 最大的基准记录一条——同月多批次时含三险的批次可能不是基准记录，
-只取基准会漏报当月三险（2026-09-10 修复，issue IKEMCM/#6）。
+只取基准会漏报单月三险（2026-09-10 修复，issue IKEMCM/#6）。
 
 自动跳过（2026-09-10 用户确认）：当三险只出现在发放月这一个月份时，
-当月==多月 金额相同，不涉及"合并与否"的选择 → 不列入确认候选，自动按当月处理。
+单月==多月 金额相同，不涉及"合并与否"的选择 → 不列入确认候选，自动按单月处理。
 
 数据依据：上月报送档（filing_record 税款计算，month=税款所属期）中该人状态
 （见 docs/0申报三险一金合并规则分析.md 实证）：
-- 上月有报（三险>0）→ 当月（99.5%）
+- 上月有报（三险>0）→ 单月（99.5%）
 - 上月零申报（收入=0 三险=0）→ 多月（61%，其余39%不合并 → 需用户判断）
-- 上月未找到 → 当月（100%）
-- 本月任何记录 ATC93BE≠0（借支/补缴缴费）→ 当月（强制，BE 已在收入侧扣除）
+- 上月未找到 → 单月（100%）
+- 本月任何记录 ATC93BE≠0（借支/补缴缴费）→ 单月（强制，BE 已在收入侧扣除）
 
 用户确认后的选择可持久化（config_db.merge_override），下次默认沿用。
 """
+from decimal import Decimal
 from queries import get_salary_records_by_combos, get_unit_insurance_stats
 from filing_history import get_filing_map
 from config_db import get_merge_overrides
@@ -35,21 +39,28 @@ MAIN_UNIT_INSURED_RATIO = 0.8  # 有保险人数占比 ≥80% 视为"绝大部�
 
 def merge_records_by_person(records, by_pay_month: bool = False,
                             single_certs: set | None = None,
+                            skip_certs: set | None = None,
                             cur_month: int | None = None):
     """按人合并多条工资记录为一笔，基准取时间上最后一个批次(批次号最大、流水号最大)。
 
     by_pay_month=False: 按人+所属月份合并（现状，同人同月多笔合并，同一人可能多行）。
     by_pay_month=True:  按人+发放月份合并（同一发放月份内每人一行，跨所属月份的收入/五险一金/个税全部合计）。
                         仅适用于组合确认流程——所有组合共享同一发放月份(TC8M.ATC8G7)。
-    single_certs: 三险一金按"当月"处理的证件号集合（用户确认"多月合并"之外的人员）。
+    single_certs: 三险一金按"单月"处理的证件号集合（用户确认"多月合并"之外的人员）。
                   这些人的收入/个税仍跨所属月累加，但养老/医疗/失业/公积金只取
-                  **当月（cur_month，缺省=max 工资所属年月）全部记录**之和，
+                  **单月（cur_month，缺省=max 工资所属年月）全部记录**之和，
                   不累加其他所属月（上月在旧档已报过的三险不再并入本月，避免重复扣除）。
                   （2026-09-10 修复 IKEMCM/#6：原实现只取基准记录一条，同月多批次时
-                  含三险的批次可能不是基准记录导致漏报当月三险。）
+                  含三险的批次可能不是基准记录导致漏报单月三险。压月发时发放月无记录，
+                  缺省取最新所属月，与 build_merge_suggestions 口径一致。）
+    skip_certs: 三险一金"不报"的证件号集合（用户手动选择，2026-09-10）：
+                这些人的收入/个税仍跨所属月正常累加，但养老/医疗/失业/公积金
+                **全部按 0 上报**（如某人当月可能已无工资，需按 0 报三险）。
+                优先级高于 single_certs。
     """
     from copy import deepcopy
     single_certs = single_certs or set()
+    skip_certs = skip_certs or set()
     group_key = (lambda rec: (rec.职工号,)) if by_pay_month \
         else (lambda rec: (rec.职工号, rec.工资所属年月))
     groups = {}
@@ -64,10 +75,23 @@ def merge_records_by_person(records, by_pay_month: bool = False,
             base = max(recs, key=lambda r: (int(r.当月批次 or 0), r.tc930_id))
         m = deepcopy(base)
         single = by_pay_month and m.身份证 in single_certs
-        if single:
+        skip = by_pay_month and m.身份证 in skip_certs
+        if skip:
+            # 不报三险: 用户手动选择, 养老/医疗/失业/公积金全按 0 (收入照常累加)
+            # 优先级高于 single: 显式"不报"覆盖单月口径
+            m.养老个人 = Decimal("0")
+            m.医疗个人 = Decimal("0")
+            m.失业个人 = Decimal("0")
+            m.公积金个人 = Decimal("0")
+        elif single:
             month = cur_month if cur_month is not None else \
                 max(int(r.工资所属年月 or 0) for r in recs)
             cur_recs = [r for r in recs if int(r.工资所属年月 or 0) == month]
+            if not cur_recs:
+                # 压月发工资: 发放月没有所属月==cur_month 的记录(如 202608 发 6/7 月工资),
+                # 缺省取最新所属月, 与 build_merge_suggestions 口径一致 (2026-09-10 李浩案例)
+                month = max(int(r.工资所属年月 or 0) for r in recs)
+                cur_recs = [r for r in recs if int(r.工资所属年月 or 0) == month]
             m.养老个人 = sum(r.养老个人 for r in cur_recs)
             m.医疗个人 = sum(r.医疗个人 for r in cur_recs)
             m.失业个人 = sum(r.失业个人 for r in cur_recs)
@@ -82,7 +106,7 @@ def merge_records_by_person(records, by_pay_month: bool = False,
             m.独生子女费 += rec.独生子女费
             m.采暖费 += rec.采暖费
             m.奖金 += rec.奖金
-            if not single:
+            if not (single or skip):
                 m.养老个人 += rec.养老个人
                 m.医疗个人 += rec.医疗个人
                 m.失业个人 += rec.失业个人
@@ -132,11 +156,12 @@ def _main_unit_of(recs, main_units):
 
 def _slips_of(recs, cur_month=None):
     """某人全部工资单明细（跨单元/月/批次），排序: 含三险一金的排最前
-    （其中所属月==当月/pay_month 的第一个），其余按所属月升序。
+    （其中所属月==单月/pay_month 的第一个），其余按所属月降序（最新在前）。
 
     is_base: 该工资单是否为基准记录(tc930_id 最大, 最新经办)。
-    当月取数口径(2026-09-10 IKEMCM/#6): 当月(所属月==cur_month, 缺省 max 所属月)
+    单月取数口径(2026-09-10 IKEMCM/#6): 单月(所属月==cur_month, 缺省 max 所属月)
     全部 slips 的三险之和, 而非基准记录一条。
+    排序基准(2026-09-10 用户确认): 6月/7月工资应 7月在前 6月在后（压月发, 最新所属月在前）。
     """
     if cur_month is None:
         cur_month = max(int(r.工资所属年月 or 0) for r in recs)
@@ -161,12 +186,12 @@ def _slips_of(recs, cur_month=None):
             "insurance": round(pension + medical + unemp + housing, 2),
             "is_base": r is base,
         })
-    # 排序: ①含三险一金的排最前 ②含三险的其中所属月==当月(pay_month)的第一个
-    # ③无三险的保持按所属月升序 (当月优先只作用于含三险记录)
+    # 排序: ①含三险一金的排最前 ②含三险的其中所属月==单月(pay_month)的第一个
+    # ③其余按所属月降序（最新在前，压月发时 7月在前 6月在后；2026-09-10 用户确认）
     slips.sort(key=lambda s: (
         0 if s["insurance"] > 0 else 1,
         0 if (s["insurance"] > 0 and s["salary_month"] == cur_month) else 1,
-        s["salary_month"], s["unit"], s["seq"]))
+        -s["salary_month"], s["unit"], s["seq"]))
     return slips
 
 
@@ -184,7 +209,7 @@ def _status_of(prev):
 
 
 def build_merge_suggestions(conn, pay_month, combos):
-    """扫描指定发放月已确认组合中的跨月合并人员，给出多月/当月判定建议。
+    """扫描指定发放月已确认组合中的跨月合并人员，给出多月/单月判定建议。
 
     Args:
         conn: Oracle 连接（只读）
@@ -203,7 +228,7 @@ def build_merge_suggestions(conn, pay_month, combos):
             ]
         }
 
-    自动跳过（2026-09-10 用户确认）：三险只出现在发放月这一个月份时（当月==多月），
+    自动跳过（2026-09-10 用户确认）：三险只出现在发放月这一个月份时（单月==多月），
     不涉及"合并与否"的选择，不列入候选。
     """
     combo_set = {(int(c.get("unit", 0) or 0), int(c.get("salary_month", 0) or 0),
@@ -238,7 +263,7 @@ def build_merge_suggestions(conn, pay_month, combos):
     for cert, recs in by_person.items():
         months = sorted({r.工资所属年月 for r in recs})
         if len(months) < 2:
-            continue  # 不跨所属月 → 无多月/当月问题
+            continue  # 不跨所属月 → 无多月/单月问题
         pm = _prev_month_of(months)
         prev_months.add(pm)
         persons[cert] = (pm, recs)
@@ -257,11 +282,11 @@ def build_merge_suggestions(conn, pay_month, combos):
         be_flag = any(float(r.补缴及退款保险金额个人 or 0) != 0 for r in recs)
 
         if be_flag:
-            suggested, reason, confidence = "single", "本月ATC93BE≠0（借支/补缴）→ 只报当月三险（不合并上报）", "high"
+            suggested, reason, confidence = "single", "本月ATC93BE≠0（借支/补缴）→ 只报单月三险（不合并上报）", "high"
         elif status == "有报":
-            suggested, reason, confidence = "single", "上月已报三险 → 只报当月（避免重复扣除）", "high"
+            suggested, reason, confidence = "single", "上月已报三险 → 只报单月（避免重复扣除）", "high"
         elif status == "未找到":
-            suggested, reason, confidence = "single", "上月未找到 → 只报当月（历史0例多月合并上报）", "high"
+            suggested, reason, confidence = "single", "上月未找到 → 只报单月（历史0例多月合并上报）", "high"
         else:
             suggested, reason, confidence = "double", "上月零申报 → 多月合并上报（61%实证，请确认）", "medium"
 
@@ -280,13 +305,19 @@ def build_merge_suggestions(conn, pay_month, combos):
         slips = _slips_of(recs, cur_month=pay_month)
         # 合并金额口径 (与 merge_records_by_person 一致):
         # 收入(本期收入)跨月总是全加; 三险一金 多月=各月全加,
-        # 当月=pay_month(所属月==发放月)全部 slips 之和 (2026-09-10 IKEMCM/#6)。
+        # 单月=pay_month(所属月==发放月, 缺省最新所属月)全部 slips 之和 (2026-09-10 IKEMCM/#6)。
         income_total = round(sum(float(calc_本期收入(r)) for r in recs), 2)
         insurance_double = round(sum(s["insurance"] for s in slips), 2)
+        # 单月=pay_month(所属月==发放月)全部 slips 之和 (2026-09-10 IKEMCM/#6);
+        # 压月发工资时发放月可能没有"所属月==发放月"的记录(如 202608 发放的却是 6/7 月工资),
+        # 缺省取最新所属月(2026-09-10 李浩案例: 单月=7月 2889.62, 而非 0)。
         cur_slips = [s for s in slips if s["salary_month"] == pay_month]
+        if not cur_slips:
+            latest_sm = max(s["salary_month"] for s in slips)
+            cur_slips = [s for s in slips if s["salary_month"] == latest_sm]
         insurance_single = round(sum(s["insurance"] for s in cur_slips), 2)
         if insurance_single == insurance_double:
-            # 三险只出现在发放月这一个月份 → 当月/多月金额相同, 无"合并与否"选择
+            # 三险只出现在一个月份（单月==多月）→ 无"合并与否"选择
             # （用户 2026-09-10）: 不列候选, 生成侧按哪条处理结果一致
             continue
         KEY_KINDS = ("pension", "medical", "unemployment", "housing")

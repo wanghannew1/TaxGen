@@ -652,14 +652,15 @@
                     <div class="alert alert-info py-2 px-3 mb-2 small">
                         <i class="bi bi-info-circle me-1"></i>
                         <strong>多月</strong>=把多笔工资单的三险一金<strong>合并上报</strong>（含全部所属月的三险）；
-                        <strong>当月</strong>=只上报<strong>所属月份为当月</strong>的三险一金（不合并前几个月的，前月三险已在旧档申报）。
-                        只有三险出现在当月这一个月份时自动跳过（当月/多月金额相同，无需选择）。
+                        <strong>单月</strong>=只上报<strong>一个月的三险一金</strong>（优先取所属月==发放月的记录；甲方压月发工资时发放月没有当月工资，缺省取最新所属月）；
+                        <strong>不报</strong>=三险一金<strong>按 0 上报</strong>（本人当月确无工资等少见情形，仅备选、不默认）。
+                        只有三险出现在一个月份时自动跳过（单月/多月金额相同，无需选择）。
                         按主结算单元分组（该单元绝大多数人缴五险一金）；下拉框可逐人调整。
                     </div>
                     <div class="d-flex gap-2 mb-2">
                         <button type="button" class="btn btn-sm btn-outline-primary" id="btnMergeAllSuggested">全部按建议</button>
                         <button type="button" class="btn btn-sm btn-outline-success" id="btnMergeAllDouble">全部多月</button>
-                        <button type="button" class="btn btn-sm btn-outline-danger" id="btnMergeAllSingle">全部当月</button>
+                        <button type="button" class="btn btn-sm btn-outline-danger" id="btnMergeAllSingle">全部单月</button>
                         <span class="text-muted small ms-2 align-self-center">共 <span id="mergeTotalCount">0</span> 人，按主结算单元分组；用 Excel 大量修改后导回</span>
                     </div>
                     <div class="form-check mb-2">
@@ -750,7 +751,7 @@
                                 <span class="guide-step-num">4</span>
                                 <div>
                                     <div class="fw-semibold"><i class="bi bi-shuffle text-primary me-1"></i>检查合并规则</div>
-                                    <small class="text-muted">处理跨月发放人员三险一金多月/当月，逐人确认</small>
+                                    <small class="text-muted">处理跨月发放人员三险一金多月/单月，逐人确认</small>
                                 </div>
                             </div>
                         </div>
@@ -819,12 +820,13 @@
                                 <div class="accordion-body">
                                     <p class="small text-muted mb-2">同一人在待报批次中跨了多个<strong>所属月</strong>时，其三险一金需要人工确认：
                             <strong>多月</strong>=把多笔工资单的三险一金<strong>合并上报</strong>；
-                            <strong>当月</strong>=只上报<strong>所属月份为当月</strong>的三险一金（不合并前几个月的）。
-                            三险只出现在当月这一个月份时自动跳过确认（当月/多月金额相同）。</p>
+                            <strong>单月</strong>=只上报<strong>一个月的三险一金</strong>（优先取所属月==发放月的记录；压月发时缺省取最新所属月）。
+                            三险只出现在一个月份时自动跳过确认（单月/多月金额相同）。</p>
                                     <ol class="mb-2">
                                         <li>确认待报列表中<strong>勾选了本次要报送的批次</strong>（未勾选的不参与检查）。</li>
                                         <li>点「检查合并规则并确认」，弹窗列出每个跨月人员：姓名、证件号、涉及结算单元、所属月、上月档案状态、系统建议、置信度、理由。</li>
-                                        <li>为每人选定「当月」或「多月」：逐个调整下拉框，或用批量按钮<strong>全部按建议（推荐）/ 全部多月 / 全部当月</strong>。</li>
+                                        <li>为每人选定「单月」「多月」或「不报」（三险按 0，仅备选）：
+                                        逐个调整下拉框，或用批量按钮<strong>全部按建议（推荐）/ 全部多月 / 全部单月</strong>。</li>
                                         <li>（可选）勾选「记住本次选择」持久化到配置，下月同一人默认沿用（带黄色「已记住」徽标）。</li>
                                         <li>点「确认并关闭」，待报列表出现绿色标记「已确认 N 人合并规则」。</li>
                                     </ol>
@@ -887,7 +889,7 @@
                                         <li>入口：主页面右上角「历史申报库」。保存税务局个税端导出的历史申报文件，供<strong>合并规则判定</strong>和<strong>回盘比对</strong>使用（数据存本地 SQLite，不写 Oracle）。</li>
                                         <li>导入：个税端导出 Excel → 历史申报库页选择文件（可多选）→ 上传；系统按<strong>表头自动识别</strong> 4 类文件（税款计算/正常工资薪金/劳务报酬/全年一次性奖金），单文件失败不影响其他文件。</li>
                                         <li>合并规则判定只用<strong>税款计算</strong>类；建议导入最近 1-2 个申报期的税款计算文件即可；同人同月同类型重复导入自动覆盖。</li>
-                                        <li><strong>不导入也能用</strong>：合并规则全部判"上月未找到"→ 当月（保守，不虚增），但导入后零申报人员会得到"多月"建议（61% 实证），避免漏报三险。</li>
+                                        <li><strong>不导入也能用</strong>：合并规则全部判"上月未找到"→ 单月（保守，不虚增），但导入后零申报人员会得到"多月"建议（61% 实证），避免漏报三险。</li>
                                     </ul>
                                 </div>
                             </div>
@@ -917,7 +919,7 @@
                                             <tbody>
                                                 <tr>
                                                     <td>上月有报（三险&gt;0）</td>
-                                                    <td><span class="badge text-bg-primary">当月</span></td>
+                                                    <td><span class="badge text-bg-primary">单月</span></td>
                                                     <td><span class="badge text-bg-success">高</span></td>
                                                     <td class="small">三险已在累计专项扣除中体现，合并上报会虚增扣除</td>
                                                 </tr>
@@ -929,13 +931,13 @@
                                                 </tr>
                                                 <tr>
                                                     <td>上月未找到（档案中无此人）</td>
-                                                    <td><span class="badge text-bg-primary">当月</span></td>
+                                                    <td><span class="badge text-bg-primary">单月</span></td>
                                                     <td><span class="badge text-bg-success">高</span></td>
                                                     <td class="small">历史 0 例合并上报；多属特殊单元本月也不报</td>
                                                 </tr>
                                                 <tr class="table-danger">
                                                     <td>本月 ATC93BE≠0（借支/补缴）</td>
-                                                    <td><span class="badge text-bg-primary">当月</span></td>
+                                                    <td><span class="badge text-bg-primary">单月</span></td>
                                                     <td><span class="badge text-bg-success">高</span></td>
                                                     <td class="small"><i class="bi bi-exclamation-triangle-fill text-danger me-1"></i>三险已通过借支在收入侧扣除，合并上报=重复扣除（建议不可改，属数据事实）</td>
                                                 </tr>
@@ -994,7 +996,7 @@
                             </h2>
                             <div id="faq1" class="accordion-collapse collapse" data-bs-parent="#guideFaq">
                                 <div class="accordion-body small">
-                                    <strong>不是必须</strong>。未导入时系统判定保守（上月"未找到"→ 当月），可正常完成整个流程。但导入后：上月<strong>零申报</strong>的人会得到"多月"建议（61% 实证），避免漏报三险；上月<strong>有报</strong>的人会明确"当月"，避免虚增扣除。建议上线初期一次性导入上个申报期文件。
+                                    <strong>不是必须</strong>。未导入时系统判定保守（上月"未找到"→ 单月），可正常完成整个流程。但导入后：上月<strong>零申报</strong>的人会得到"多月"建议（61% 实证），避免漏报三险；上月<strong>有报</strong>的人会明确"单月"，避免虚增扣除。建议上线初期一次性导入上个申报期文件。
                                 </div>
                             </div>
                         </div>
@@ -1006,7 +1008,7 @@
                             </h2>
                             <div id="faq2" class="accordion-collapse collapse" data-bs-parent="#guideFaq">
                                 <div class="accordion-body small">
-                                    <strong>不是</strong>。系统是"建议工具"：给你提示 + 理由 + 置信度，<strong>最终每个人员的当月/多月、零申报生成/跳过都由你在弹窗中确认</strong>。标黄（置信度=中）的"多月"建议最需人工核实——历史数据显示 61% 多月、其余 39% 是其他情况。
+                                    <strong>不是</strong>。系统是"建议工具"：给你提示 + 理由 + 置信度，<strong>最终每个人员的单月/多月、零申报生成/跳过都由你在弹窗中确认</strong>。标黄（置信度=中）的"多月"建议最需人工核实——历史数据显示 61% 多月、其余 39% 是其他情况。
                                 </div>
                             </div>
                         </div>
@@ -1030,7 +1032,7 @@
                             </h2>
                             <div id="faq4" class="accordion-collapse collapse" data-bs-parent="#guideFaq">
                                 <div class="accordion-body small">
-                                    把该人员的当月/多月、零申报生成/跳过选择<strong>永久存入本地配置（SQLite）</strong>。下月该人再次跨月/零申报时，下拉框默认选中记忆值并带「已记住」徽标。取消勾选则不记忆，只生效本次。
+                                    把该人员的单月/多月、零申报生成/跳过选择<strong>永久存入本地配置（SQLite）</strong>。下月该人再次跨月/零申报时，下拉框默认选中记忆值并带「已记住」徽标。取消勾选则不记忆，只生效本次。
                                 </div>
                             </div>
                         </div>
@@ -1054,7 +1056,7 @@
                             </h2>
                             <div id="faq6" class="accordion-collapse collapse" data-bs-parent="#guideFaq">
                                 <div class="accordion-body small">
-                                    先核对：1) 待报列表是否<strong>包含全部</strong>相关批次（漏批次=少人）；2) 合并规则弹窗是否已确认（未确认的跨月人员按当月，可能少三险）；3) 合并粒度选的是"发放月合并"还是"所属月合并"。
+                                    先核对：1) 待报列表是否<strong>包含全部</strong>相关批次（漏批次=少人）；2) 合并规则弹窗是否已确认（未确认的跨月人员按单月，可能少三险）；3) 合并粒度选的是"发放月合并"还是"所属月合并"。
                                 </div>
                             </div>
                         </div>
@@ -1288,12 +1290,13 @@
                             <span class="person-name">${c.name || ''}</span>
                             <span class="person-cert">${c.cert_no || ''}${c.emp_no ? ` / ${c.emp_no}` : ''}</span>
                             <span>上月: ${c.prev_status || ''}</span>
-                            <span class="${confClass}">建议${c.suggested === 'double' ? '多月' : '当月'}·${confText}</span>
+                            <span class="${confClass}">建议${c.suggested === 'double' ? '多月' : '单月'}·${confText}</span>
                             ${persistedBadge}
                             ${bePrefix}
                             <select class="form-select form-select-sm merge-choice" data-cert="${c.cert_no}">
                                 <option value="double" ${chosen === 'double' ? 'selected' : ''}>多月</option>
-                                <option value="single" ${chosen === 'single' ? 'selected' : ''}>当月</option>
+                                <option value="single" ${chosen === 'single' ? 'selected' : ''}>单月</option>
+                                <option value="skip" ${chosen === 'skip' ? 'selected' : ''}>不报</option>
                             </select>
                         </div>
                         <div class="person-slips">${slips}</div>
@@ -1310,7 +1313,7 @@
                         <span class="d-flex gap-1">
                             <button type="button" class="btn btn-sm btn-outline-primary" data-ws-action="suggested">本组按建议</button>
                             <button type="button" class="btn btn-sm btn-outline-success" data-ws-action="double">本组多月</button>
-                            <button type="button" class="btn btn-sm btn-outline-danger" data-ws-action="single">本组当月</button>
+                            <button type="button" class="btn btn-sm btn-outline-danger" data-ws-action="single">本组单月</button>
                         </span>
                     </div>
                     <div class="ws-group-body">${personBlocks.join('')}</div>
@@ -1323,10 +1326,15 @@
 
         function mergeTotalHtml(c, chosen) {
             if (c.income_total === undefined) return '';
+            if (chosen === 'skip') {
+                return `本期收入合计 <b>¥${formatNum(c.income_total)}</b> · 三险一金
+                    <span class="mode-cur">不报：¥0.00</span>
+                    <span class="mode-alt">（本人确无工资时按 0 报）</span>`;
+            }
             const cur = chosen === 'double' ? c.insurance_double : c.insurance_single;
             const alt = chosen === 'double' ? c.insurance_single : c.insurance_double;
-            const curLabel = chosen === 'double' ? '多月' : '当月';
-            const altLabel = chosen === 'double' ? '当月' : '多月';
+            const curLabel = chosen === 'double' ? '多月' : '单月';
+            const altLabel = chosen === 'double' ? '单月' : '多月';
             const curDetail = chosen === 'double' ? c.insurance_double_detail : c.insurance_single_detail;
             const altDetail = chosen === 'double' ? c.insurance_single_detail : c.insurance_double_detail;
             const fmtDetail = d => {

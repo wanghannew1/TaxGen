@@ -47,10 +47,28 @@ def init_db() -> None:
     conn.execute("""
         CREATE TABLE IF NOT EXISTS merge_override (
             cert_no TEXT PRIMARY KEY,
-            mode TEXT DEFAULT 'double' CHECK (mode IN ('double', 'single')),
+            mode TEXT DEFAULT 'double' CHECK (mode IN ('double', 'single', 'skip')),
             updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         )
     """)
+    # 旧库迁移: 2026-09-10 新增"不报"模式(skip)需扩 CHECK 约束, SQLite 不允许改约束
+    # → 重建表并回填旧数据 (幂等: 表已含 skip 则跳过)
+    _mro = conn.execute(
+        "SELECT sql FROM sqlite_master WHERE type='table' AND name='merge_override'").fetchone()
+    if _mro and "'skip'" not in (_mro["sql"] or ""):
+        conn.execute("ALTER TABLE merge_override RENAME TO merge_override_old")
+        conn.execute("""
+            CREATE TABLE merge_override (
+                cert_no TEXT PRIMARY KEY,
+                mode TEXT DEFAULT 'double' CHECK (mode IN ('double', 'single', 'skip')),
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        """)
+        conn.execute("""
+            INSERT INTO merge_override (cert_no, mode, updated_at)
+            SELECT cert_no, mode, updated_at FROM merge_override_old
+        """)
+        conn.execute("DROP TABLE merge_override_old")
     conn.execute("""
         CREATE TABLE IF NOT EXISTS zero_override (
             cert_no TEXT PRIMARY KEY,
@@ -194,7 +212,7 @@ def get_excluded_unit_codes() -> List[int]:
 
 
 # ---------------------------------------------------------------------------
-# merge_override: 三险一金合并规则（多月/当月）用户确认选择持久化
+# merge_override: 三险一金合并规则（多月/单月）用户确认选择持久化
 # cert_no 为主键（一人一种处理方式，跨月人员按人记忆，覆盖式更新）
 # ---------------------------------------------------------------------------
 
@@ -209,12 +227,12 @@ def get_merge_overrides() -> dict:
 
 
 def upsert_merge_overrides(choices: dict) -> None:
-    """写入/更新合并规则覆盖（用户"记住本次选择"）。choices: {cert_no: 'double'|'single'}。"""
+    """写入/更新合并规则覆盖（用户"记住本次选择"）。choices: {cert_no: 'double'|'single'|'skip'}。"""
     if not choices:
         return
     conn = get_db()
     for cert_no, mode in choices.items():
-        if mode not in ("double", "single"):
+        if mode not in ("double", "single", "skip"):
             continue
         conn.execute(
             "INSERT INTO merge_override (cert_no, mode) VALUES (?, ?) "

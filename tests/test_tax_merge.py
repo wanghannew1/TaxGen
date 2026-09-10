@@ -1,4 +1,4 @@
-"""tax_merge 三险一金合并规则: 当月人员合并 + 文件驱动判定建议 (纯逻辑, 无需 Oracle)"""
+"""tax_merge 三险一金合并规则: 单月人员合并 + 文件驱动判定建议 (纯逻辑, 无需 Oracle)"""
 from decimal import Decimal
 
 import pytest
@@ -82,6 +82,34 @@ class TestMergeSingleCert:
                                          single_certs={"C1"})[0]
         assert merged.补缴及退款保险金额个人 == Decimal("30")  # BE 照常累加
 
+    def test_skip_certs_zeroes_insurance_accumulates_income(self):
+        # 不报三险(2026-09-10 用户确认): 三险全按 0 上报, 收入/个税照常跨月累加
+        a = _rec(sm=202605, income=Decimal("5000"), tax=Decimal("100"),
+                 pension=Decimal("400"), medical=Decimal("100"),
+                 unemp=Decimal("15"), housing=Decimal("350"), tc930=1)
+        b = _rec(sm=202606, income=Decimal("6000"), tax=Decimal("200"),
+                 pension=Decimal("480"), medical=Decimal("120"),
+                 unemp=Decimal("18"), housing=Decimal("420"), tc930=2)
+        merged = merge_records_by_person([a, b], by_pay_month=True,
+                                         skip_certs={"C1"})[0]
+        assert merged.工资总额 == Decimal("11000")
+        assert merged.个人所得税 == Decimal("300")
+        assert merged.养老个人 == Decimal("0")
+        assert merged.医疗个人 == Decimal("0")
+        assert merged.失业个人 == Decimal("0")
+        assert merged.公积金个人 == Decimal("0")
+
+    def test_skip_certs_win_over_single(self):
+        # 同时出现在 single_certs 与 skip_certs → 不报优先 (显式覆盖)
+        a = _rec(sm=202606, tc930=1, income=Decimal("1000"),
+                 pension=Decimal("480"))
+        b = _rec(sm=202605, tc930=2, income=Decimal("2000"),
+                 pension=Decimal("400"))
+        merged = merge_records_by_person([a, b], by_pay_month=True,
+                                         single_certs={"C1"}, skip_certs={"C1"})[0]
+        assert merged.养老个人 == Decimal("0")
+        assert merged.工资总额 == Decimal("3000")
+
     def test_by_pay_month_false_ignores_single_certs(self):
         # 现状: 按人+所属月分组时 single_certs 不生效 (保持旧行为)
         a = _rec(sm=202605, tc930=1, income=Decimal("1000"),
@@ -94,7 +122,7 @@ class TestMergeSingleCert:
         assert merged.养老个人 == Decimal("400")
 
     def test_single_takes_cur_month_all_slips(self):
-        # 当月=发放月(最新所属月)全部记录的三险之和, 不再只取基准(tc930最大)一条
+        # 单月=发放月(最新所属月)全部记录的三险之和, 不再只取基准(tc930最大)一条
         # (2026-09-10 IKEMCM/#6: 同月多批次时含三险批次可能不是基准记录 → 漏报)
         old = _rec(sm=202606, tc930=1, income=Decimal("1000"),
                    pension=Decimal("480"))
@@ -103,12 +131,29 @@ class TestMergeSingleCert:
         merged = merge_records_by_person([old, new], by_pay_month=True,
                                          single_certs={"C1"})[0]
         assert merged.tc930_id == 50            # 流水号最大 = 基准
-        assert merged.养老个人 == Decimal("480")  # 当月202606全部记录三险, 而非基准400
+        assert merged.养老个人 == Decimal("480")  # 单月202606全部记录三险, 而非基准400
         assert merged.工资总额 == Decimal("3000")  # 收入照常累加
 
+    def test_single_falls_back_latest_month_when_no_cur_month(self):
+        # 李浩案例 (2026-09-10): 压月发工资, 发放月(202608)没有所属月==发放月的记录,
+        # 缺省取最新所属月(202607)的三险, 而非归0
+        a = _rec(sm=202606, tc930=1, income=Decimal("9172.00"),
+                 pension=Decimal("1336.40"), medical=Decimal("334.10"),
+                 unemp=Decimal("50.12"), housing=Decimal("1169.00"))
+        b = _rec(sm=202607, tc930=2, income=Decimal("9157.00"),
+                 pension=Decimal("1336.40"), medical=Decimal("334.10"),
+                 unemp=Decimal("50.12"), housing=Decimal("1169.00"))
+        merged = merge_records_by_person([a, b], by_pay_month=True,
+                                         single_certs={"C1"}, cur_month=202608)[0]
+        assert merged.养老个人 == Decimal("1336.40")   # 单月=最新所属月 202607, 而非0
+        assert merged.医疗个人 == Decimal("334.10")
+        assert merged.失业个人 == Decimal("50.12")
+        assert merged.公积金个人 == Decimal("1169.00")
+        assert merged.工资总额 == Decimal("18329.00")  # 收入照常跨月全加
+
     def test_single_same_month_multi_batch_takes_all(self):
-        # 陈百灵案例: 当月202608两批次, 批次1含三险(非基准)批次2基准三险0
-        # → 当月=发放月全部记录三险=755.50, 而非基准记录的0
+        # 陈百灵案例: 单月202608两批次, 批次1含三险(非基准)批次2基准三险0
+        # → 单月=发放月全部记录三险=755.50, 而非基准记录的0
         a = _rec(sm=202608, seq="1", tc930=2, income=Decimal("2357.10"),
                  pension=Decimal("351.46"), medical=Decimal("87.86"),
                  unemp=Decimal("13.18"), housing=Decimal("303.00"))
@@ -275,7 +320,7 @@ class TestBuildSuggestions:
 
     def test_candidate_totals_match_merge_semantics(self):
         # 合计口径与 merge_records_by_person 一致: 收入全加;
-        # 三险多月=各月全加, 当月=发放月(所属月==发放月)全部 slips 的三险
+        # 三险多月=各月全加, 单月=发放月(所属月==发放月)全部 slips 的三险
         self.records = [
             _rec(cert="C1", sm=202605, tc930=1,
                  income=Decimal("5000"), pension=Decimal("400"), medical=Decimal("100"),
@@ -288,12 +333,12 @@ class TestBuildSuggestions:
         c = res["candidates"][0]
         assert c["income_total"] == 11000.0
         assert c["insurance_double"] == 1903.0   # 865 + 1038
-        assert c["insurance_single"] == 1038.0   # 当月(202606)全部 slips 的三险
+        assert c["insurance_single"] == 1038.0   # 单月(202606)全部 slips 的三险
 
     def test_single_same_month_multi_batch_cur_month_sum(self):
-        # 陈百灵弹窗端案例 (IKEMCM/#6): 当月202608两批次都在勾选组合内,
-        # 批次1含三险755.50(非基准)批次2基准无三险 → 当月=发放月全部=755.50;
-        # 202606 也有三险 → 多月=1511.00, 与当月不同 → 进入候选
+        # 陈百灵弹窗端案例 (IKEMCM/#6): 单月202608两批次都在勾选组合内,
+        # 批次1含三险755.50(非基准)批次2基准无三险 → 单月=发放月全部=755.50;
+        # 202606 也有三险 → 多月=1511.00, 与单月不同 → 进入候选
         self.records = [
             _rec(cert="C1", sm=202606, tc930=1, unit=100, unit_name="吉大二院B",
                  income=Decimal("0"), pension=Decimal("351.46"),
@@ -314,18 +359,18 @@ class TestBuildSuggestions:
         c = res["candidates"][0]
         assert c["income_total"] == 12478.10
         assert c["insurance_double"] == 1511.00
-        assert c["insurance_single"] == 755.50    # 当月(202608)两批次合计, 不再是基准记录(0)
+        assert c["insurance_single"] == 755.50    # 单月(202608)两批次合计, 不再是基准记录(0)
         assert c["insurance_single_detail"] == {"pension": 351.46, "medical": 87.86,
                                                 "unemployment": 13.18, "housing": 303.00}
         assert c["insurance_double_detail"] == {"pension": 702.92, "medical": 175.72,
                                                 "unemployment": 26.36, "housing": 606.00}
-        # 排序: 含三险的批次1(当月)排最前, 202606(含三险)随后, 无三险的批次2最后
+        # 排序: 含三险的批次1(单月)排最前, 202606(含三险)随后, 无三险的批次2最后
         assert [(s["salary_month"], s["seq"]) for s in c["slips"]] == \
             [(202608, "1"), (202606, "1"), (202608, "2")]
 
     def test_single_equals_double_skipped(self):
         # 刘斌案例 (2026-09-10): 三险只出现在发放月(202608)这一个月份,
-        # 当月==多月==608.50 → 无"合并与否"选择 → 不进候选
+        # 单月==多月==608.50 → 无"合并与否"选择 → 不进候选
         self.records = [
             _rec(cert="C1", sm=202607, tc930=1, unit=40802, unit_name="40802",
                  income=Decimal("1140")),
@@ -348,7 +393,7 @@ class TestBuildSuggestions:
         assert res["work_sheets"] == []
 
     def test_income_total_always_accumulates_even_single(self):
-        # 当月只影响三险一金, 本期收入仍跨月全加 (与 merge_records_by_person 相同)
+        # 单月只影响三险一金, 本期收入仍跨月全加 (与 merge_records_by_person 相同)
         self.records = [
             _rec(cert="C1", sm=202605, tc930=1, income=Decimal("1000"),
                  pension=Decimal("400")),
@@ -362,6 +407,34 @@ class TestBuildSuggestions:
         assert c["income_total"] == 3000.0
         assert c["insurance_double"] == 400.0
         assert c["insurance_single"] == 0.0
+
+    def test_pay_month_no_record_falls_back_latest_month(self):
+        # 李浩案例 (2026-09-10): 压月发工资, 发放月 202608 没有所属月==发放月的工资单,
+        # 单月缺省取最新所属月(202607)三险=2889.62, 而非 0;
+        # 多月=202607+202606 全加=5779.24
+        self.records = [
+            _rec(cert="C1", sm=202606, tc930=1, unit=39819, unit_name="铁建宽城",
+                 income=Decimal("9172.00"), pension=Decimal("1336.40"),
+                 medical=Decimal("334.10"), unemp=Decimal("50.12"),
+                 housing=Decimal("1169.00")),
+            _rec(cert="C1", sm=202607, tc930=2, unit=39819, unit_name="铁建宽城",
+                 income=Decimal("9157.00"), pension=Decimal("1336.40"),
+                 medical=Decimal("334.10"), unemp=Decimal("50.12"),
+                 housing=Decimal("1169.00")),
+        ]
+        # 两个所属月都含三险且都≠发放月 → 排序按所属月降序: 202607 在前 202606 在后
+        res = tax_merge.build_merge_suggestions(None, 202608, [
+            {"unit": 39819, "salary_month": 202606, "seq": "1"},
+            {"unit": 39819, "salary_month": 202607, "seq": "1"},
+        ])
+        c = res["candidates"][0]
+        assert c["income_total"] == 18329.00
+        assert c["insurance_single"] == 2889.62   # 单月=缺省最新所属月 202607
+        assert c["insurance_double"] == 5779.24   # 202607 + 202606
+        assert c["insurance_single_detail"] == {"pension": 1336.40, "medical": 334.10,
+                                                "unemployment": 50.12, "housing": 1169.00}
+        assert [(s["salary_month"], s["seq"]) for s in c["slips"]] == \
+            [(202607, "1"), (202606, "1")]
 
     def test_salary_months_desc_order(self):
         # 所属月列表升序, 上月档 = 最早所属月

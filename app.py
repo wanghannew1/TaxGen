@@ -175,7 +175,7 @@ def api_tc8m_search():
 
 @app.route("/api/merge-suggestions", methods=["POST"])
 def api_merge_suggestions():
-    """生成前确认: 扫描待报组合中的跨月合并人员，给出多月/当月判定建议。"""
+    """生成前确认: 扫描待报组合中的跨月合并人员，给出多月/单月判定建议。"""
     try:
         data = request.get_json()
         pay_month = int(data.get("pay_month") or 0)
@@ -236,7 +236,7 @@ def _merge_suggestions_to_xlsx(res: dict):
     ws.title = "合并确认"
     headers = ["工资单(结算单元-所属月-批次)", "姓名", "证件号", "职工号", "主结算单元",
                "上月状态", "建议", "置信度", "理由",
-               "本期收入合计", "三险-多月", "三险-当月", "选择(当月/多月)"]
+               "本期收入合计", "三险-多月", "三险-单月", "选择(单月/多月/不报)"]
     ws.append(headers)
     ws.freeze_panes = "A2"
     head_fill = PatternFill("solid", fgColor="DDEBF7")
@@ -259,13 +259,14 @@ def _merge_suggestions_to_xlsx(res: dict):
                 c.get("emp_no", ""),
                 main_name(c),
                 c.get("prev_status", ""),
-                "多月" if c.get("suggested") == "double" else "当月",
+                "多月" if c.get("suggested") == "double" else "单月",
                 {"high": "高", "medium": "中", "low": "低"}.get(c.get("confidence"), ""),
                 c.get("reason", ""),
                 c.get("income_total", 0),
                 c.get("insurance_double", 0),
                 c.get("insurance_single", 0),
-                "多月" if c.get("default_chosen", c.get("suggested")) == "double" else "当月",
+                {"double": "多月", "single": "单月", "skip": "不报"}.get(
+                    c.get("default_chosen", c.get("suggested")), "单月"),
             ])
 
     width_map = {"A": 55, "B": 10, "C": 20, "D": 10, "E": 24, "F": 8,
@@ -284,7 +285,7 @@ def _merge_suggestions_to_xlsx(res: dict):
 
 @app.route("/api/merge-suggestions/import", methods=["POST"])
 def api_merge_suggestions_import():
-    """导回合并确认 Excel: 解析"选择(当月/多月)"列, 按证件号返回 {cert_no: mode}。"""
+    """导回合并确认 Excel: 解析"选择(单月/多月/不报)"列, 按证件号返回 {cert_no: mode}。"""
     try:
         f = request.files.get("file")
         if not f or not f.filename:
@@ -296,9 +297,9 @@ def api_merge_suggestions_import():
         if not rows:
             return jsonify({"error": "文件为空"}), 400
         header = [str(h or "").strip() for h in rows[0]]
-        mode_col = next((h for h in header if h in ("选择(当月/多月)", "选择(翻倍/单倍)")), None)
+        mode_col = next((h for h in header if h in ("选择(单月/多月/不报)", "选择(单月/多月)", "选择(当月/多月)", "选择(翻倍/单倍)")), None)
         if "证件号" not in header or not mode_col:
-            return jsonify({"error": "列不匹配: 需要 证件号 与 选择(当月/多月) 列（请用本系统导出的 Excel 修改；旧版列名 选择(翻倍/单倍) 也支持）"}), 400
+            return jsonify({"error": "列不匹配: 需要 证件号 与 选择(单月/多月/不报) 列（请用本系统导出的 Excel 修改；旧版列名 选择(单月/多月)/选择(当月/多月)/选择(翻倍/单倍) 也支持）"}), 400
         i_cert = header.index("证件号")
         i_mode = header.index(mode_col)
         choices = {}
@@ -307,12 +308,18 @@ def api_merge_suggestions_import():
             mode_raw = str(r[i_mode] or "").strip()
             if not cert or not mode_raw:
                 continue
-            mode = "double" if ("多月" in mode_raw or "翻倍" in mode_raw) \
-                else ("single" if ("当月" in mode_raw or "单倍" in mode_raw) else "")
+            if "多月" in mode_raw or "翻倍" in mode_raw:
+                mode = "double"
+            elif "单月" in mode_raw or "当月" in mode_raw or "单倍" in mode_raw:
+                mode = "single"
+            elif "不报" in mode_raw or "跳过" in mode_raw:
+                mode = "skip"
+            else:
+                mode = ""
             if mode:
                 choices[cert] = mode
             elif cert:
-                return jsonify({"error": f"证件号 {cert} 的选择列含无法识别值: '{mode_raw}'（仅支持 当月/多月）"}), 400
+                return jsonify({"error": f"证件号 {cert} 的选择列含无法识别值: '{mode_raw}'（仅支持 单月/多月/不报）"}), 400
         if not choices:
             return jsonify({"error": "未解析到任何有效的选择记录"}), 400
         return jsonify({"count": len(choices), "choices": choices})
@@ -393,11 +400,13 @@ def api_generate():
             from config_db import upsert_merge_overrides
             merge_choices = data.get("merge_choices") or {}
             single_certs = {c for c, mode in merge_choices.items() if mode == "single"}
+            skip_certs = {c for c, mode in merge_choices.items() if mode == "skip"}
             records = merge_records_by_person(records, by_pay_month=merge_by_pay_month,
-                                              single_certs=single_certs, cur_month=month)
+                                              single_certs=single_certs,
+                                              skip_certs=skip_certs, cur_month=month)
             if data.get("persist_merge_choices") and merge_choices:
                 upsert_merge_overrides({c: m for c, m in merge_choices.items()
-                                        if m in ("double", "single")})
+                                        if m in ("double", "single", "skip")})
         warnings = []
         if confirmed_combos and merge_by_person:
             persons = list({r.职工号 for r in raw_records})
