@@ -404,6 +404,19 @@ def api_generate():
         abnormal_reasons = {r.get("ATC930"): f"ATC93G={r.get('ATC93G', 'NULL')}(未结算)" for r in abnormal}
         
         results = []
+        # 主结算单元(单元级属性): 该单元在所属月范围内绝大多数人缴五险一金才作为人员归属
+        # (与 tax_merge.MAIN_UNIT_MIN_PEOPLE/MAIN_UNIT_INSURED_RATIO 同阈值, Oracle 只读聚合)
+        try:
+            from queries import get_unit_insurance_stats
+            from tax_merge import MAIN_UNIT_MIN_PEOPLE, MAIN_UNIT_INSURED_RATIO
+            _units = sorted({int(r.结算单元 or 0) for r in raw_records if r.结算单元})
+            _months = sorted({int(r.工资所属年月 or 0) for r in raw_records if r.工资所属年月})
+            _stats = get_unit_insurance_stats(conn, _units, _months)
+            main_units = {u for u, s in _stats.items()
+                          if s["people"] >= MAIN_UNIT_MIN_PEOPLE
+                          and s["insured"] / s["people"] >= MAIN_UNIT_INSURED_RATIO}
+        except Exception:
+            main_units = set()  # 统计失败不影响生成, 回落首薪单元即可
         for tpl in templates:
             if tpl == "normalSalary":
                 if confirmed_combos:
@@ -424,6 +437,7 @@ def api_generate():
                                             tc93_comments=get_tc93_field_comments(conn),
                                             raw_records=raw_records if merge_by_person else None,
                                             merge_mode="pay_month" if merge_by_pay_month else "month",
+                                            main_units=main_units,
                                             annual_avg_wage=annual_avg_wage)
             elif tpl == "laborService":
                 lab_records, lab_raw, lab_combos = build_labor_service_records(

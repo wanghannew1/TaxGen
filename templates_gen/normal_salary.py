@@ -23,46 +23,44 @@ def extract_remark(title: str) -> str:
 
 
 def build_remark_text(combos: Optional[List[dict]]) -> str:
-    """生成收入表备注：本次发放全部 结算单元-所属年月-批次 组合，总长不超过 50 字符。
+    """生成收入表备注：只写该人员的一个结算单元名称（combos 已按主结算单元/首薪单元优先排序，取第一个）。
 
-    压缩规则：
-    - 单元名与年月之间省略连字符（吉林省地质调查院202608-1，省去中间的"-"）；
-    - 单结算单元+单批次：单元与批次不重复写，年月用英文逗号连接；
-    - 全集超过 50 字符时回落为仅列结算单元名称（英文逗号连接）；
-    - 仍超限则逐单元累加至 47 字符后追加英文省略号"..."。
-    全程仅用英文标点（逗号、连字符），避免导入端字数/字节校验失败。
+    规则：
+    - combos[0] = 主结算单元（若无主单元则当月第一次发薪的结算单元）；
+    - 仅列结算单元名称（不含所属年月-批次，与验证报告"结算单元名称-所属月份-批次"列避免重复）；
+    - 超 50 字符截断。
     """
     if not combos:
         return ""
-    triples = sorted({
-        (str(c.get("unit_name") or c.get("unit") or "").strip(),
-         int(c.get("salary_month") or 0),
-         str(c.get("seq") or "").strip())
-        for c in combos if (c.get("unit_name") or c.get("unit"))})
-    triples = [t for t in triples if t[1]]
-    if not triples:
-        return ""
-    units = {t[0] for t in triples}
-    batches = {t[2] for t in triples}
-    if len(units) == 1 and len(batches) == 1:
-        u = next(iter(units))
-        b = next(iter(batches))
-        months = ",".join(str(t[1]) for t in triples)
-        text = f"{u}{months}-{b}" if b else f"{u}{months}"
-    else:
-        text = ",".join(f"{u}{m}" + (f"-{b}" if b else "") for u, m, b in triples)
-    if len(text) <= 50:
-        return text
-    names = ",".join(sorted(units))
-    if len(names) <= 50:
-        return names
-    out = ""
-    for u in sorted(units):
-        cand = f"{out},{u}" if out else u
-        if len(cand) > 47:
-            break
-        out = cand
-    return out + "..." if out else sorted(units)[0][:50]
+    c = combos[0]
+    name = str(c.get("unit_name") or c.get("unit") or "").strip()
+    return name if len(name) <= 50 else name[:50]
+
+
+def _trip_seq_num(seq) -> int:
+    try:
+        return int(seq or 0)
+    except (ValueError, TypeError):
+        return 0
+
+
+def _first_pay_unit(trips) -> int:
+    """该人员最早发薪的结算单元：最早所属月 → 最小批次 → 最小单元代码。"""
+    return min(trips, key=lambda t: (t[1], _trip_seq_num(t[2]), t[0]))[0]
+
+
+def _main_unit_for(trips, main_units) -> int:
+    """判定该人员归属的主结算单元（与 tax_merge._main_unit_of 同规则）：
+
+    人员发薪所涉单元 ∩ 主单元集合，取其中最早发薪（最早所属月，平局最小代码）；
+    无交集 → 回落当月第一次发薪的结算单元。
+    """
+    units = {t[0] for t in trips}
+    pool = units & set(main_units or set())
+    if pool:
+        first_month = {u: min(m for (u2, m, _s) in trips if u2 == u) for u in pool}
+        return min(pool, key=lambda u: (first_month[u], u))
+    return _first_pay_unit(trips)
 
 
 def generate_normal_salary(records: List[SalaryRecord], title: str, output_dir: str,
@@ -73,6 +71,7 @@ def generate_normal_salary(records: List[SalaryRecord], title: str, output_dir: 
                            tc93_comments: Optional[dict] = None,
                            raw_records: Optional[List[SalaryRecord]] = None,
                            merge_mode: str = "month",
+                           main_units: Optional[set] = None,
                            annual_avg_wage: float = 120000) -> GenerateResult:
     """生成正常工资薪金所得 Excel 模板
 
@@ -84,14 +83,68 @@ def generate_normal_salary(records: List[SalaryRecord], title: str, output_dir: 
     timestamp = datetime.now().strftime("%Y%m%d%H%M%S")
     output_path = os.path.join(output_dir, f"正常工资薪金所得_{title}_{timestamp}.xlsx")
 
-    combo_map = {}
-    if combos:
-        for c in combos:
-            key = (int(c.get("unit", 0) or 0), int(c.get("salary_month", 0) or 0), str(c.get("seq", "") or ""))
-            combo_map[key] = f"{c.get('unit_name', '')}-{c.get('salary_month', '')}-{c.get('seq', '')}"
+    # 单元组合映射: (unit, month, seq) -> 中文名 / 名-年月-批次
+    combo_map = {}        # -> "名称-所属年月-批次"（供合并明细等追溯 sheet）
+    unit_name_map = {}    # -> 纯结算单元名称（备注/结算单元名称列用）
+    for c in combos or []:
+        key = (int(c.get("unit", 0) or 0), int(c.get("salary_month", 0) or 0),
+               str(c.get("seq", "") or ""))
+        uname = str(c.get("unit_name", "") or "")
+        combo_map[key] = f"{uname}-{c.get('salary_month', '')}-{c.get('seq', '')}"
+        unit_name_map[key] = uname
 
-    # 收入表备注：本次发放全部组合（单元-所属年月-批次），≤50字符，每行一致；无组合时回退标题
-    remark_text = build_remark_text(combos) or title
+    # 人员排序：按结算单元名称排序，相同结算单元相邻（同单元内按姓名、工号稳定）
+    def _unit_sort(r):
+        return (str(getattr(r, "结算单元名称", "") or ""), str(r.姓名 or ""), int(r.职工号 or 0))
+
+    records = sorted(records, key=_unit_sort)
+    if raw_records:
+        raw_records = sorted(raw_records, key=lambda r: _unit_sort(r) + (int(r.tc930_id or 0),))
+
+    # 每人实际涉及的组合（合并前 raw_records 按人分组；未合并时逐条独立）
+    by_pay_month = merge_mode == "pay_month"
+
+    def _person_key(r):
+        return (r.职工号,) if by_pay_month else (r.职工号, r.工资所属年月)
+
+    if raw_records:
+        combo_src = raw_records
+        key_fn = _person_key
+    else:
+        combo_src = records
+        key_fn = lambda r: (int(r.tc930_id or 0),)
+    person_trips = {}  # key -> {(unit, month, seq)}
+    for r in combo_src:
+        person_trips.setdefault(key_fn(r), set()).add(
+            (int(r.结算单元 or 0), int(r.工资所属年月 or 0), str(r.当月批次 or "")))
+
+    def _row_combos(rec):
+        """该行人员实际涉及的组合（按主结算单元/首薪单元优先排序），备注/组合列数据源。
+
+        顺序: 主结算单元(若有) → 当月第一次发薪单元(若不同) → 其余按最早发薪月、单元名称。
+        """
+        trips = person_trips.get(_person_key(rec)) or {(int(rec.结算单元 or 0),
+                                                        int(rec.工资所属年月 or 0),
+                                                        str(rec.当月批次 or "")),
+                                                       }
+        default_name = str(getattr(rec, "结算单元名称", "") or "")
+        main_unit = _main_unit_for(trips, main_units)
+        first_unit = _first_pay_unit(trips)
+        first_month = {u: min(m for (_u, m, _s) in trips if _u == u)
+                       for u in {t[0] for t in trips}}
+        name_of = {u: (unit_name_map.get(next(
+            t for t in trips if t[0] == u), "") or default_name) for u in {t[0] for t in trips}}
+
+        def _sort_key(t):
+            u = t[0]
+            rank = 0 if u == main_unit else 1 if u == first_unit else 2
+            return (rank, first_month[u], name_of[u], u)
+
+        ordered = sorted(trips, key=_sort_key)
+        combos = [{"unit": t[0], "unit_name": name_of[t[0]],
+                   "salary_month": t[1], "seq": t[2]} for t in ordered]
+        combo_full = ";".join(f"{name_of[t[0]]}-{t[1]}-{t[2]}" for t in ordered)
+        return combos, (combo_full or title)
     
     wb = Workbook()
     ws = wb.active
@@ -115,6 +168,8 @@ def generate_normal_salary(records: List[SalaryRecord], title: str, output_dir: 
     for idx, rec in enumerate(records, 1):
         row = idx + 1
         income = calc_本期收入(rec)
+        own_combos, own_combo_full = _row_combos(rec)
+        remark_text = build_remark_text(own_combos) or title
 
         ws.cell(row=row, column=1, value=rec.职工号)
         ws.cell(row=row, column=2, value=rec.姓名)
@@ -150,7 +205,10 @@ def generate_normal_salary(records: List[SalaryRecord], title: str, output_dir: 
         validations.append({
             "tc930": rec.tc930_id, "姓名": rec.姓名,
             "unit": rec.结算单元,
-            "unit_name": combo_map.get((rec.结算单元, rec.工资所属年月, rec.当月批次), title),
+            # 结算单元名称列: 全部发薪的结算单元名称, 主结算单元/首薪单元优先排序
+            "unit_name": ",".join(dict.fromkeys(
+                str(c.get("unit_name") or "").strip() for c in own_combos)),
+            "combo_full": own_combo_full,
             "salary_month": rec.工资所属年月, "seq": rec.当月批次,
             "工资总额": rec.工资总额, "本次免税": rec.补发3, "大病险个人": rec.大病险个人,
             "补缴退款差额": rec.补缴及退款保险金额个人, "交纳现金": rec.个人交纳现金, "本期收入": income,
@@ -178,13 +236,6 @@ def generate_normal_salary(records: List[SalaryRecord], title: str, output_dir: 
     ]
     for col, h in enumerate(vs_headers, 1):
         vs.cell(row=1, column=col, value=h)
-    # 组合合并列: 全部发放组合(单元-所属月-批次)写全, 不受50字限制, 英文分号连接
-    if combos:
-        combo_full = ";".join(
-            f"{c.get('unit_name', '')}-{c.get('salary_month', '')}-{c.get('seq', '')}"
-            for c in combos)
-    else:
-        combo_full = title
     # 经办人: 发放经办人(TC8M.AAE019, 来自combos.handler)优先, 回落做工资经办人(TC93.AAE019)
     trip_handlers = {}
     for c in combos or []:
@@ -203,7 +254,7 @@ def generate_normal_salary(records: List[SalaryRecord], title: str, output_dir: 
     for idx, v in enumerate(validations, 1):
         key = (int(v["unit"] or 0), int(v["salary_month"] or 0), str(v["seq"] or ""))
         handler = trip_handlers.get(key) or tc93_handlers.get(key) or ""
-        vals = list(income_rows[idx - 1]) + [combo_full, handler] + [
+        vals = list(income_rows[idx - 1]) + [v["combo_full"], handler] + [
             v["tc930"], v["姓名"], v["unit_name"], v["salary_month"], v["seq"],
             v["工资总额"], v["本次免税"], v["大病险个人"], v["补缴退款差额"], v["交纳现金"], v["本期收入"],
             v["养老"], v["失业"], v["医疗"], v["公积金"],
@@ -232,10 +283,10 @@ def generate_normal_salary(records: List[SalaryRecord], title: str, output_dir: 
             "30 列个税申报模板（含占位列'住房公积金调整'），一行为一人（按人合并）。",
             "本期收入 = 应发工资 − （独生子女费+采暖费） − 大病险（个人） − 补缴及退款保险差额（个人） + 交纳现金 − 个人欠款。",
             "字段与算法详见 docs/本期收入算法说明.md；ATC 字段注释见 docs/数据表字段注释.md。",
-            "五险一金列取个人缴部分，企业(职业)年金恒为 0，备注填本次发放全部结算单元-所属年月-批次组合（≤50字符，单元名与年月间省略连字符，超限回落为仅列结算单元名称）。",
+            "五险一金列取个人缴部分，企业(职业)年金恒为 0，备注填该人员归属的结算单元名称（有主结算单元写主单元，否则写当月第一次发薪的结算单元，仅一个名称≤50字符）。",
         ]),
         ("验证报告", [
-            "与'正常工资薪金收入'sheet 逐行一一对应：前30列为收入表原样复制，随后为全部发放组合列（结算单元-所属月-批次，不受字数限制）与发放经办人，再向右为原验算列。",
+            "与'正常工资薪金收入'sheet 逐行一一对应：前30列为收入表原样复制，随后为该行人员实际涉及的组合列（结算单元-所属月-批次，不受字数限制，该人员跨多个组合分号连接）与发放经办人，再向右为原验算列。",
             "左=右校验：左 = 本期收入 − 养老 − 失业 − 医疗 − 公积金 − 意外险 + 本次免税(ATC936)；",
             "右 = (实发 − 经济补偿金) + 税后工会会费 + 个人代理费 + 个税 + 个人其他调整(ATC93AG)；|左−右|<0.01 为通过。",
             "大病险个人(ATC93BD)左右两侧同项销项不单列；经济补偿金(ATC93M)含在实发中但属一次性补偿，",
@@ -608,7 +659,7 @@ def generate_raw_detail_sheet(wb: Workbook, raw_records: List[SalaryRecord],
         right = ((rec.实发工资 - rec.经济补偿金) + rec.税后工会会费 + rec.个人代理费
                  + rec.个人所得税 + rec.个人其他调整)
         diff = abs(left - right)
-        remark = combo_map.get((rec.结算单元, rec.工资所属年月, rec.当月批次), title)
+        remark = str(rec.结算单元名称 or "").strip() or title
         vals = [
             rec.tc930_id, rec.姓名, rec.身份证, rec.结算单元, rec.工资所属年月, rec.当月批次,
             rec.工资总额, rec.补发3, rec.大病险个人, rec.补缴及退款保险金额个人, rec.个人交纳现金, income,
@@ -647,10 +698,15 @@ def generate_merge_detail_sheet(wb: Workbook, raw_records: List[SalaryRecord],
 
     if by_pay_month:
         merged_map = {m.职工号: m for m in merged_records}
-        ordered = sorted(groups.items(), key=lambda kv: (kv[0][0],))
     else:
         merged_map = {(m.职工号, m.工资所属年月): m for m in merged_records}
-        ordered = sorted(groups.items(), key=lambda kv: (kv[0][1], kv[0][0]))
+
+    def _merged_sort_key(kv):
+        m = merged_map.get(kv[0][0] if by_pay_month else kv[0])
+        unit = str(getattr(m, "结算单元名称", "") or "") if m else ""
+        return (unit, kv[0][0])
+
+    ordered = sorted(groups.items(), key=_merged_sort_key)
     row = 2
     for key, recs in ordered:
         m = merged_map.get(key[0] if by_pay_month else key)
