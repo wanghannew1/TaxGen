@@ -6,6 +6,7 @@
 
 Oracle 连接 (db.py) 只做只读查询, 任何写入操作都必须走本模块。
 """
+import json
 import os
 import sqlite3
 from typing import List, Optional
@@ -89,6 +90,13 @@ def init_db() -> None:
         CREATE TABLE IF NOT EXISTS zero_override (
             cert_no TEXT PRIMARY KEY,
             mode TEXT DEFAULT 'declare' CHECK (mode IN ('declare', 'skip')),
+            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+    """)
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS merge_group_tag (
+            unit_code INTEGER PRIMARY KEY,
+            tags TEXT DEFAULT '[]',
             updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         )
     """)
@@ -313,5 +321,47 @@ def upsert_zero_overrides(choices: dict) -> None:
             "ON CONFLICT(cert_no) DO UPDATE SET mode = excluded.mode, "
             "updated_at = CURRENT_TIMESTAMP",
             (str(cert_no), mode))
+    conn.commit()
+    conn.close()
+
+
+# ---------------------------------------------------------------------------
+# merge_group_tag: 三险一金合并确认界面"组标签" (2026-09-10 用户确认)
+# 纯标记功能: 用户在合并确认弹窗给主结算单元组打标签 (如 压月发/隔月发),
+# 仅提醒用户该组情况, 与任何后台逻辑/生成逻辑不相关。
+# tags 列存 JSON 数组字符串, 如 '["压月发","隔月发"]'。
+# ---------------------------------------------------------------------------
+
+def get_merge_group_tags() -> dict:
+    """查询全部组标签, 返回 {unit_code: [tag, ...]}。纯标记, 不影响任何逻辑。"""
+    conn = get_db()
+    rows = conn.execute("SELECT unit_code, tags FROM merge_group_tag").fetchall()
+    conn.close()
+    result = {}
+    for r in rows:
+        try:
+            tags = json.loads(r["tags"] or "[]")
+        except (ValueError, TypeError):
+            tags = []
+        if isinstance(tags, list):
+            result[int(r["unit_code"])] = [str(t) for t in tags if str(t).strip()]
+    return result
+
+
+def set_merge_group_tags(unit_code: int, tags: list) -> None:
+    """保存某结算单元的组标签 (整体覆盖)。tags: 字符串列表, 自动去空白去重。"""
+    clean = []
+    seen = set()
+    for t in (tags or []):
+        s = str(t).strip()
+        if s and s not in seen:
+            seen.add(s)
+            clean.append(s)
+    conn = get_db()
+    conn.execute(
+        "INSERT INTO merge_group_tag (unit_code, tags, updated_at) VALUES (?, ?, CURRENT_TIMESTAMP) "
+        "ON CONFLICT(unit_code) DO UPDATE SET tags = excluded.tags, "
+        "updated_at = CURRENT_TIMESTAMP",
+        (unit_code, json.dumps(clean, ensure_ascii=False)))
     conn.commit()
     conn.close()

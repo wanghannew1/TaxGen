@@ -327,6 +327,34 @@ def api_merge_suggestions_import():
         return _log_api_error(e)
 
 
+@app.route("/api/merge-group-tags", methods=["GET"])
+def api_merge_group_tags_get():
+    """获取合并确认界面的组标签映射 (纯标记提醒, SQLite config_db)。"""
+    try:
+        from config_db import get_merge_group_tags
+        return jsonify({"tags": get_merge_group_tags()})
+    except Exception as e:
+        return _log_api_error(e)
+
+
+@app.route("/api/merge-group-tags", methods=["POST"])
+def api_merge_group_tags_set():
+    """保存某结算单元的组标签 (整体覆盖, 纯标记提醒, 不影响任何合并/生成逻辑, SQLite)。"""
+    try:
+        from config_db import set_merge_group_tags
+        data = request.get_json() or {}
+        unit_code = int(data.get("unit_code", 0) or 0)
+        tags = data.get("tags") or []
+        if not unit_code:
+            return jsonify({"error": "缺少结算单元代码"}), 400
+        if not isinstance(tags, list):
+            return jsonify({"error": "tags 必须为字符串列表"}), 400
+        set_merge_group_tags(unit_code, [str(t) for t in tags])
+        return jsonify({"ok": True})
+    except Exception as e:
+        return _log_api_error(e)
+
+
 @app.route("/api/generate", methods=["POST"])
 def api_generate():
     try:

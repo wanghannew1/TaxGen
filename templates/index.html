@@ -658,6 +658,7 @@
                         发放月有三险且单月/多月金额相同时自动跳过、不弹窗；发放月无三险且单月==多月时弹窗提供
                         <strong>报/不报</strong>。<strong>压月发/双月发</strong>为特殊结算单元的发薪模式记号（仅提示建议，不影响选择）。
                         按主结算单元分组（该单元绝大多数人缴五险一金）；下拉框可逐人调整。
+                        组头「标签」可给组打提醒记号（预设 压月发/隔月发 或自定义），仅提醒、不影响任何规则。
                     </div>
                     <div class="d-flex gap-2 mb-2">
                         <button type="button" class="btn btn-sm btn-outline-primary" id="btnMergeAllSuggested">全部按建议</button>
@@ -1153,6 +1154,7 @@
         let persistMergeChoices = false;
         let mergeCandidatesData = [];
         let mergeWorkSheetsData = [];
+        let mergeGroupTags = {};  // unit_code -> [标签, ...] (纯标记提醒, 与生成逻辑无关)
         let lastMergeCombos = [];
         let lastMergePayMonth = 0;
         let zeroChoices = {};
@@ -1253,6 +1255,10 @@
                 const data = await resp.json();
                 if (!resp.ok || data.error) { showError(data.error || '检查合并规则失败，请稍后重试'); return; }
                 if (!data.candidates || data.candidates.length === 0) { alert('本月无跨月合并人员'); return; }
+                try {
+                    const tagResp = await fetch('/api/merge-group-tags');
+                    if (tagResp.ok) mergeGroupTags = (await tagResp.json()).tags || {};
+                } catch (e) { mergeGroupTags = {}; }
                 renderMergeGroups(data);
                 lastMergePayMonth = data.pay_month;
                 lastMergeCombos = confirmedCombos;
@@ -1319,17 +1325,45 @@
                         <div class="person-reason">${noticeHtml}${c.reason || ''}</div>
                     </div>`;
                 });
-                blocks.push(`<div class="ws-group-card" data-ws-index="${wi}">
+                const unitCode = ws.unit;
+                const grpPersons = ws.persons || [];
+                const allSc3 = grpPersons.length > 0 && grpPersons.every(c => c.single_equals_double && c.can_skip);
+                const anyCanSkip = grpPersons.some(c => c.can_skip);
+                const grpTagList = mergeGroupTags[unitCode] || [];
+                const grpTagChips = grpTagList.map(t => `<span class="badge bg-info text-dark merge-tag-chip me-1">${escapeHtml(t)}</span>`).join('');
+                const grpTagBtns = ['压月发', '隔月发'].map(t => {
+                    const on = grpTagList.includes(t);
+                    return `<button type="button" class="btn btn-sm ${on ? 'btn-info' : 'btn-outline-info'} me-1" data-merge-tag-set="${t}">${t}</button>`;
+                }).join('');
+                const grpCustomTags = grpTagList.filter(t => t !== '压月发' && t !== '隔月发')
+                    .map(t => `<span class="badge bg-secondary merge-tag-chip me-1">${escapeHtml(t)}<i class="bi bi-x ms-1 merge-tag-del" data-tag-del="${escapeHtml(t)}" style="cursor:pointer"></i></span>`).join('');
+                const grpActionBtns = allSc3 ? `
+                            <button type="button" class="btn btn-sm btn-outline-success" data-ws-action="single">本组报</button>
+                            <button type="button" class="btn btn-sm btn-outline-danger" data-ws-action="skip">本组不报</button>` : `
+                            <button type="button" class="btn btn-sm btn-outline-success" data-ws-action="double">本组多月</button>
+                            <button type="button" class="btn btn-sm btn-outline-danger" data-ws-action="single">本组单月</button>
+                            ${anyCanSkip ? `<button type="button" class="btn btn-sm btn-outline-danger" data-ws-action="skip">本组不报</button>` : ''}`;
+                blocks.push(`<div class="ws-group-card" data-ws-index="${wi}" data-unit-code="${unitCode}">
                     <div class="ws-group-head d-flex justify-content-between align-items-center">
                         <span><i class="bi bi-chevron-down ws-toggle me-1"></i>
                             <b>${ws.unit_name || ws.unit}（${ws.unit}）</b>
                             <span class="text-muted">共 ${ws.count} 人</span>
+                            <span class="merge-group-tags">${grpTagChips}</span>
                         </span>
                         <span class="d-flex gap-1">
                             <button type="button" class="btn btn-sm btn-outline-primary" data-ws-action="suggested">本组按建议</button>
-                            <button type="button" class="btn btn-sm btn-outline-success" data-ws-action="double">本组多月</button>
-                            <button type="button" class="btn btn-sm btn-outline-danger" data-ws-action="single">本组单月</button>
+                            ${grpActionBtns}
+                            <button type="button" class="btn btn-sm btn-outline-secondary" data-ws-tag-toggle><i class="bi bi-tag me-1"></i>标签</button>
                         </span>
+                    </div>
+                    <div class="merge-tag-panel bg-light border-top px-2 py-2" data-ws-tag-panel hidden>
+                        <div class="text-muted small mb-1"><i class="bi bi-tag me-1"></i>组标签（仅标记提醒，不影响合并规则）</div>
+                        <div class="d-flex flex-wrap align-items-center gap-1">
+                            ${grpTagBtns}
+                            <span class="merge-tag-custom-list">${grpCustomTags}</span>
+                            <input type="text" class="form-control form-control-sm merge-tag-input" style="width:140px" placeholder="自定义标签" maxlength="10">
+                            <button type="button" class="btn btn-sm btn-outline-primary merge-tag-add">添加</button>
+                        </div>
                     </div>
                     <div class="ws-group-body">${personBlocks.join('')}</div>
                 </div>`);
@@ -1386,7 +1420,11 @@
 
         function syncMergeChoice(cert, value) {
             const c = mergeCandidatesData.find(x => x.cert_no === cert);
-            if (c && c.single_equals_double && c.can_skip && value === 'double') value = 'single';
+            if (c) {
+                if (c.single_equals_double && c.can_skip && value === 'double') value = 'single';
+                // 组批量"本组不报": 不能不报的人回退到建议值 (与 updateMergePersonTotal 归一化一致)
+                if (value === 'skip' && !c.can_skip) value = c.suggested;
+            }
             mergeChoices[cert] = value;
             mergeWorkSheets.querySelectorAll(`select.merge-choice[data-cert="${cert}"]`)
                 .forEach(s => { s.value = value; });
@@ -1407,7 +1445,7 @@
                 const cert = sel.dataset.cert;
                 if (seen.has(cert)) return; // 每人全局唯一, 组内去重后由 syncMergeChoice 同步 (幂等)
                 seen.add(cert);
-                const value = (mode === 'double' || mode === 'single') ? mode
+                const value = (mode === 'double' || mode === 'single' || mode === 'skip') ? mode
                     : ((candByCert.get(cert) || {}).suggested || 'double');
                 syncMergeChoice(cert, value);
             });
@@ -1420,6 +1458,31 @@
             if (actBtn) {
                 const card = actBtn.closest('.ws-group-card');
                 setMergeChoices(actBtn.dataset.wsAction, parseInt(card.dataset.wsIndex, 10));
+                return;
+            }
+            const tagToggle = e.target.closest('[data-ws-tag-toggle]');
+            if (tagToggle) {
+                const panel = tagToggle.closest('.ws-group-card').querySelector('.merge-tag-panel');
+                if (panel) panel.hidden = !panel.hidden;
+                return;
+            }
+            const tagSet = e.target.closest('[data-merge-tag-set]');
+            if (tagSet) {
+                toggleMergeGroupTag(getMergeUnitCode(tagSet), tagSet.dataset.mergeTagSet);
+                return;
+            }
+            const tagAdd = e.target.closest('.merge-tag-add');
+            if (tagAdd) {
+                const panel = tagAdd.closest('.merge-tag-panel');
+                const input = panel.querySelector('.merge-tag-input');
+                const tag = (input.value || '').trim();
+                if (tag) addMergeGroupTag(getMergeUnitCode(tagAdd), tag.slice(0, 10));
+                input.value = '';
+                return;
+            }
+            const tagDel = e.target.closest('.merge-tag-del');
+            if (tagDel) {
+                removeMergeGroupTag(getMergeUnitCode(tagDel), tagDel.dataset.tagDel);
                 return;
             }
             const head = e.target.closest('.ws-group-head');
@@ -1652,6 +1715,71 @@
 
         function formatNum(n) {
             return n.toLocaleString('zh-CN', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+        }
+
+        function escapeHtml(s) {
+            return String(s ?? '').replace(/[&<>"']/g, m => ({
+                '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'
+            })[m]);
+        }
+
+        function getMergeUnitCode(el) {
+            const card = el.closest('.ws-group-card');
+            return card ? card.dataset.unitCode : '';
+        }
+
+        function renderMergeTagChips(unitCode) {
+            const card = mergeWorkSheets.querySelector(`.ws-group-card[data-unit-code="${unitCode}"]`);
+            if (!card) return;
+            const tags = mergeGroupTags[unitCode] || [];
+            card.querySelector('.merge-group-tags').innerHTML =
+                tags.map(t => `<span class="badge bg-info text-dark merge-tag-chip me-1">${escapeHtml(t)}</span>`).join('');
+            const panel = card.querySelector('.merge-tag-panel');
+            if (panel) {
+                panel.querySelectorAll('[data-merge-tag-set]').forEach(b => {
+                    const on = tags.includes(b.dataset.mergeTagSet);
+                    b.classList.toggle('btn-info', on);
+                    b.classList.toggle('btn-outline-info', !on);
+                });
+                panel.querySelector('.merge-tag-custom-list').innerHTML =
+                    tags.filter(t => t !== '压月发' && t !== '隔月发')
+                        .map(t => `<span class="badge bg-secondary merge-tag-chip me-1">${escapeHtml(t)}<i class="bi bi-x ms-1 merge-tag-del" data-tag-del="${escapeHtml(t)}" style="cursor:pointer"></i></span>`).join('');
+            }
+        }
+
+        function saveMergeGroupTag(unitCode, tags) {
+            fetch('/api/merge-group-tags', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ unit_code: parseInt(unitCode, 10), tags: tags })
+            })
+            .then(r => r.json())
+            .then(d => { if (!d.ok) showError(d.error || '标签保存失败'); })
+            .catch(e => showError(`标签保存失败: ${e.message}`));
+        }
+
+        function toggleMergeGroupTag(unitCode, tag) {
+            const tags = mergeGroupTags[unitCode] || [];
+            const i = tags.indexOf(tag);
+            if (i >= 0) { tags.splice(i, 1); } else { tags.push(tag); }
+            saveMergeGroupTag(unitCode, tags);
+            renderMergeTagChips(unitCode);
+        }
+
+        function addMergeGroupTag(unitCode, tag) {
+            const tags = mergeGroupTags[unitCode] || [];
+            if (tag && !tags.includes(tag)) {
+                tags.push(tag);
+                saveMergeGroupTag(unitCode, tags);
+                renderMergeTagChips(unitCode);
+            }
+        }
+
+        function removeMergeGroupTag(unitCode, tag) {
+            const tags = mergeGroupTags[unitCode] || [];
+            mergeGroupTags[unitCode] = tags.filter(t => t !== tag);
+            saveMergeGroupTag(unitCode, mergeGroupTags[unitCode]);
+            renderMergeTagChips(unitCode);
         }
 
         function comboKey(c) {
