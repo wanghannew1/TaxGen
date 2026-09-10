@@ -427,7 +427,14 @@ def api_generate():
                     if len(confirmed_combos) == 1:
                         file_title = f"{top_names[0]}-{month_range}-{top[0].get('seq', '')}"
                     else:
-                        file_title = f"{'、'.join(top_names)}等{len(confirmed_combos)}个单位{month_range}工资"
+                        # 多单位: 用过滤条件(发放月份+经办人+单位数+报税人数)代替单位名列表, 尽量简短
+                        handlers = "、".join(dict.fromkeys(
+                            str(c.get("handler", "") or "").strip()
+                            for c in confirmed_combos if str(c.get("handler", "") or "").strip()))
+                        n_units = len(confirmed_combos)
+                        n_people = sum(int(c.get("person_count", 0) or 0) for c in confirmed_combos)
+                        head = f"{month}{handlers}" if handlers else str(month)
+                        file_title = f"{head}{n_units}家单位" + (f"{n_people}人" if n_people else "")
                 else:
                     file_title = f"劳务派遣人员工资发放表{month}"
                 r = generate_normal_salary(records, file_title, OUTPUT_DIR,
