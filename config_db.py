@@ -26,6 +26,13 @@ def init_db() -> None:
     'all'(默认) = 取发放月内全部工资所属月并合并 (双月发放自动多月合并);
     'first_1'/'first_2' = 仅取最早 N 个工资所属月 (压月单元如37449, 手工只报最早一月);
     'latest_1'/'latest_2' = 仅取最近 N 个工资所属月 (对称预留)。
+
+    pay_pattern: 发薪模式 (2026-09-10 用户确认)。
+    'normal'(默认) = 正常发薪; 'pay_lag' = 压月发 (发放月无当月工资属正常,
+    建议按最近一次有三险月的三险报单月); 'bimonthly' = 双月发 (隔月发放、每次发
+    两个所属月的工资, 建议多月合并报两个月的三险之和)。
+    仅是"告诉系统"该单元发薪规律, 弹窗仍由用户最终判断; 其余不规则单元每次人工判断。
+
     旧库自动 ALTER TABLE ADD COLUMN 迁移。
     """
     conn = get_db()
@@ -44,18 +51,15 @@ def init_db() -> None:
     if "salary_month_scope" not in cols:
         conn.execute(
             "ALTER TABLE special_unit_config ADD COLUMN salary_month_scope TEXT DEFAULT 'all'")
-    if "merge_skip_enabled" not in cols:
+    if "pay_pattern" not in cols:
         conn.execute(
-            "ALTER TABLE special_unit_config ADD COLUMN merge_skip_enabled INTEGER DEFAULT 0")
+            "ALTER TABLE special_unit_config ADD COLUMN pay_pattern TEXT DEFAULT 'normal'")
     conn.execute("""
         CREATE TABLE IF NOT EXISTS app_config (
             key TEXT PRIMARY KEY,
             value TEXT NOT NULL DEFAULT ''
         )
     """)
-    # "不报"选项全局开关: 默认关闭 (2026-09-10 用户确认: 普通用户默认看不到)
-    conn.execute(
-        "INSERT OR IGNORE INTO app_config (key, value) VALUES ('merge_skip_global_enabled', '0')")
     conn.execute("""
         CREATE TABLE IF NOT EXISTS merge_override (
             cert_no TEXT PRIMARY KEY,
@@ -96,14 +100,14 @@ def get_special_units() -> List[dict]:
     """查询特殊结算单元配置列表。"""
     conn = get_db()
     rows = conn.execute(
-        "SELECT unit_code, unit_name, zero_salary_no_add, exclude_all, salary_month_scope, merge_skip_enabled "
+        "SELECT unit_code, unit_name, zero_salary_no_add, exclude_all, salary_month_scope, pay_pattern "
         "FROM special_unit_config ORDER BY unit_code").fetchall()
     conn.close()
     return [{"code": int(r["unit_code"]), "name": str(r["unit_name"] or ""),
              "zero_salary_no_add": int(r["zero_salary_no_add"] or 0),
              "exclude_all": int(r["exclude_all"] or 0),
              "salary_month_scope": str(r["salary_month_scope"] or "all"),
-             "merge_skip_enabled": int(r["merge_skip_enabled"] or 0)} for r in rows]
+             "pay_pattern": str(r["pay_pattern"] or "normal")} for r in rows]
 
 
 def get_scope_map() -> dict:
@@ -122,50 +126,53 @@ def get_scope_map() -> dict:
 
 
 def add_special_unit(unit_code: int, unit_name: str = "", exclude_all: bool = False,
-                     salary_month_scope: str = "all") -> None:
+                     salary_month_scope: str = "all", pay_pattern: str = "normal") -> None:
     """新增特殊结算单元配置。
 
     exclude_all=True 表示该结算单元完全不增员/不报个税 (不论是否有工资)。
     """
     conn = get_db()
     conn.execute(
-        "INSERT INTO special_unit_config (unit_code, unit_name, zero_salary_no_add, exclude_all, salary_month_scope) "
-        "VALUES (?, ?, 1, ?, ?)",
-        (unit_code, unit_name, 1 if exclude_all else 0, salary_month_scope))
+        "INSERT INTO special_unit_config (unit_code, unit_name, zero_salary_no_add, exclude_all, salary_month_scope, pay_pattern) "
+        "VALUES (?, ?, 1, ?, ?, ?)",
+        (unit_code, unit_name, 1 if exclude_all else 0, salary_month_scope, pay_pattern))
     conn.commit()
     conn.close()
 
 
 def add_special_unit_full(unit_code: int, unit_name: str = "",
                           zero_salary_no_add: int = 1, exclude_all: int = 0,
-                          salary_month_scope: str = "all") -> None:
+                          salary_month_scope: str = "all",
+                          pay_pattern: str = "normal") -> None:
     """新增特殊结算单元配置 (完整模式参数, 用于导入)。"""
     conn = get_db()
     conn.execute(
-        "INSERT INTO special_unit_config (unit_code, unit_name, zero_salary_no_add, exclude_all, salary_month_scope) "
-        "VALUES (?, ?, ?, ?, ?)",
-        (unit_code, unit_name, zero_salary_no_add, exclude_all, salary_month_scope))
+        "INSERT INTO special_unit_config (unit_code, unit_name, zero_salary_no_add, exclude_all, salary_month_scope, pay_pattern) "
+        "VALUES (?, ?, ?, ?, ?, ?)",
+        (unit_code, unit_name, zero_salary_no_add, exclude_all, salary_month_scope, pay_pattern))
     conn.commit()
     conn.close()
 
 
 def upsert_special_unit_full(unit_code: int, unit_name: str = "",
                              zero_salary_no_add: int = 1, exclude_all: int = 0,
-                             salary_month_scope: str = "all") -> None:
+                             salary_month_scope: str = "all",
+                             pay_pattern: str = "normal") -> None:
     """新增或更新特殊结算单元配置 (合并式导入用)。
 
     已存在同 code 时仅更新业务字段, 保留 created_at; 不存在则插入。
     """
     conn = get_db()
     conn.execute(
-        "INSERT INTO special_unit_config (unit_code, unit_name, zero_salary_no_add, exclude_all, salary_month_scope) "
-        "VALUES (?, ?, ?, ?, ?) "
+        "INSERT INTO special_unit_config (unit_code, unit_name, zero_salary_no_add, exclude_all, salary_month_scope, pay_pattern) "
+        "VALUES (?, ?, ?, ?, ?, ?) "
         "ON CONFLICT(unit_code) DO UPDATE SET "
         "unit_name = excluded.unit_name, "
         "zero_salary_no_add = excluded.zero_salary_no_add, "
         "exclude_all = excluded.exclude_all, "
-        "salary_month_scope = excluded.salary_month_scope",
-        (unit_code, unit_name, zero_salary_no_add, exclude_all, salary_month_scope))
+        "salary_month_scope = excluded.salary_month_scope, "
+        "pay_pattern = excluded.pay_pattern",
+        (unit_code, unit_name, zero_salary_no_add, exclude_all, salary_month_scope, pay_pattern))
     conn.commit()
     conn.close()
 
@@ -173,7 +180,7 @@ def upsert_special_unit_full(unit_code: int, unit_name: str = "",
 def update_special_unit(unit_code: int, exclude_all: Optional[bool] = None,
                         zero_salary_no_add: Optional[bool] = None,
                         salary_month_scope: Optional[str] = None,
-                        merge_skip_enabled: Optional[bool] = None) -> None:
+                        pay_pattern: Optional[str] = None) -> None:
     """更新特殊结算单元配置的排除模式 (传入的字段才更新)。"""
     sets = []
     binds = [unit_code]
@@ -186,9 +193,9 @@ def update_special_unit(unit_code: int, exclude_all: Optional[bool] = None,
     if salary_month_scope is not None:
         sets.append("salary_month_scope = ?")
         binds.insert(len(binds) - 1, salary_month_scope)
-    if merge_skip_enabled is not None:
-        sets.append("merge_skip_enabled = ?")
-        binds.insert(len(binds) - 1, 1 if merge_skip_enabled else 0)
+    if pay_pattern is not None:
+        sets.append("pay_pattern = ?")
+        binds.insert(len(binds) - 1, pay_pattern)
     if not sets:
         return
     conn = get_db()
@@ -229,42 +236,20 @@ def get_excluded_unit_codes() -> List[int]:
 
 
 # ---------------------------------------------------------------------------
-# "不报"选项开关 (2026-09-10 用户确认): 默认全部关闭, 普通用户看不到"不报"
-# 全局开 → 所有结算单元可见; 全局关 + 某结算单元开 → 仅该结算单元可见;
-# 未配置开关的结算单元 → 默认关闭。同时满足压月发(发放月内无"所属月==发放月"
-# 工资单)才在弹窗提供"不报"选项。
+# 发薪模式 pay_pattern (2026-09-10 用户确认): 压月发/双月发单元配置
+# 让用户告诉系统该单元的发薪规律, 仅影响"建议"; 弹窗仍由用户最终判断。
+# 'normal'(默认) = 正常发薪; 'pay_lag' = 压月发 (发放月无当月工资属正常);
+# 'bimonthly' = 双月发 (隔月发放, 每次发两个所属月工资, 报两个月三险之和)。
 # ---------------------------------------------------------------------------
 
-MERGE_SKIP_GLOBAL_KEY = "merge_skip_global_enabled"
-
-
-def get_merge_skip_global() -> bool:
-    """查询"不报"选项全局开关 (默认关闭)。"""
-    conn = get_db()
-    row = conn.execute(
-        "SELECT value FROM app_config WHERE key = ?", (MERGE_SKIP_GLOBAL_KEY,)).fetchone()
-    conn.close()
-    return bool(row and str(row["value"] or "") == "1")
-
-
-def set_merge_skip_global(enabled: bool) -> None:
-    """设置"不报"选项全局开关 (1=全局可见, 0=按结算单元粒度)。"""
-    conn = get_db()
-    conn.execute(
-        "INSERT INTO app_config (key, value) VALUES (?, ?) "
-        "ON CONFLICT(key) DO UPDATE SET value = excluded.value",
-        (MERGE_SKIP_GLOBAL_KEY, "1" if enabled else "0"))
-    conn.commit()
-    conn.close()
-
-
-def get_merge_skip_units() -> set:
-    """查询开启"不报"选项的结算单元代码集合 (未配置开关的单元视为关闭)。"""
+def get_pay_pattern_map() -> dict:
+    """查询结算单元 -> 发薪模式映射 (仅返回非 'normal' 的配置)。"""
     conn = get_db()
     rows = conn.execute(
-        "SELECT unit_code FROM special_unit_config WHERE merge_skip_enabled = 1").fetchall()
+        "SELECT unit_code, pay_pattern FROM special_unit_config "
+        "WHERE pay_pattern IS NOT NULL AND pay_pattern != 'normal'").fetchall()
     conn.close()
-    return {int(r["unit_code"]) for r in rows}
+    return {int(r["unit_code"]): str(r["pay_pattern"]) for r in rows}
 
 
 # ---------------------------------------------------------------------------

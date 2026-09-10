@@ -204,6 +204,7 @@ class TestBuildSuggestions:
         monkeypatch.setattr(tax_merge, "get_filing_map", fake_filing_map)
         monkeypatch.setattr(tax_merge, "get_unit_insurance_stats", fake_unit_stats)
         monkeypatch.setattr(tax_merge, "get_merge_overrides", lambda: {})
+        monkeypatch.setattr(tax_merge, "get_pay_pattern_map", lambda: {})
 
     def test_cross_month_person_detected(self):
         self.records = [
@@ -368,32 +369,9 @@ class TestBuildSuggestions:
         assert [(s["salary_month"], s["seq"]) for s in c["slips"]] == \
             [(202608, "1"), (202606, "1"), (202608, "2")]
 
-    def test_single_equals_double_skipped(self):
-        # 刘斌案例 (2026-09-10): 三险只出现在发放月(202608)这一个月份,
-        # 单月==多月==608.50 → 无"合并与否"选择 → 不进候选
-        self.records = [
-            _rec(cert="C1", sm=202607, tc930=1, unit=40802, unit_name="40802",
-                 income=Decimal("1140")),
-            _rec(cert="C1", sm=202608, tc930=2, seq="1", unit=40659, unit_name="40659",
-                 income=Decimal("2230"), pension=Decimal("351.46"),
-                 medical=Decimal("87.86"), unemp=Decimal("13.18"),
-                 housing=Decimal("156.00")),
-            _rec(cert="C1", sm=202608, tc930=3, seq="2", unit=40659, unit_name="40659",
-                 income=Decimal("0")),
-            _rec(cert="C1", sm=202608, tc930=4, seq="1", unit=40802, unit_name="40802",
-                 income=Decimal("1140")),
-        ]
-        res = tax_merge.build_merge_suggestions(None, 202608, [
-            {"unit": 40802, "salary_month": 202607, "seq": "1"},
-            {"unit": 40659, "salary_month": 202608, "seq": "1"},
-            {"unit": 40659, "salary_month": 202608, "seq": "2"},
-            {"unit": 40802, "salary_month": 202608, "seq": "1"},
-        ])
-        assert res["candidates"] == []
-        assert res["work_sheets"] == []
-
     def test_income_total_always_accumulates_even_single(self):
         # 单月只影响三险一金, 本期收入仍跨月全加 (与 merge_records_by_person 相同)
+        # 202606 当月(发放月)无三险 → 单月=最近三险月(202605)=400 → 场景③(报/不报)
         self.records = [
             _rec(cert="C1", sm=202605, tc930=1, income=Decimal("1000"),
                  pension=Decimal("400")),
@@ -406,7 +384,9 @@ class TestBuildSuggestions:
         assert c["suggested"] == "single"
         assert c["income_total"] == 3000.0
         assert c["insurance_double"] == 400.0
-        assert c["insurance_single"] == 0.0
+        assert c["insurance_single"] == 400.0    # 单月=最近三险月202605 (2026-09-10 口径)
+        assert c["single_equals_double"] is True  # 场景③: 报/不报
+        assert c["can_skip"] is True              # 当月无三险 → 可选不报
 
     def test_pay_month_no_record_falls_back_latest_month(self):
         # 李浩案例 (2026-09-10): 压月发工资, 发放月 202608 没有所属月==发放月的工资单,
@@ -436,10 +416,10 @@ class TestBuildSuggestions:
         assert [(s["salary_month"], s["seq"]) for s in c["slips"]] == \
             [(202607, "1"), (202606, "1")]
 
-    def test_skip_visibility_switch(self):
-        # "不报"选项开关 (2026-09-10 用户确认): 默认全部关闭 → can_skip=False;
-        # 全局开 → 压月发人员 can_skip=True; 全局关+单元开 → 仅该单元压月发人员可见;
-        # 无关单元开开关 → 不可见; 有"所属月==发放月"工资单 → 即使开关开也不可见
+    def test_can_skip_is_data_judgment_no_switches(self):
+        # "不报"可见性改为纯数据判定 (2026-09-10 用户确认, 开关已移除):
+        # 李浩压月发案例: 发放月 202608 无当月工资单 → 当月三险=0 → can_skip=True
+        # (不再需要任何开关; 场景④ 单月!=多月 → 候选 单月/多月/不报)
         self.records = [
             _rec(cert="C1", sm=202606, tc930=1, unit=39819, unit_name="铁建宽城",
                  income=Decimal("9172.00"), pension=Decimal("1336.40"),
@@ -454,30 +434,129 @@ class TestBuildSuggestions:
             {"unit": 39819, "salary_month": 202606, "seq": "1"},
             {"unit": 39819, "salary_month": 202607, "seq": "1"},
         ]
-        # 默认: 全局关 + 未配置单元 → 不报不可见
-        assert tax_merge.build_merge_suggestions(
-            None, 202608, combos)["candidates"][0]["can_skip"] is False
-        # 全局开 → 压月发可见
-        assert tax_merge.build_merge_suggestions(
-            None, 202608, combos, skip_global_enabled=True)["candidates"][0]["can_skip"] is True
-        # 全局关 + 该单元(39819)开关开 → 可见
-        assert tax_merge.build_merge_suggestions(
-            None, 202608, combos, skip_unit_codes={39819})["candidates"][0]["can_skip"] is True
-        # 全局关 + 无关单元(其他 code)开关开 → 不可见
-        assert tax_merge.build_merge_suggestions(
-            None, 202608, combos, skip_unit_codes={99999})["candidates"][0]["can_skip"] is False
+        # 无任何开关参数 → 当月无三险 → 不报可见
+        c = tax_merge.build_merge_suggestions(None, 202608, combos)["candidates"][0]
+        assert c["can_skip"] is True
+        assert c["single_equals_double"] is False   # 2889.62 != 5779.24 → 场景④
+        assert c["notice"] == "发放月无当月工资单（压月发）"
 
-    def test_skip_hidden_when_has_cur_month_record(self):
-        # 发放月内有"所属月==发放月"工资单(正常当月发) → 即使开关全开, 不报也不可见
+    def test_can_skip_false_when_cur_month_has_insurance(self):
+        # 正常当月发且当月三险>0 (场景②: 单月!=多月) → 不报不可见, 只能 单月/多月
         self.records = [
             _rec(cert="C1", sm=202605, tc930=1, unit=100, unit_name="A单元",
                  pension=Decimal("400")),
             _rec(cert="C1", sm=202606, tc930=2, unit=100, unit_name="A单元",
                  pension=Decimal("200")),
         ]
-        res = tax_merge.build_merge_suggestions(
-            None, 202606, self.COMBOS, skip_global_enabled=True)
-        assert res["candidates"][0]["can_skip"] is False
+        res = tax_merge.build_merge_suggestions(None, 202606, self.COMBOS)
+        c = res["candidates"][0]
+        assert c["can_skip"] is False
+        assert c["single_equals_double"] is False   # 200 != 600 → 场景②
+
+    def test_scenario3_no_cur_insurance_single_equals_double(self):
+        # 场景③ (2026-09-10 用户确认, 池凤财案例): 无当月三险 且 单月==多月
+        # (三险只出现在一笔) → 候选 报/不报: can_skip=True, single_equals_double=True,
+        # 单月=最近三险月(202605)=608.50 (不再取发放月0)
+        self.records = [
+            _rec(cert="C1", sm=202605, tc930=1, unit=39575, unit_name="39575",
+                 income=Decimal("7485.00"), pension=Decimal("351.46"),
+                 medical=Decimal("87.86"), unemp=Decimal("13.18"),
+                 housing=Decimal("156.00")),
+            _rec(cert="C1", sm=202607, tc930=2, unit=39575, unit_name="39575",
+                 income=Decimal("0")),
+        ]
+        res = tax_merge.build_merge_suggestions(None, 202607, [
+            {"unit": 39575, "salary_month": 202605, "seq": "1"},
+            {"unit": 39575, "salary_month": 202607, "seq": "1"},
+        ])
+        c = res["candidates"][0]
+        assert c["insurance_single"] == 608.50    # 单月=最近三险月202605 (2026-09-10 口径)
+        assert c["insurance_double"] == 608.50
+        assert c["single_equals_double"] is True  # 场景③ → 前端渲染 报/不报
+        assert c["can_skip"] is True              # 当月(发放月)无三险 → 可选不报
+        assert c["notice"] == "发放当月工资无三险一金"
+
+    def test_scenario1_auto_skip_single_equals_double_cur_insurance(self):
+        # 场景① (2026-09-10 用户确认, 刘斌案例): 当月三险>0 且 单月==多月
+        # (三险只出现在发放月) → 完全自动不弹窗, 不列候选
+        self.records = [
+            _rec(cert="C1", sm=202607, tc930=1, unit=40802, unit_name="40802",
+                 income=Decimal("1140")),
+            _rec(cert="C1", sm=202608, tc930=2, seq="1", unit=40659, unit_name="40659",
+                 income=Decimal("2230"), pension=Decimal("351.46"),
+                 medical=Decimal("87.86"), unemp=Decimal("13.18"),
+                 housing=Decimal("156.00")),
+            _rec(cert="C1", sm=202608, tc930=3, seq="2", unit=40659, unit_name="40659",
+                 income=Decimal("0")),
+            _rec(cert="C1", sm=202608, tc930=4, seq="1", unit=40802, unit_name="40802",
+                 income=Decimal("1140")),
+        ]
+        res = tax_merge.build_merge_suggestions(None, 202608, [
+            {"unit": 40802, "salary_month": 202607, "seq": "1"},
+            {"unit": 40659, "salary_month": 202608, "seq": "1"},
+            {"unit": 40659, "salary_month": 202608, "seq": "2"},
+            {"unit": 40802, "salary_month": 202608, "seq": "1"},
+        ])
+        assert res["candidates"] == []            # 场景① 自动跳过, 不弹窗
+        assert res["work_sheets"] == []
+
+    def test_pay_lag_suggests_single(self, monkeypatch):
+        # 发薪模式=压月发 (2026-09-10 用户确认): 建议=单月(按最近三险月), 不跳过弹窗
+        self.records = [
+            _rec(cert="C1", sm=202606, tc930=1, unit=39819, unit_name="铁建宽城",
+                 income=Decimal("9172.00"), pension=Decimal("1336.40"),
+                 medical=Decimal("334.10"), unemp=Decimal("50.12"),
+                 housing=Decimal("1169.00")),
+            _rec(cert="C1", sm=202607, tc930=2, unit=39819, unit_name="铁建宽城",
+                 income=Decimal("9157.00"), pension=Decimal("1336.40"),
+                 medical=Decimal("334.10"), unemp=Decimal("50.12"),
+                 housing=Decimal("1169.00")),
+        ]
+        monkeypatch.setattr(tax_merge, "get_pay_pattern_map", lambda: {39819: "pay_lag"})
+        res = tax_merge.build_merge_suggestions(None, 202608, [
+            {"unit": 39819, "salary_month": 202606, "seq": "1"},
+            {"unit": 39819, "salary_month": 202607, "seq": "1"},
+        ])
+        c = res["candidates"][0]
+        assert c["pay_pattern"] == "pay_lag"
+        assert c["suggested"] == "single"
+        assert "压月发" in c["reason"]
+        assert c["confidence"] == "high"
+        assert c["can_skip"] is True              # 压月发标记只影响建议, 不控制"不报"
+
+    def test_bimonthly_suggests_double(self, monkeypatch):
+        # 发薪模式=双月发 (2026-09-10 用户确认): 建议=多月合并, 不跳过弹窗
+        self.records = [
+            _rec(cert="C1", sm=202605, tc930=1, unit=100, unit_name="A单元",
+                 income=Decimal("5000"), pension=Decimal("400"), medical=Decimal("100"),
+                 unemp=Decimal("15"), housing=Decimal("350")),
+            _rec(cert="C1", sm=202606, tc930=2, unit=100, unit_name="A单元",
+                 income=Decimal("6000"), pension=Decimal("480"), medical=Decimal("120"),
+                 unemp=Decimal("18"), housing=Decimal("420")),
+        ]
+        monkeypatch.setattr(tax_merge, "get_pay_pattern_map", lambda: {100: "bimonthly"})
+        res = tax_merge.build_merge_suggestions(None, 202606, self.COMBOS)
+        c = res["candidates"][0]
+        assert c["pay_pattern"] == "bimonthly"
+        assert c["suggested"] == "double"
+        assert "双月发" in c["reason"]
+        assert c["confidence"] == "high"
+        assert c["can_skip"] is False             # 双月发标记只影响建议; can_skip仍=当月无三险判定
+
+    def test_be_flag_beats_pay_pattern(self, monkeypatch):
+        # 建议优先级 (2026-09-10 用户确认): BE强制 > 发薪模式 > 历史档案
+        self.records = [
+            _rec(cert="C1", sm=202605, tc930=1, be=Decimal("12.34"),
+                 unit=100, unit_name="A单元", pension=Decimal("400")),
+            _rec(cert="C1", sm=202606, tc930=2, unit=100, unit_name="A单元",
+                 pension=Decimal("200")),
+        ]
+        monkeypatch.setattr(tax_merge, "get_pay_pattern_map", lambda: {100: "bimonthly"})
+        res = tax_merge.build_merge_suggestions(None, 202606, self.COMBOS)
+        c = res["candidates"][0]
+        assert c["be_flag"] is True
+        assert c["suggested"] == "single"         # BE 强制, 压过双月发建议
+        assert "BE" in c["reason"]
 
     def test_salary_months_desc_order(self):
         # 所属月列表升序, 上月档 = 最早所属月

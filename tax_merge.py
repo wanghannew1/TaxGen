@@ -5,16 +5,32 @@
 用户还可手动选"不报"（三险按 0 报，如本人当月确无工资）。
 
 术语（2026-09-10 改名）："多月"= 各所属月三险全部并入本期（原"翻倍"，并非金额×2）；
-"单月"= 只报一个月的三险（原"单倍"/原"当月"）——优先指所属月==发放月的记录；
-甲方压月发工资时发放月内没有所属月==发放月的记录，缺省取最新所属月。
+"单月"= 只报一个月的三险（原"单倍"/原"当月"）。
 "不报"= 三险一金全部按 0（用户手动备选，不默认；2026-09-10 用户确认）。
 
-单月取数口径：所属月==发放月（缺省取最新所属月）**全部记录**的三险之和，
-而非 tc930_id 最大的基准记录一条——同月多批次时含三险的批次可能不是基准记录，
+单月取数口径（2026-09-10 用户确认，规则重构）：**最近一次三险>0 的所属月**
+全部记录的三险之和。特例：发放月(所属月==发放月)有三险 → 单月=发放月三险
+(场景② 的"当月的单月"); 无当月三险 → 取最近一个有三险的所属月
+(场景③/④: 如池凤财 202607 发 5 月工资, 单月=202605=608.50)。
+而非 tc930_id 最大基准记录一条——同月多批次时含三险的批次可能不是基准记录，
 只取基准会漏报单月三险（2026-09-10 修复，issue IKEMCM/#6）。
 
-自动跳过（2026-09-10 用户确认）：当三险只出现在发放月这一个月份时，
-单月==多月 金额相同，不涉及"合并与否"的选择 → 不列入确认候选，自动按单月处理。
+候选判定（2026-09-10 用户确认，去掉"不报"开关、选择权全部交给用户）：
+- 场景①: 当月有工资且当月三险>0, 其他工资单无三险 → 单月==多月 → 不列候选, 自动按单月
+- 场景②: 当月有三险, 单月!=多月 → 候选: 单月(当月的)/多月, 无不报
+- 场景③: 无当月三险, 单月==多月(三险只在一笔) → 候选: 报/不报
+- 场景④: 无当月三险, 单月!=多月 → 候选: 单月/多月/不报
+"不报"可见性 = 当月(发放月)无三险一金 (can_skip), 不再受任何开关控制
+(2026-09-10 用户确认: 开关做法可能误导, 把选择权留给用户)。
+
+单元级"发薪模式"配置 (config_db.pay_pattern, 2026-09-10 用户确认):
+- 'pay_lag' 压月发: 该单元发放月无当月工资属正常, 建议=单月(最近三险月)
+- 'bimonthly' 双月发: 该单元隔月发放、每次发两个所属月工资, 建议=多月
+- 'normal' 或未配置: 按档案实证判定; 不规则单元每次由用户判断
+仅影响"建议"与提示, 不跳过弹窗, 与弹窗处仅做记号互不关联。
+
+自动跳过（2026-09-10 用户确认）：仅场景①（当月三险>0 且 单月==多月）不列候选,
+完全自动不再弹窗。
 
 数据依据：上月报送档（filing_record 税款计算，month=税款所属期）中该人状态
 （见 docs/0申报三险一金合并规则分析.md 实证）：
@@ -28,7 +44,7 @@
 from decimal import Decimal
 from queries import get_salary_records_by_combos, get_unit_insurance_stats
 from filing_history import get_filing_map
-from config_db import get_merge_overrides
+from config_db import get_merge_overrides, get_pay_pattern_map
 from templates_gen.formulas import calc_本期收入
 
 
@@ -48,11 +64,11 @@ def merge_records_by_person(records, by_pay_month: bool = False,
                         仅适用于组合确认流程——所有组合共享同一发放月份(TC8M.ATC8G7)。
     single_certs: 三险一金按"单月"处理的证件号集合（用户确认"多月合并"之外的人员）。
                   这些人的收入/个税仍跨所属月累加，但养老/医疗/失业/公积金只取
-                  **单月（cur_month，缺省=max 工资所属年月）全部记录**之和，
-                  不累加其他所属月（上月在旧档已报过的三险不再并入本月，避免重复扣除）。
+                  **单月（最近一次三险>0 的所属月；发放月有三险则=发放月）全部记录**
+                  之和，不累加其他所属月（上月在旧档已报过的三险不再并入本月，避免重复扣除）。
                   （2026-09-10 修复 IKEMCM/#6：原实现只取基准记录一条，同月多批次时
-                  含三险的批次可能不是基准记录导致漏报单月三险。压月发时发放月无记录，
-                  缺省取最新所属月，与 build_merge_suggestions 口径一致。）
+                  含三险的批次可能不是基准记录导致漏报单月三险。2026-09-10 用户确认口径：
+                  无当月三险时取"最近一次有三险的所属月"，如 202607 发放 5 月工资→单月=5月。）
     skip_certs: 三险一金"不报"的证件号集合（用户手动选择，2026-09-10）：
                 这些人的收入/个税仍跨所属月正常累加，但养老/医疗/失业/公积金
                 **全部按 0 上报**（如某人当月可能已无工资，需按 0 报三险）。
@@ -84,14 +100,23 @@ def merge_records_by_person(records, by_pay_month: bool = False,
             m.失业个人 = Decimal("0")
             m.公积金个人 = Decimal("0")
         elif single:
+            # 单月取数口径 (2026-09-10 用户确认): 最近一次三险>0 的所属月全部记录;
+            # 发放月(cur_month)有三险 → 单月=发放月; 无当月三险 → 取最近有三险的所属月。
+            # (李浩压月发: 202608 发 6/7 月工资, 无当月记录 → 单月=7月; 若某月无三险则跳过该月)
             month = cur_month if cur_month is not None else \
                 max(int(r.工资所属年月 or 0) for r in recs)
             cur_recs = [r for r in recs if int(r.工资所属年月 or 0) == month]
-            if not cur_recs:
-                # 压月发工资: 发放月没有所属月==cur_month 的记录(如 202608 发 6/7 月工资),
-                # 缺省取最新所属月, 与 build_merge_suggestions 口径一致 (2026-09-10 李浩案例)
-                month = max(int(r.工资所属年月 or 0) for r in recs)
-                cur_recs = [r for r in recs if int(r.工资所属年月 or 0) == month]
+            cur_ins = sum(r.养老个人 + r.医疗个人 + r.失业个人 + r.公积金个人 for r in cur_recs)
+            if cur_ins == 0:
+                # 当月(发放月)无三险 → 取最近一次三险>0 的所属月 (2026-09-10 口径)
+                for cand in sorted({int(r.工资所属年月 or 0) for r in recs}, reverse=True):
+                    _cands = [r for r in recs if int(r.工资所属年月 or 0) == cand]
+                    if sum(r.养老个人 + r.医疗个人 + r.失业个人 + r.公积金个人 for r in _cands) > 0:
+                        month = cand
+                        cur_recs = _cands
+                        break
+                else:
+                    cur_recs = []  # 全部月份无三险 → 单月三险为 0
             m.养老个人 = sum(r.养老个人 for r in cur_recs)
             m.医疗个人 = sum(r.医疗个人 for r in cur_recs)
             m.失业个人 = sum(r.失业个人 for r in cur_recs)
@@ -159,8 +184,8 @@ def _slips_of(recs, cur_month=None):
     （其中所属月==单月/pay_month 的第一个），其余按所属月降序（最新在前）。
 
     is_base: 该工资单是否为基准记录(tc930_id 最大, 最新经办)。
-    单月取数口径(2026-09-10 IKEMCM/#6): 单月(所属月==cur_month, 缺省 max 所属月)
-    全部 slips 的三险之和, 而非基准记录一条。
+    单月取数口径(2026-09-10 用户确认): 最近一次三险>0 的所属月全部 slips 之和
+    (发放月有三险则=发放月; 无当月三险取最近有三险的月), 而非基准记录一条。
     排序基准(2026-09-10 用户确认): 6月/7月工资应 7月在前 6月在后（压月发, 最新所属月在前）。
     """
     if cur_month is None:
@@ -208,26 +233,23 @@ def _status_of(prev):
     return "有报"  # 收入>0 但三险=0（异常档，按已报处理，不虚构三险）
 
 
-def build_merge_suggestions(conn, pay_month, combos,
-                            skip_global_enabled: bool = False,
-                            skip_unit_codes: set | None = None):
+def build_merge_suggestions(conn, pay_month, combos):
     """扫描指定发放月已确认组合中的跨月合并人员，给出多月/单月判定建议。
 
     Args:
         conn: Oracle 连接（只读）
         pay_month: 发放月份（TC8M.ATC8G7），如 202606
         combos: 前端确认的组合列表，每项含 unit/salary_month/seq 等
-        skip_global_enabled: "不报"选项全局开关 (默认关闭)
-        skip_unit_codes: 开启"不报"选项的结算单元代码集合 (默认空)
 
-    "不报"可见性 (2026-09-10 用户确认): 默认全部关闭; 全局开 → 所有结算单元
-    可见; 全局关 + 单元开关开 → 仅该单元可见; 未配置开关 → 默认关闭。
-    且仅当压月发 (发放月内无"所属月==发放月"工资单) 时才能选"不报"。
+    "不报"可见性 (2026-09-10 用户确认, 去掉开关): 当月(发放月)无三险一金的候选
+    均提供"不报"选项(can_skip=True), 不再受全局/结算单元开关控制——把报不报的
+    选择权完全交给用户。'pay_lag'压月发/'bimonthly'双月发单元配置仅影响建议。
 
     Returns:
         dict: {
             "pay_month", "prev_month", "candidates": [
-                {"cert_no", "name", "emp_no", "can_skip", "units", "unit_names",
+                {"cert_no", "name", "emp_no", "can_skip", "single_equals_double",
+                 "pay_pattern", "units", "unit_names",
                  "salary_months", "prev_month", "prev_status", "prev_income",
                  "prev_insurance", "be_flag", "suggested", "reason", "confidence",
                  "default_chosen", "persisted"}
@@ -237,10 +259,13 @@ def build_merge_suggestions(conn, pay_month, combos,
             ]
         }
 
-    自动跳过（2026-09-10 用户确认）：三险只出现在发放月这一个月份时（单月==多月），
-    不涉及"合并与否"的选择，不列入候选。
+    候选判定（2026-09-10 用户确认）:
+    场景① 当月三险>0 且 单月==多月 → 不列候选, 完全自动(不再弹窗)
+    场景② 当月三险>0 且 单月!=多月 → 候选(单月/多月, 无不报)
+    场景③ 无当月三险 且 单月==多月(三险只在一笔) → 候选(报/不报)
+    场景④ 无当月三险 且 单月!=多月 → 候选(单月/多月/不报)
+    全部所属月都无三险 → 不列候选。
     """
-    skip_unit_codes = skip_unit_codes or set()
     combo_set = {(int(c.get("unit", 0) or 0), int(c.get("salary_month", 0) or 0),
                   str(c.get("seq", "") or "")) for c in combos}
     salary_months = sorted({c[1] for c in combo_set})
@@ -280,6 +305,7 @@ def build_merge_suggestions(conn, pay_month, combos,
 
     prev_maps = {pm: get_filing_map(pm, "税款计算") for pm in prev_months}
     overrides = get_merge_overrides()
+    pay_pattern_map = get_pay_pattern_map()
 
     candidates = []
     work_sheets = {}
@@ -291,8 +317,27 @@ def build_merge_suggestions(conn, pay_month, combos,
                                    ("pension", "medical", "unemployment", "housing")), 2) if prev else 0.0
         be_flag = any(float(r.补缴及退款保险金额个人 or 0) != 0 for r in recs)
 
+        base = recs[0]
+        unit_names = {str(r.结算单元): str(r.结算单元名称 or "") for r in recs
+                      if (r.结算单元, r.工资所属年月, r.当月批次) in combo_set}
+        units_codes = sorted(int(u) for u in unit_names)
+        main_unit = _main_unit_of(recs, main_units)
+        slips = _slips_of(recs, cur_month=pay_month)
+        # 发薪模式 (2026-09-10 用户确认): 特殊结算单元配置 pay_lag压月发/bimonthly双月发,
+        # 仅影响建议与弹窗记号(展示用), 不跳过弹窗、不控制"不报"。
+        pattern = "normal"
+        for u in [main_unit] + units_codes:
+            pat = pay_pattern_map.get(u)
+            if pat not in (None, "normal"):
+                pattern = pat
+                break
+        # 建议优先级 (2026-09-10 用户确认): BE强制 > 发薪模式 > 历史档案
         if be_flag:
             suggested, reason, confidence = "single", "本月ATC93BE≠0（借支/补缴）→ 只报单月三险（不合并上报）", "high"
+        elif pattern == "pay_lag":
+            suggested, reason, confidence = "single", "该单元已标记压月发 → 按最近三险月报单月（不合并不同所属月）", "high"
+        elif pattern == "bimonthly":
+            suggested, reason, confidence = "double", "该单元已标记双月发 → 多月合并上报（报两个月三险之和）", "high"
         elif status == "有报":
             suggested, reason, confidence = "single", "上月已报三险 → 只报单月（避免重复扣除）", "high"
         elif status == "未找到":
@@ -308,43 +353,55 @@ def build_merge_suggestions(conn, pay_month, combos,
             default_chosen = suggested
             persisted = False
 
-        base = recs[0]
-        unit_names = {str(r.结算单元): str(r.结算单元名称 or "") for r in recs
-                      if (r.结算单元, r.工资所属年月, r.当月批次) in combo_set}
-        main_unit = _main_unit_of(recs, main_units)
-        slips = _slips_of(recs, cur_month=pay_month)
         # 合并金额口径 (与 merge_records_by_person 一致):
         # 收入(本期收入)跨月总是全加; 三险一金 多月=各月全加,
-        # 单月=pay_month(所属月==发放月, 缺省最新所属月)全部 slips 之和 (2026-09-10 IKEMCM/#6)。
+        # 单月=最近一次三险>0 的所属月全部 slips 之和 (2026-09-10 用户确认:
+        # 发放月有三险 → 单月=发放月; 无当月三险 → 取最近三险月, 如池凤财 202605)。
         income_total = round(sum(float(calc_本期收入(r)) for r in recs), 2)
         insurance_double = round(sum(s["insurance"] for s in slips), 2)
-        # 单月=pay_month(所属月==发放月)全部 slips 之和 (2026-09-10 IKEMCM/#6);
-        # 压月发工资时发放月可能没有"所属月==发放月"的记录(如 202608 发放的却是 6/7 月工资),
-        # 缺省取最新所属月(2026-09-10 李浩案例: 单月=7月 2889.62, 而非 0)。
-        # can_skip: "不报"选项可见性 = 压月发(发放月内无"所属月==发放月"工资单)
-        # AND (全局开关开 OR 该成员任一结算单元开关开)。2026-09-10 用户确认:
-        # 默认全部关闭, 普通用户看不到"不报"; 未配置开关的结算单元默认关闭。
-        has_cur_month_rec = any(s["salary_month"] == pay_month for s in slips)
-        skip_visible = skip_global_enabled or bool({int(u) for u in unit_names} & skip_unit_codes)
         cur_slips = [s for s in slips if s["salary_month"] == pay_month]
-        if not cur_slips:
-            latest_sm = max(s["salary_month"] for s in slips)
-            cur_slips = [s for s in slips if s["salary_month"] == latest_sm]
-        insurance_single = round(sum(s["insurance"] for s in cur_slips), 2)
-        if insurance_single == insurance_double:
-            # 三险只出现在一个月份（单月==多月）→ 无"合并与否"选择
-            # （用户 2026-09-10）: 不列候选, 生成侧按哪条处理结果一致
+        cur_insurance = round(sum(s["insurance"] for s in cur_slips), 2)
+        if cur_insurance > 0:
+            single_slips = cur_slips
+        else:
+            single_slips = []
+            for _sm in sorted({s["salary_month"] for s in slips}, reverse=True):
+                _ss = [s for s in slips if s["salary_month"] == _sm]
+                if sum(s["insurance"] for s in _ss) > 0:
+                    single_slips = _ss
+                    break
+        insurance_single = round(sum(s["insurance"] for s in single_slips), 2)
+        # 候选判定四场景 (2026-09-10 用户确认):
+        # ① 当月三险>0 且 单月==多月 → 完全自动不弹 (三险只当月有, 无合并选择)
+        # ② 当月三险>0 且 单月!=多月 → 候选(单月/多月, 无不报)
+        # ③ 无当月三险 且 单月==多月 → 候选(报/不报)
+        # ④ 无当月三险 且 单月!=多月 → 候选(单月/多月/不报)
+        # 全部所属月都无三险 → 不列候选。
+        if insurance_double == 0:
             continue
+        single_equals_double = (insurance_single == insurance_double)
+        if single_equals_double and cur_insurance > 0:
+            continue
+        can_skip = cur_insurance == 0  # "不报"选项 = 当月(发放月)无三险 (2026-09-10 开关已移除)
+        if not cur_slips:
+            notice = "发放月无当月工资单（压月发）"
+        elif cur_insurance == 0:
+            notice = "发放当月工资无三险一金"
+        else:
+            notice = ""
         KEY_KINDS = ("pension", "medical", "unemployment", "housing")
-        insurance_single_detail = {k: round(sum(s[k] for s in cur_slips), 2)
+        insurance_single_detail = {k: round(sum(s[k] for s in single_slips), 2)
                                    for k in KEY_KINDS}
         insurance_double_detail = {k: round(sum(s[k] for s in slips), 2) for k in KEY_KINDS}
         candidates.append({
             "cert_no": cert,
             "name": str(base.姓名 or ""),
             "emp_no": str(base.职工号 or ""),
-            "can_skip": (not has_cur_month_rec) and skip_visible,
-            "units": sorted(int(u) for u in unit_names),
+            "can_skip": can_skip,
+            "single_equals_double": single_equals_double,
+            "pay_pattern": pattern,
+            "notice": notice,
+            "units": units_codes,
             "unit_names": unit_names,
             "salary_months": sorted({r.工资所属年月 for r in recs}),
             "main_unit": main_unit,

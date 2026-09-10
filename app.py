@@ -185,11 +185,7 @@ def api_merge_suggestions():
         if any(not c.get("seq") for c in combos):
             return jsonify({"error": "组合缺少批次号"}), 400
         conn = get_connection()
-        from config_db import get_merge_skip_global, get_merge_skip_units
-        return jsonify(build_merge_suggestions(
-            conn, pay_month, combos,
-            skip_global_enabled=get_merge_skip_global(),
-            skip_unit_codes=get_merge_skip_units()))
+        return jsonify(build_merge_suggestions(conn, pay_month, combos))
     except Exception as e:
         return _log_api_error(e)
 
@@ -219,11 +215,7 @@ def api_merge_suggestions_export():
         if not pay_month or not combos:
             return jsonify({"error": "请选择月份并勾选待报组合"}), 400
         conn = get_connection()
-        from config_db import get_merge_skip_global, get_merge_skip_units
-        res = build_merge_suggestions(
-            conn, pay_month, combos,
-            skip_global_enabled=get_merge_skip_global(),
-            skip_unit_codes=get_merge_skip_units())
+        res = build_merge_suggestions(conn, pay_month, combos)
         return _merge_suggestions_to_xlsx(res)
     except Exception as e:
         return _log_api_error(e)
@@ -405,24 +397,21 @@ def api_generate():
             abnormal = [r for r in abnormal if _keep(r.get("ATB930"), r.get("ATC93AA"))]
         raw_records = records
         if merge_by_person:
-            from config_db import upsert_merge_overrides, get_merge_skip_global, get_merge_skip_units
+            from config_db import upsert_merge_overrides
             merge_choices = data.get("merge_choices") or {}
             single_certs = {c for c, mode in merge_choices.items() if mode == "single"}
-            # "不报"(skip)仅允许压月发人员且开关可见:
-            # 可见性 = 全局开关开 OR 该人任一结算单元开关开 (2026-09-10 用户确认,
-            # 默认全部关闭, 普通用户看不到"不报"; 此校验防御 Excel 导回等绕过 UI 的路径)
-            skip_global = get_merge_skip_global()
-            skip_units = get_merge_skip_units()
+            # "不报"(skip)数据判定 (2026-09-10 用户确认, 开关已移除):
+            # 仅当发放月(month)无三险一金才允许不报
+            # (发放月记录三险全为 0 或 无发放月记录; 防御 Excel 导回等绕过 UI 的路径)
             skip_certs = set()
             for c, mode in merge_choices.items():
                 if mode != "skip":
                     continue
                 recs_c = [r for r in records if (r.身份证 or r.职工号) == c]
-                if any(r.工资所属年月 == month for r in recs_c):
-                    continue  # 有当月工资单 → 压月发才允许不报
-                if not (skip_global or any(r.结算单元 in skip_units for r in recs_c)):
-                    continue  # 开关未开 → 不报不可见, 忽略该选择
-                skip_certs.add(c)
+                cur_ins = sum(r.养老个人 + r.医疗个人 + r.失业个人 + r.公积金个人
+                              for r in recs_c if r.工资所属年月 == month)
+                if cur_ins == 0:
+                    skip_certs.add(c)
             records = merge_records_by_person(records, by_pay_month=merge_by_pay_month,
                                               single_certs=single_certs,
                                               skip_certs=skip_certs, cur_month=month)
@@ -835,7 +824,7 @@ def api_special_units_list():
 
 @app.route("/api/special-units", methods=["POST"])
 def api_special_units_add():
-    """新增特殊结算单元配置 (exclude_all=完全排除不增员不报税, SQLite config_db)。"""
+    """新增特殊结算单元配置 (exclude_all=完全排除不增员不报税, pay_pattern=发薪模式, SQLite config_db)。"""
     try:
         from config_db import add_special_unit
         data = request.get_json()
@@ -843,33 +832,12 @@ def api_special_units_add():
         unit_name = str(data.get("unit_name", "") or "")
         exclude_all = bool(data.get("exclude_all", False))
         salary_month_scope = str(data.get("salary_month_scope", "") or "all")
+        pay_pattern = str(data.get("pay_pattern", "") or "normal") or "normal"
         if not unit_code:
             return jsonify({"error": "请填写结算单元代码"}), 400
         add_special_unit(unit_code, unit_name, exclude_all=exclude_all,
-                         salary_month_scope=salary_month_scope)
-        return jsonify({"ok": True})
-    except Exception as e:
-        return _log_api_error(e)
-
-
-@app.route("/api/merge-skip-config", methods=["GET"])
-def api_merge_skip_config():
-    """查询"不报"选项开关配置: 全局开关 + 已开启的结算单元集合。"""
-    try:
-        from config_db import get_merge_skip_global, get_merge_skip_units
-        return jsonify({"global_enabled": get_merge_skip_global(),
-                        "skip_units": sorted(get_merge_skip_units())})
-    except Exception as e:
-        return _log_api_error(e)
-
-
-@app.route("/api/merge-skip-config", methods=["POST"])
-def api_merge_skip_config_update():
-    """设置"不报"选项全局开关 (1=全局可见; 0=按结算单元粒度)。"""
-    try:
-        from config_db import set_merge_skip_global
-        data = request.get_json() or {}
-        set_merge_skip_global(bool(data.get("global_enabled", False)))
+                         salary_month_scope=salary_month_scope,
+                         pay_pattern=pay_pattern)
         return jsonify({"ok": True})
     except Exception as e:
         return _log_api_error(e)
@@ -877,19 +845,19 @@ def api_merge_skip_config_update():
 
 @app.route("/api/special-units/<int:unit_code>/mode", methods=["POST"])
 def api_special_units_mode(unit_code):
-    """更新特殊结算单元配置的排除模式 (zero_salary_no_add / exclude_all / merge_skip_enabled 开关, SQLite)。"""
+    """更新特殊结算单元配置的排除模式 (zero_salary_no_add / exclude_all / salary_month_scope / pay_pattern, SQLite)。"""
     try:
         from config_db import update_special_unit
         data = request.get_json() or {}
         exclude_all = data.get("exclude_all")
         zero_salary_no_add = data.get("zero_salary_no_add")
         salary_month_scope = data.get("salary_month_scope")
-        merge_skip_enabled = data.get("merge_skip_enabled")
+        pay_pattern = data.get("pay_pattern")
         update_special_unit(unit_code,
                             exclude_all=exclude_all if exclude_all is not None else None,
                             zero_salary_no_add=zero_salary_no_add if zero_salary_no_add is not None else None,
                             salary_month_scope=salary_month_scope if salary_month_scope is not None else None,
-                            merge_skip_enabled=merge_skip_enabled if merge_skip_enabled is not None else None)
+                            pay_pattern=pay_pattern if pay_pattern is not None else None)
         return jsonify({"ok": True})
     except Exception as e:
         return _log_api_error(e)
@@ -897,17 +865,18 @@ def api_special_units_mode(unit_code):
 
 @app.route("/api/special-units/template")
 def api_special_units_template():
-    """下载特殊结算单元配置导入模板 (5列: 代码/名称/工资为0/完全排除/所属月取数范围)。"""
+    """下载特殊结算单元配置导入模板 (6列: 代码/名称/工资为0/完全排除/所属月取数范围/发薪模式)。"""
     try:
         from openpyxl import Workbook
         wb = Workbook()
         ws = wb.active
         ws.title = "特殊结算单元配置"
-        ws.append(["结算单元代码", "结算单元名称", "工资为0不增员不报税", "完全排除不增员不报税", "工资所属月取数范围"])
-        ws.append([None, "测试A-仅工资0", 1, 0, "all"])
-        ws.append([None, "测试B-仅完全排除", 0, 1, "all"])
-        ws.append([None, "测试C-仅最早1个月(压月)", 0, 0, "first_1"])
-        ws.append([None, "测试D-两种+最早2个月", 1, 1, "first_2"])
+        ws.append(["结算单元代码", "结算单元名称", "工资为0不增员不报税", "完全排除不增员不报税",
+                   "工资所属月取数范围", "发薪模式"])
+        ws.append([None, "测试A-仅工资0", 1, 0, "all", "normal"])
+        ws.append([None, "测试B-仅完全排除", 0, 1, "all", "normal"])
+        ws.append([None, "测试C-仅最早1个月(压月)", 0, 0, "first_1", "pay_lag"])
+        ws.append([None, "测试D-两种+最早2个月", 1, 1, "first_2", "bimonthly"])
         from datetime import datetime as _dt
         filename = f"特殊结算单元配置导入模板_{_dt.now().strftime('%Y%m%d%H%M%S')}.xlsx"
         wb.save(os.path.join(OUTPUT_DIR, filename))
@@ -948,10 +917,11 @@ def api_special_units_export():
         wb = Workbook()
         ws = wb.active
         ws.title = "特殊结算单元配置"
-        ws.append(["结算单元代码", "结算单元名称", "工资为0不增员不报税", "完全排除不增员不报税", "工资所属月取数范围"])
+        ws.append(["结算单元代码", "结算单元名称", "工资为0不增员不报税", "完全排除不增员不报税",
+                   "工资所属月取数范围", "发薪模式"])
         for u in units:
             ws.append([u["code"], u["name"], u["zero_salary_no_add"], u["exclude_all"],
-                       u.get("salary_month_scope", "all")])
+                       u.get("salary_month_scope", "all"), u.get("pay_pattern", "normal")])
         from datetime import datetime as _dt
         filename = f"特殊结算单元配置_{_dt.now().strftime('%Y%m%d%H%M%S')}.xlsx"
         wb.save(os.path.join(OUTPUT_DIR, filename))
@@ -987,10 +957,11 @@ def api_special_units_import():
                 if not row or all(v is None for v in row):
                     continue
                 # 兼容两种格式:
-                # 4/5列: 结算单元代码 | 结算单元名称 | 工资为0不增员不报税 | 完全排除不增员不报税 [| 工资所属月取数范围]
+                # 5/6列: 结算单元代码 | 结算单元名称 | 工资为0不增员不报税 | 完全排除不增员不报税
+                #        [| 工资所属月取数范围 [| 发薪模式]]
                 # 3列: 配置(名称或代码) | 工资为0不增员 | 完全排除不增员
                 vals = list(row)
-                while len(vals) < 5:
+                while len(vals) < 6:
                     vals.append(None)
                 if vals[2] is not None or vals[3] is not None:
                     code_raw = vals[0]
@@ -998,6 +969,7 @@ def api_special_units_import():
                     zero_flag = int(vals[2] or 0)
                     exclude_all = int(vals[3] or 0)
                     scope = str(vals[4] or "").strip() or "all"
+                    pattern = str(vals[5] or "").strip() or "normal"
                     code = int(code_raw) if str(code_raw or "").strip().isdigit() else None
                 else:
                     code_raw = vals[0]
@@ -1005,9 +977,12 @@ def api_special_units_import():
                     zero_flag = int(vals[1] or 0)
                     exclude_all = int(vals[2] or 0)
                     scope = str(vals[3] or "").strip() or "all"
+                    pattern = str(vals[4] or "").strip() or "normal"
                     code = int(code_raw) if str(code_raw or "").strip().isdigit() else None
                 if scope not in ("all", "first_1", "first_2", "latest_1", "latest_2"):
                     scope = "all"
+                if pattern not in ("normal", "pay_lag", "bimonthly"):
+                    pattern = "normal"
                 if not code:
                     # 代码留空时按名称自动匹配
                     codes = lookup_unit_codes_by_name(conn, name)
@@ -1018,7 +993,7 @@ def api_special_units_import():
                         continue
                 units.append({"code": code, "name": name,
                               "zero_salary_no_add": zero_flag, "exclude_all": exclude_all,
-                              "salary_month_scope": scope})
+                              "salary_month_scope": scope, "pay_pattern": pattern})
         finally:
             if os.path.exists(tmp_path):
                 os.remove(tmp_path)
@@ -1026,7 +1001,8 @@ def api_special_units_import():
             upsert_special_unit_full(u["code"], u["name"],
                                      zero_salary_no_add=u["zero_salary_no_add"],
                                      exclude_all=u["exclude_all"],
-                                     salary_month_scope=u.get("salary_month_scope", "all"))
+                                     salary_month_scope=u.get("salary_month_scope", "all"),
+                                     pay_pattern=u.get("pay_pattern", "normal"))
         resp = {"ok": True, "count": len(units)}
         if skipped:
             resp["skipped"] = skipped
