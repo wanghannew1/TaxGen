@@ -1,6 +1,26 @@
 # TaxGen 项目规则
 
-## ⚠️ 最高优先级安全规则：Oracle 数据库只读，禁止任何写入
+## ⚠️ Bug 留痕规则（强制性）：凡是 bug，必须提交 issue
+
+**任何被确认的 bug（无论是否已修复、是否由本次改动引入），都必须提交 issue 留痕。**
+
+### 要求
+
+1. **发现 bug 即提交 issue**，不得只修复不记录。修复后再提也允许（注明修复 commit）。
+2. issue 必须包含：
+   - 问题现象（含复现文件/月份/单位等关键参数）
+   - 根因分析
+   - 修复方法 + 相关 commit
+   - 验证结果
+3. **双平台提交**：主平台 **Gitee**（`wanghannew1/tax-gen`），同时必须同步到 **GitHub**（`wanghannew1/TaxGen`）。GitHub 提交流程：`gh issue create -R wanghannew1/TaxGen --title "..." --body-file <body> --label bug`（正文注明"与 Gitee <编号> 同步"）。
+   历史上 bug 类 issue 均带 `bug` 标签，已修复的另加 `已修复` 标签。
+4. 修复 commit 的说明中可引用 issue 编号，便于追溯。
+
+### 示例
+
+历史 issue 格式参考：`IKB54J`（连接池卡死）、`IKDRY9`（劳务报酬模板 5 项缺陷）、`IKAU2L`（多批次记录缺失+备注共用）；跨平台示例：GitHub `#5` ↔ Gitee `IKELVC`。
+
+## ⚠️ 次高优先级安全规则：Oracle 数据库只读，禁止任何写入
 
 **Oracle 数据库（工资业务库，见 `.env` 的 DB_HOST）是本系统的核心业务数据源，
 包含 TC93/TC8M/TC90/AC01/TB93 等工资、合同、人员、结算单元表。
