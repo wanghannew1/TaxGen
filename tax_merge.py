@@ -15,6 +15,7 @@
 from queries import get_salary_records_by_combos, get_unit_insurance_stats
 from filing_history import get_filing_map
 from config_db import get_merge_overrides
+from templates_gen.formulas import calc_本期收入
 
 
 # 主结算单元判定: 单元级属性 (该单元绝大多数人缴五险一金, 才作为人员分组归属)
@@ -108,12 +109,32 @@ def _main_unit_of(recs, main_units):
 
 
 def _slips_of(recs):
-    """某人全部工资单明细（跨单元/月/批次），按所属月升序。"""
-    slips = [{"unit": int(r.结算单元 or 0),
-              "unit_name": str(r.结算单元名称 or ""),
-              "salary_month": int(r.工资所属年月 or 0),
-              "seq": str(r.当月批次 or "")}
-             for r in recs]
+    """某人全部工资单明细（跨单元/月/批次），按所属月升序，附本期收入与三险一金金额。
+
+    is_base: 该工资单是否为基准记录(tc930_id 最大)——单倍时三险一金只取基准记录，
+             与 merge_records_by_person(single_certs) 口径一致。
+    """
+    base = max(recs, key=lambda r: r.tc930_id)
+    slips = []
+    for r in recs:
+        pension = float(r.养老个人 or 0)
+        medical = float(r.医疗个人 or 0)
+        unemp = float(r.失业个人 or 0)
+        housing = float(r.公积金个人 or 0)
+        slips.append({
+            "unit": int(r.结算单元 or 0),
+            "unit_name": str(r.结算单元名称 or ""),
+            "salary_month": int(r.工资所属年月 or 0),
+            "seq": str(r.当月批次 or ""),
+            "tc930_id": r.tc930_id,
+            "income": round(float(calc_本期收入(r)), 2),
+            "pension": round(pension, 2),
+            "medical": round(medical, 2),
+            "unemployment": round(unemp, 2),
+            "housing": round(housing, 2),
+            "insurance": round(pension + medical + unemp + housing, 2),
+            "is_base": r is base,
+        })
     slips.sort(key=lambda s: (s["salary_month"], s["unit"], s["seq"]))
     return slips
 
@@ -223,6 +244,11 @@ def build_merge_suggestions(conn, pay_month, combos):
                       if (r.结算单元, r.工资所属年月, r.当月批次) in combo_set}
         main_unit = _main_unit_of(recs, main_units)
         slips = _slips_of(recs)
+        # 合并金额口径 (与 merge_records_by_person 完全一致):
+        # 收入(本期收入)跨月总是全加; 三险一金 翻倍=各月全加, 单倍=只取基准记录(tc930_id 最大)。
+        income_total = round(sum(float(calc_本期收入(r)) for r in recs), 2)
+        insurance_double = round(sum(s["insurance"] for s in slips), 2)
+        insurance_single = next(s["insurance"] for s in slips if s["is_base"])
         candidates.append({
             "cert_no": cert,
             "name": str(base.姓名 or ""),
@@ -233,6 +259,9 @@ def build_merge_suggestions(conn, pay_month, combos):
             "main_unit": main_unit,
             "main_unit_name": unit_names.get(str(main_unit), ""),
             "slips": slips,
+            "income_total": income_total,
+            "insurance_double": insurance_double,
+            "insurance_single": insurance_single,
             "prev_month": pm,
             "prev_status": status,
             "prev_income": prev_income,

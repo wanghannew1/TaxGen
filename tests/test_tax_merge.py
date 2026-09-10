@@ -227,6 +227,56 @@ class TestBuildSuggestions:
         res = tax_merge.build_merge_suggestions(None, 202606, [])
         assert res["candidates"] == []
 
+    def test_slips_carry_amount_fields(self):
+        # 每条工资单附本期收入与三险一金金额, 基准记录(流水号最大)标记 is_base
+        self.records = [
+            _rec(cert="C1", sm=202605, tc930=1, unit=100, unit_name="第一医院",
+                 income=Decimal("5000"), pension=Decimal("400"), medical=Decimal("100"),
+                 unemp=Decimal("15"), housing=Decimal("350")),
+            _rec(cert="C1", sm=202606, tc930=2, unit=100, unit_name="第一医院",
+                 income=Decimal("6000"), pension=Decimal("480"), medical=Decimal("120"),
+                 unemp=Decimal("18"), housing=Decimal("420")),
+        ]
+        res = tax_merge.build_merge_suggestions(None, 202606, self.COMBOS)
+        slips = res["candidates"][0]["slips"]
+        # 按所属月升序: 202605 在前
+        assert [(s["salary_month"], s["income"]) for s in slips] == [(202605, 5000.0), (202606, 6000.0)]
+        assert [s["pension"] for s in slips] == [400.0, 480.0]
+        assert [s["insurance"] for s in slips] == [865.0, 1038.0]  # 四险合计
+        assert [s["is_base"] for s in slips] == [False, True]      # 流水号最大 = 基准
+
+    def test_candidate_totals_match_merge_semantics(self):
+        # 合计口径与 merge_records_by_person 一致: 收入全加;
+        # 三险翻倍=各月全加, 单倍=只取基准记录(tc930_id 最大)的三险
+        self.records = [
+            _rec(cert="C1", sm=202605, tc930=1,
+                 income=Decimal("5000"), pension=Decimal("400"), medical=Decimal("100"),
+                 unemp=Decimal("15"), housing=Decimal("350")),
+            _rec(cert="C1", sm=202606, tc930=2, unit=100, unit_name="第一医院",
+                 income=Decimal("6000"), pension=Decimal("480"), medical=Decimal("120"),
+                 unemp=Decimal("18"), housing=Decimal("420")),
+        ]
+        res = tax_merge.build_merge_suggestions(None, 202606, self.COMBOS)
+        c = res["candidates"][0]
+        assert c["income_total"] == 11000.0
+        assert c["insurance_double"] == 1903.0   # 865 + 1038
+        assert c["insurance_single"] == 1038.0   # 基准(202606/tc930=2)的三险
+
+    def test_income_total_always_accumulates_even_single(self):
+        # 单倍只影响三险一金, 本期收入仍跨月全加 (与 merge_records_by_person 相同)
+        self.records = [
+            _rec(cert="C1", sm=202605, tc930=1, income=Decimal("1000")),
+            _rec(cert="C1", sm=202606, tc930=2, income=Decimal("2000")),
+        ]
+        self.filing["C1"] = {"income": 5000, "pension": 400.0, "medical": 100.0,
+                             "unemployment": 15.0, "housing": 350.0}
+        res = tax_merge.build_merge_suggestions(None, 202606, self.COMBOS)
+        c = res["candidates"][0]
+        assert c["suggested"] == "single"
+        assert c["income_total"] == 3000.0
+        assert c["insurance_double"] == 0.0
+        assert c["insurance_single"] == 0.0
+
     def test_salary_months_desc_order(self):
         # 所属月列表升序, 上月档 = 最早所属月
         self.records = [

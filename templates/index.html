@@ -301,8 +301,17 @@
         .person-head .merge-choice { width: 110px; flex-shrink: 0; }
         .person-slips { display: flex; flex-wrap: nowrap; gap: .35rem; padding: 0 .75rem .35rem;
             overflow-x: auto; font-size: .82rem; color: #495057; }
+        .person-slips .slip-line { display: flex; align-items: center; gap: .5rem; white-space: nowrap;
+            background: #f4f7fb; border: 1px solid #e3eaf3; border-radius: .35rem; padding: .15rem .5rem; }
+        .person-slips .slip-line.is-base { background: #fff8e6; border-color: #f0dfa8; }
         .person-slips .slip-chip { white-space: nowrap; background: #eef4ff; border: 1px solid #d6e4ff;
             border-radius: .25rem; padding: .1rem .4rem; }
+        .person-slips .slip-amount { color: #343a40; }
+        .person-slips .slip-amount .ins-detail { color: #868e96; }
+        .person-total { padding: .25rem .75rem .4rem; font-size: .88rem; color: #343a40;
+            border-top: 1px dashed #dee2e6; margin-top: .15rem; }
+        .person-total .mode-cur { color: #0d6efd; font-weight: 600; }
+        .person-total .mode-alt { color: #adb5bd; }
         .person-reason { padding: 0 .75rem .45rem; font-size: .82rem; color: #6c757d; }
     </style>
 </head>
@@ -1263,9 +1272,15 @@
                     const persistedBadge = c.persisted ? ' <span class="badge bg-warning text-dark">已记住</span>' : '';
                     const bePrefix = c.be_flag ? '<span class="text-danger">BE借支</span>' : '';
                     const chosen = mergeChoices[c.cert_no] || c.default_chosen || c.suggested;
-                    const slips = (c.slips || []).map(s =>
-                        `<span class="slip-chip">${s.unit_name || s.unit}(${s.unit})·${s.salary_month}·批次${s.seq}</span>`
-                    ).join('');
+                    const slips = (c.slips || []).map(s => {
+                        const insDetail = `养${formatNum(s.pension || 0)}/医${formatNum(s.medical || 0)}/失${formatNum(s.unemployment || 0)}/公${formatNum(s.housing || 0)}`;
+                        return `<div class="slip-line${s.is_base ? ' is-base' : ''}">
+                            <span class="slip-chip">${s.unit_name || s.unit}(${s.unit})·${s.salary_month}·批次${s.seq}${s.is_base ? ' 基准' : ''}</span>
+                            <span class="slip-amount">本期收入 <b>¥${formatNum(s.income || 0)}</b></span>
+                            <span class="slip-amount">三险一金 <b>¥${formatNum(s.insurance || 0)}</b> <span class="ins-detail">（${insDetail}）</span></span>
+                        </div>`;
+                    }).join('');
+                    const totalHtml = mergeTotalHtml(c, chosen);
                     return `<div class="person-card">
                         <div class="person-head">
                             <span class="person-name">${c.name || ''}</span>
@@ -1280,6 +1295,7 @@
                             </select>
                         </div>
                         <div class="person-slips">${slips}</div>
+                        ${totalHtml ? `<div class="person-total" data-cert="${c.cert_no}">${totalHtml}</div>` : ''}
                         <div class="person-reason">${c.reason || ''}</div>
                     </div>`;
                 });
@@ -1303,10 +1319,30 @@
             updateMergeToggleLabel();
         }
 
+        function mergeTotalHtml(c, chosen) {
+            if (c.income_total === undefined) return '';
+            const cur = chosen === 'double' ? c.insurance_double : c.insurance_single;
+            const alt = chosen === 'double' ? c.insurance_single : c.insurance_double;
+            const curLabel = chosen === 'double' ? '翻倍' : '单倍';
+            const altLabel = chosen === 'double' ? '单倍' : '翻倍';
+            return `本期收入合计 <b>¥${formatNum(c.income_total)}</b> · 三险一金
+                <span class="mode-cur">${curLabel} ¥${formatNum(cur)}</span>
+                <span class="mode-alt">（${altLabel} ¥${formatNum(alt)}）</span>`;
+        }
+
+        function updateMergePersonTotal(cert) {
+            const c = mergeCandidatesData.find(x => x.cert_no === cert);
+            if (!c) return;
+            const chosen = mergeChoices[cert] || c.default_chosen || c.suggested;
+            const totals = mergeWorkSheets.querySelectorAll(`.person-total[data-cert="${cert}"]`);
+            totals.forEach(el => { el.innerHTML = mergeTotalHtml(c, chosen); });
+        }
+
         function syncMergeChoice(cert, value) {
             mergeChoices[cert] = value;
             mergeWorkSheets.querySelectorAll(`select.merge-choice[data-cert="${cert}"]`)
                 .forEach(s => { s.value = value; });
+            updateMergePersonTotal(cert);
         }
 
         function setMergeChoices(mode, wsIndex) {

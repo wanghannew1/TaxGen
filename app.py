@@ -235,7 +235,8 @@ def _merge_suggestions_to_xlsx(res: dict):
     ws = wb.active
     ws.title = "合并确认"
     headers = ["工资单(结算单元-所属月-批次)", "姓名", "证件号", "职工号", "主结算单元",
-               "上月状态", "建议", "置信度", "理由", "选择(翻倍/单倍)"]
+               "上月状态", "建议", "置信度", "理由",
+               "本期收入合计", "三险-翻倍", "三险-单倍", "选择(翻倍/单倍)"]
     ws.append(headers)
     ws.freeze_panes = "A2"
     head_fill = PatternFill("solid", fgColor="DDEBF7")
@@ -261,14 +262,17 @@ def _merge_suggestions_to_xlsx(res: dict):
                 "翻倍" if c.get("suggested") == "double" else "单倍",
                 {"high": "高", "medium": "中", "low": "低"}.get(c.get("confidence"), ""),
                 c.get("reason", ""),
+                c.get("income_total", 0),
+                c.get("insurance_double", 0),
+                c.get("insurance_single", 0),
                 "翻倍" if c.get("default_chosen", c.get("suggested")) == "double" else "单倍",
             ])
 
     width_map = {"A": 55, "B": 10, "C": 20, "D": 10, "E": 24, "F": 8,
-                 "G": 6, "H": 6, "I": 40, "J": 12}
+                 "G": 6, "H": 6, "I": 40, "J": 12, "K": 12, "L": 12, "M": 12}
     for col, w in width_map.items():
         ws.column_dimensions[col].width = w
-    ws.auto_filter.ref = f"A1:J{ws.max_row}"
+    ws.auto_filter.ref = f"A1:M{ws.max_row}"
 
     bio = BytesIO()
     wb.save(bio)
