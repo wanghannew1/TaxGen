@@ -249,6 +249,10 @@ def build_merge_suggestions(conn, pay_month, combos):
         income_total = round(sum(float(calc_本期收入(r)) for r in recs), 2)
         insurance_double = round(sum(s["insurance"] for s in slips), 2)
         insurance_single = next(s["insurance"] for s in slips if s["is_base"])
+        base_slip = next(s for s in slips if s["is_base"])
+        KEY_KINDS = ("pension", "medical", "unemployment", "housing")
+        insurance_single_detail = {k: base_slip[k] for k in KEY_KINDS}
+        insurance_double_detail = {k: round(sum(s[k] for s in slips), 2) for k in KEY_KINDS}
         candidates.append({
             "cert_no": cert,
             "name": str(base.姓名 or ""),
@@ -262,6 +266,8 @@ def build_merge_suggestions(conn, pay_month, combos):
             "income_total": income_total,
             "insurance_double": insurance_double,
             "insurance_single": insurance_single,
+            "insurance_single_detail": insurance_single_detail,
+            "insurance_double_detail": insurance_double_detail,
             "prev_month": pm,
             "prev_status": status,
             "prev_income": prev_income,

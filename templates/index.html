@@ -1325,8 +1325,13 @@
             const alt = chosen === 'double' ? c.insurance_single : c.insurance_double;
             const curLabel = chosen === 'double' ? '翻倍' : '单倍';
             const altLabel = chosen === 'double' ? '单倍' : '翻倍';
+            const curDetail = chosen === 'double' ? c.insurance_double_detail : c.insurance_single_detail;
+            const detailTxt = curDetail
+                ? `养${formatNum(curDetail.pension || 0)}/医${formatNum(curDetail.medical || 0)}/失${formatNum(curDetail.unemployment || 0)}/公${formatNum(curDetail.housing || 0)}`
+                : '';
+            const curTxt = detailTxt ? `${curLabel}：${detailTxt}` : `${curLabel} ¥${formatNum(cur)}`;
             return `本期收入合计 <b>¥${formatNum(c.income_total)}</b> · 三险一金
-                <span class="mode-cur">${curLabel} ¥${formatNum(cur)}</span>
+                <span class="mode-cur">${curTxt}</span>
                 <span class="mode-alt">（${altLabel} ¥${formatNum(alt)}）</span>`;
         }
 
