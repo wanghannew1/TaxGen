@@ -1283,7 +1283,7 @@
                         return `<div class="slip-line${s.is_base ? ' is-base' : ''}">
                             <span class="slip-chip">${s.unit_name || s.unit}(${s.unit})·${s.salary_month}·批次${s.seq}${s.is_base ? ' 基准' : ''}</span>
                             <span class="slip-amount">本期收入 <b>¥${formatNum(s.income || 0)}</b></span>
-                            <span class="slip-amount">三险一金 <b>¥${formatNum(s.insurance || 0)}</b> <span class="ins-detail">（${insDetail}）</span></span>
+                            <span class="slip-amount">三险一金 <span class="ins-detail">${insDetail}（合计<b>¥${formatNum(s.insurance || 0)}</b>）</span></span>
                         </div>`;
                     }).join('');
                     const totalHtml = mergeTotalHtml(c, effective);
