@@ -44,6 +44,18 @@ def init_db() -> None:
     if "salary_month_scope" not in cols:
         conn.execute(
             "ALTER TABLE special_unit_config ADD COLUMN salary_month_scope TEXT DEFAULT 'all'")
+    if "merge_skip_enabled" not in cols:
+        conn.execute(
+            "ALTER TABLE special_unit_config ADD COLUMN merge_skip_enabled INTEGER DEFAULT 0")
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS app_config (
+            key TEXT PRIMARY KEY,
+            value TEXT NOT NULL DEFAULT ''
+        )
+    """)
+    # "不报"选项全局开关: 默认关闭 (2026-09-10 用户确认: 普通用户默认看不到)
+    conn.execute(
+        "INSERT OR IGNORE INTO app_config (key, value) VALUES ('merge_skip_global_enabled', '0')")
     conn.execute("""
         CREATE TABLE IF NOT EXISTS merge_override (
             cert_no TEXT PRIMARY KEY,
@@ -84,13 +96,14 @@ def get_special_units() -> List[dict]:
     """查询特殊结算单元配置列表。"""
     conn = get_db()
     rows = conn.execute(
-        "SELECT unit_code, unit_name, zero_salary_no_add, exclude_all, salary_month_scope "
+        "SELECT unit_code, unit_name, zero_salary_no_add, exclude_all, salary_month_scope, merge_skip_enabled "
         "FROM special_unit_config ORDER BY unit_code").fetchall()
     conn.close()
     return [{"code": int(r["unit_code"]), "name": str(r["unit_name"] or ""),
              "zero_salary_no_add": int(r["zero_salary_no_add"] or 0),
              "exclude_all": int(r["exclude_all"] or 0),
-             "salary_month_scope": str(r["salary_month_scope"] or "all")} for r in rows]
+             "salary_month_scope": str(r["salary_month_scope"] or "all"),
+             "merge_skip_enabled": int(r["merge_skip_enabled"] or 0)} for r in rows]
 
 
 def get_scope_map() -> dict:
@@ -159,7 +172,8 @@ def upsert_special_unit_full(unit_code: int, unit_name: str = "",
 
 def update_special_unit(unit_code: int, exclude_all: Optional[bool] = None,
                         zero_salary_no_add: Optional[bool] = None,
-                        salary_month_scope: Optional[str] = None) -> None:
+                        salary_month_scope: Optional[str] = None,
+                        merge_skip_enabled: Optional[bool] = None) -> None:
     """更新特殊结算单元配置的排除模式 (传入的字段才更新)。"""
     sets = []
     binds = [unit_code]
@@ -172,6 +186,9 @@ def update_special_unit(unit_code: int, exclude_all: Optional[bool] = None,
     if salary_month_scope is not None:
         sets.append("salary_month_scope = ?")
         binds.insert(len(binds) - 1, salary_month_scope)
+    if merge_skip_enabled is not None:
+        sets.append("merge_skip_enabled = ?")
+        binds.insert(len(binds) - 1, 1 if merge_skip_enabled else 0)
     if not sets:
         return
     conn = get_db()
@@ -209,6 +226,45 @@ def get_excluded_unit_codes() -> List[int]:
         "SELECT unit_code FROM special_unit_config WHERE exclude_all = 1").fetchall()
     conn.close()
     return [int(r["unit_code"]) for r in rows]
+
+
+# ---------------------------------------------------------------------------
+# "不报"选项开关 (2026-09-10 用户确认): 默认全部关闭, 普通用户看不到"不报"
+# 全局开 → 所有结算单元可见; 全局关 + 某结算单元开 → 仅该结算单元可见;
+# 未配置开关的结算单元 → 默认关闭。同时满足压月发(发放月内无"所属月==发放月"
+# 工资单)才在弹窗提供"不报"选项。
+# ---------------------------------------------------------------------------
+
+MERGE_SKIP_GLOBAL_KEY = "merge_skip_global_enabled"
+
+
+def get_merge_skip_global() -> bool:
+    """查询"不报"选项全局开关 (默认关闭)。"""
+    conn = get_db()
+    row = conn.execute(
+        "SELECT value FROM app_config WHERE key = ?", (MERGE_SKIP_GLOBAL_KEY,)).fetchone()
+    conn.close()
+    return bool(row and str(row["value"] or "") == "1")
+
+
+def set_merge_skip_global(enabled: bool) -> None:
+    """设置"不报"选项全局开关 (1=全局可见, 0=按结算单元粒度)。"""
+    conn = get_db()
+    conn.execute(
+        "INSERT INTO app_config (key, value) VALUES (?, ?) "
+        "ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+        (MERGE_SKIP_GLOBAL_KEY, "1" if enabled else "0"))
+    conn.commit()
+    conn.close()
+
+
+def get_merge_skip_units() -> set:
+    """查询开启"不报"选项的结算单元代码集合 (未配置开关的单元视为关闭)。"""
+    conn = get_db()
+    rows = conn.execute(
+        "SELECT unit_code FROM special_unit_config WHERE merge_skip_enabled = 1").fetchall()
+    conn.close()
+    return {int(r["unit_code"]) for r in rows}
 
 
 # ---------------------------------------------------------------------------

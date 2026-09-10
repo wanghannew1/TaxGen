@@ -185,7 +185,11 @@ def api_merge_suggestions():
         if any(not c.get("seq") for c in combos):
             return jsonify({"error": "组合缺少批次号"}), 400
         conn = get_connection()
-        return jsonify(build_merge_suggestions(conn, pay_month, combos))
+        from config_db import get_merge_skip_global, get_merge_skip_units
+        return jsonify(build_merge_suggestions(
+            conn, pay_month, combos,
+            skip_global_enabled=get_merge_skip_global(),
+            skip_unit_codes=get_merge_skip_units()))
     except Exception as e:
         return _log_api_error(e)
 
@@ -215,7 +219,11 @@ def api_merge_suggestions_export():
         if not pay_month or not combos:
             return jsonify({"error": "请选择月份并勾选待报组合"}), 400
         conn = get_connection()
-        res = build_merge_suggestions(conn, pay_month, combos)
+        from config_db import get_merge_skip_global, get_merge_skip_units
+        res = build_merge_suggestions(
+            conn, pay_month, combos,
+            skip_global_enabled=get_merge_skip_global(),
+            skip_unit_codes=get_merge_skip_units())
         return _merge_suggestions_to_xlsx(res)
     except Exception as e:
         return _log_api_error(e)
@@ -397,10 +405,24 @@ def api_generate():
             abnormal = [r for r in abnormal if _keep(r.get("ATB930"), r.get("ATC93AA"))]
         raw_records = records
         if merge_by_person:
-            from config_db import upsert_merge_overrides
+            from config_db import upsert_merge_overrides, get_merge_skip_global, get_merge_skip_units
             merge_choices = data.get("merge_choices") or {}
             single_certs = {c for c, mode in merge_choices.items() if mode == "single"}
-            skip_certs = {c for c, mode in merge_choices.items() if mode == "skip"}
+            # "不报"(skip)仅允许压月发人员且开关可见:
+            # 可见性 = 全局开关开 OR 该人任一结算单元开关开 (2026-09-10 用户确认,
+            # 默认全部关闭, 普通用户看不到"不报"; 此校验防御 Excel 导回等绕过 UI 的路径)
+            skip_global = get_merge_skip_global()
+            skip_units = get_merge_skip_units()
+            skip_certs = set()
+            for c, mode in merge_choices.items():
+                if mode != "skip":
+                    continue
+                recs_c = [r for r in records if (r.身份证 or r.职工号) == c]
+                if any(r.工资所属年月 == month for r in recs_c):
+                    continue  # 有当月工资单 → 压月发才允许不报
+                if not (skip_global or any(r.结算单元 in skip_units for r in recs_c)):
+                    continue  # 开关未开 → 不报不可见, 忽略该选择
+                skip_certs.add(c)
             records = merge_records_by_person(records, by_pay_month=merge_by_pay_month,
                                               single_certs=single_certs,
                                               skip_certs=skip_certs, cur_month=month)
@@ -830,19 +852,44 @@ def api_special_units_add():
         return _log_api_error(e)
 
 
+@app.route("/api/merge-skip-config", methods=["GET"])
+def api_merge_skip_config():
+    """查询"不报"选项开关配置: 全局开关 + 已开启的结算单元集合。"""
+    try:
+        from config_db import get_merge_skip_global, get_merge_skip_units
+        return jsonify({"global_enabled": get_merge_skip_global(),
+                        "skip_units": sorted(get_merge_skip_units())})
+    except Exception as e:
+        return _log_api_error(e)
+
+
+@app.route("/api/merge-skip-config", methods=["POST"])
+def api_merge_skip_config_update():
+    """设置"不报"选项全局开关 (1=全局可见; 0=按结算单元粒度)。"""
+    try:
+        from config_db import set_merge_skip_global
+        data = request.get_json() or {}
+        set_merge_skip_global(bool(data.get("global_enabled", False)))
+        return jsonify({"ok": True})
+    except Exception as e:
+        return _log_api_error(e)
+
+
 @app.route("/api/special-units/<int:unit_code>/mode", methods=["POST"])
 def api_special_units_mode(unit_code):
-    """更新特殊结算单元配置的排除模式 (zero_salary_no_add / exclude_all 开关, SQLite)。"""
+    """更新特殊结算单元配置的排除模式 (zero_salary_no_add / exclude_all / merge_skip_enabled 开关, SQLite)。"""
     try:
         from config_db import update_special_unit
         data = request.get_json() or {}
         exclude_all = data.get("exclude_all")
         zero_salary_no_add = data.get("zero_salary_no_add")
         salary_month_scope = data.get("salary_month_scope")
+        merge_skip_enabled = data.get("merge_skip_enabled")
         update_special_unit(unit_code,
                             exclude_all=exclude_all if exclude_all is not None else None,
                             zero_salary_no_add=zero_salary_no_add if zero_salary_no_add is not None else None,
-                            salary_month_scope=salary_month_scope if salary_month_scope is not None else None)
+                            salary_month_scope=salary_month_scope if salary_month_scope is not None else None,
+                            merge_skip_enabled=merge_skip_enabled if merge_skip_enabled is not None else None)
         return jsonify({"ok": True})
     except Exception as e:
         return _log_api_error(e)

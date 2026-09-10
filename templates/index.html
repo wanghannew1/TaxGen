@@ -1276,6 +1276,8 @@
                     const persistedBadge = c.persisted ? ' <span class="badge bg-warning text-dark">已记住</span>' : '';
                     const bePrefix = c.be_flag ? '<span class="text-danger">BE借支</span>' : '';
                     const chosen = mergeChoices[c.cert_no] || c.default_chosen || c.suggested;
+                    // 「不报」仅在压月发且开关可见时可选: 持久化旧值/残留选择回退到建议值
+                    const effective = (chosen === 'skip' && !c.can_skip) ? c.suggested : chosen;
                     const slips = (c.slips || []).map(s => {
                         const insDetail = `养${formatNum(s.pension || 0)}/医${formatNum(s.medical || 0)}/失${formatNum(s.unemployment || 0)}/公${formatNum(s.housing || 0)}`;
                         return `<div class="slip-line${s.is_base ? ' is-base' : ''}">
@@ -1284,7 +1286,7 @@
                             <span class="slip-amount">三险一金 <b>¥${formatNum(s.insurance || 0)}</b> <span class="ins-detail">（${insDetail}）</span></span>
                         </div>`;
                     }).join('');
-                    const totalHtml = mergeTotalHtml(c, chosen);
+                    const totalHtml = mergeTotalHtml(c, effective);
                     return `<div class="person-card">
                         <div class="person-head">
                             <span class="person-name">${c.name || ''}</span>
@@ -1294,9 +1296,9 @@
                             ${persistedBadge}
                             ${bePrefix}
                             <select class="form-select form-select-sm merge-choice" data-cert="${c.cert_no}">
-                                <option value="double" ${chosen === 'double' ? 'selected' : ''}>多月</option>
-                                <option value="single" ${chosen === 'single' ? 'selected' : ''}>单月</option>
-                                <option value="skip" ${chosen === 'skip' ? 'selected' : ''}>不报</option>
+                                <option value="double" ${effective === 'double' ? 'selected' : ''}>多月</option>
+                                <option value="single" ${effective === 'single' ? 'selected' : ''}>单月</option>
+                                ${c.can_skip ? `<option value="skip" ${effective === 'skip' ? 'selected' : ''}>不报</option>` : ''}
                             </select>
                         </div>
                         <div class="person-slips">${slips}</div>
@@ -1353,7 +1355,8 @@
         function updateMergePersonTotal(cert) {
             const c = mergeCandidatesData.find(x => x.cert_no === cert);
             if (!c) return;
-            const chosen = mergeChoices[cert] || c.default_chosen || c.suggested;
+            let chosen = mergeChoices[cert] || c.default_chosen || c.suggested;
+            if (chosen === 'skip' && !c.can_skip) chosen = c.suggested;
             const totals = mergeWorkSheets.querySelectorAll(`.person-total[data-cert="${cert}"]`);
             totals.forEach(el => { el.innerHTML = mergeTotalHtml(c, chosen); });
         }

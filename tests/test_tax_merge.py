@@ -436,6 +436,49 @@ class TestBuildSuggestions:
         assert [(s["salary_month"], s["seq"]) for s in c["slips"]] == \
             [(202607, "1"), (202606, "1")]
 
+    def test_skip_visibility_switch(self):
+        # "不报"选项开关 (2026-09-10 用户确认): 默认全部关闭 → can_skip=False;
+        # 全局开 → 压月发人员 can_skip=True; 全局关+单元开 → 仅该单元压月发人员可见;
+        # 无关单元开开关 → 不可见; 有"所属月==发放月"工资单 → 即使开关开也不可见
+        self.records = [
+            _rec(cert="C1", sm=202606, tc930=1, unit=39819, unit_name="铁建宽城",
+                 income=Decimal("9172.00"), pension=Decimal("1336.40"),
+                 medical=Decimal("334.10"), unemp=Decimal("50.12"),
+                 housing=Decimal("1169.00")),
+            _rec(cert="C1", sm=202607, tc930=2, unit=39819, unit_name="铁建宽城",
+                 income=Decimal("9157.00"), pension=Decimal("1336.40"),
+                 medical=Decimal("334.10"), unemp=Decimal("50.12"),
+                 housing=Decimal("1169.00")),
+        ]
+        combos = [
+            {"unit": 39819, "salary_month": 202606, "seq": "1"},
+            {"unit": 39819, "salary_month": 202607, "seq": "1"},
+        ]
+        # 默认: 全局关 + 未配置单元 → 不报不可见
+        assert tax_merge.build_merge_suggestions(
+            None, 202608, combos)["candidates"][0]["can_skip"] is False
+        # 全局开 → 压月发可见
+        assert tax_merge.build_merge_suggestions(
+            None, 202608, combos, skip_global_enabled=True)["candidates"][0]["can_skip"] is True
+        # 全局关 + 该单元(39819)开关开 → 可见
+        assert tax_merge.build_merge_suggestions(
+            None, 202608, combos, skip_unit_codes={39819})["candidates"][0]["can_skip"] is True
+        # 全局关 + 无关单元(其他 code)开关开 → 不可见
+        assert tax_merge.build_merge_suggestions(
+            None, 202608, combos, skip_unit_codes={99999})["candidates"][0]["can_skip"] is False
+
+    def test_skip_hidden_when_has_cur_month_record(self):
+        # 发放月内有"所属月==发放月"工资单(正常当月发) → 即使开关全开, 不报也不可见
+        self.records = [
+            _rec(cert="C1", sm=202605, tc930=1, unit=100, unit_name="A单元",
+                 pension=Decimal("400")),
+            _rec(cert="C1", sm=202606, tc930=2, unit=100, unit_name="A单元",
+                 pension=Decimal("200")),
+        ]
+        res = tax_merge.build_merge_suggestions(
+            None, 202606, self.COMBOS, skip_global_enabled=True)
+        assert res["candidates"][0]["can_skip"] is False
+
     def test_salary_months_desc_order(self):
         # 所属月列表升序, 上月档 = 最早所属月
         self.records = [

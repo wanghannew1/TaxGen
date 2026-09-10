@@ -208,20 +208,29 @@ def _status_of(prev):
     return "有报"  # 收入>0 但三险=0（异常档，按已报处理，不虚构三险）
 
 
-def build_merge_suggestions(conn, pay_month, combos):
+def build_merge_suggestions(conn, pay_month, combos,
+                            skip_global_enabled: bool = False,
+                            skip_unit_codes: set | None = None):
     """扫描指定发放月已确认组合中的跨月合并人员，给出多月/单月判定建议。
 
     Args:
         conn: Oracle 连接（只读）
         pay_month: 发放月份（TC8M.ATC8G7），如 202606
         combos: 前端确认的组合列表，每项含 unit/salary_month/seq 等
+        skip_global_enabled: "不报"选项全局开关 (默认关闭)
+        skip_unit_codes: 开启"不报"选项的结算单元代码集合 (默认空)
+
+    "不报"可见性 (2026-09-10 用户确认): 默认全部关闭; 全局开 → 所有结算单元
+    可见; 全局关 + 单元开关开 → 仅该单元可见; 未配置开关 → 默认关闭。
+    且仅当压月发 (发放月内无"所属月==发放月"工资单) 时才能选"不报"。
 
     Returns:
         dict: {
             "pay_month", "prev_month", "candidates": [
-                {"cert_no", "name", "emp_no", "units", "unit_names", "salary_months",
-                 "prev_month", "prev_status", "prev_income", "prev_insurance", "be_flag",
-                 "suggested", "reason", "confidence", "default_chosen", "persisted"}
+                {"cert_no", "name", "emp_no", "can_skip", "units", "unit_names",
+                 "salary_months", "prev_month", "prev_status", "prev_income",
+                 "prev_insurance", "be_flag", "suggested", "reason", "confidence",
+                 "default_chosen", "persisted"}
             ],
             "work_sheets": [   # 按主结算单元分组的确认工作单, 供前端分组批量操作
                 {"unit", "unit_name", "count", "persons": [{...candidate}]}
@@ -231,6 +240,7 @@ def build_merge_suggestions(conn, pay_month, combos):
     自动跳过（2026-09-10 用户确认）：三险只出现在发放月这一个月份时（单月==多月），
     不涉及"合并与否"的选择，不列入候选。
     """
+    skip_unit_codes = skip_unit_codes or set()
     combo_set = {(int(c.get("unit", 0) or 0), int(c.get("salary_month", 0) or 0),
                   str(c.get("seq", "") or "")) for c in combos}
     salary_months = sorted({c[1] for c in combo_set})
@@ -311,6 +321,11 @@ def build_merge_suggestions(conn, pay_month, combos):
         # 单月=pay_month(所属月==发放月)全部 slips 之和 (2026-09-10 IKEMCM/#6);
         # 压月发工资时发放月可能没有"所属月==发放月"的记录(如 202608 发放的却是 6/7 月工资),
         # 缺省取最新所属月(2026-09-10 李浩案例: 单月=7月 2889.62, 而非 0)。
+        # can_skip: "不报"选项可见性 = 压月发(发放月内无"所属月==发放月"工资单)
+        # AND (全局开关开 OR 该成员任一结算单元开关开)。2026-09-10 用户确认:
+        # 默认全部关闭, 普通用户看不到"不报"; 未配置开关的结算单元默认关闭。
+        has_cur_month_rec = any(s["salary_month"] == pay_month for s in slips)
+        skip_visible = skip_global_enabled or bool({int(u) for u in unit_names} & skip_unit_codes)
         cur_slips = [s for s in slips if s["salary_month"] == pay_month]
         if not cur_slips:
             latest_sm = max(s["salary_month"] for s in slips)
@@ -328,6 +343,7 @@ def build_merge_suggestions(conn, pay_month, combos):
             "cert_no": cert,
             "name": str(base.姓名 or ""),
             "emp_no": str(base.职工号 or ""),
+            "can_skip": (not has_cur_month_rec) and skip_visible,
             "units": sorted(int(u) for u in unit_names),
             "unit_names": unit_names,
             "salary_months": sorted({r.工资所属年月 for r in recs}),
