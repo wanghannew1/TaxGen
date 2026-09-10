@@ -392,7 +392,7 @@ def api_generate():
             merge_choices = data.get("merge_choices") or {}
             single_certs = {c for c, mode in merge_choices.items() if mode == "single"}
             records = merge_records_by_person(records, by_pay_month=merge_by_pay_month,
-                                              single_certs=single_certs)
+                                              single_certs=single_certs, cur_month=month)
             if data.get("persist_merge_choices") and merge_choices:
                 upsert_merge_overrides({c: m for c, m in merge_choices.items()
                                         if m in ("double", "single")})

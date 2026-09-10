@@ -3,6 +3,10 @@
 核心问题：同一发放月内同人跨多个所属月（双月同发/跨月补报）合并申报时，
 三险一金应翻倍（上月三险并入本月）还是单倍（只报本月三险）？
 
+单倍取数口径（2026-09-10 修复，issue IKEMCM/#6）：当月（所属月==发放月，
+缺省取最新所属月）**全部记录**的三险之和，而非 tc930_id 最大的基准记录一条——
+同月多批次时含三险的批次可能不是基准记录，只取基准会漏报当月三险。
+
 数据依据：上月报送档（filing_record 税款计算，month=税款所属期）中该人状态
 （见 docs/0申报三险一金合并规则分析.md 实证）：
 - 上月有报（三险>0）→ 单倍（99.5%）
@@ -24,15 +28,19 @@ MAIN_UNIT_INSURED_RATIO = 0.8  # 有保险人数占比 ≥80% 视为"绝大部�
 
 
 def merge_records_by_person(records, by_pay_month: bool = False,
-                            single_certs: set | None = None):
+                            single_certs: set | None = None,
+                            cur_month: int | None = None):
     """按人合并多条工资记录为一笔，基准取时间上最后一个批次(批次号最大、流水号最大)。
 
     by_pay_month=False: 按人+所属月份合并（现状，同人同月多笔合并，同一人可能多行）。
     by_pay_month=True:  按人+发放月份合并（同一发放月份内每人一行，跨所属月份的收入/五险一金/个税全部合计）。
                         仅适用于组合确认流程——所有组合共享同一发放月份(TC8M.ATC8G7)。
     single_certs: 三险一金单倍处理的证件号集合（用户确认"不翻倍"的人员）。
-                  这些人的收入/个税仍跨所属月累加，但养老/医疗/失业/公积金只取基准记录，
+                  这些人的收入/个税仍跨所属月累加，但养老/医疗/失业/公积金只取
+                  **当月（cur_month，缺省=max 工资所属年月）全部记录**之和，
                   不累加其他所属月（上月在旧档已报过的三险不再并入本月，避免重复扣除）。
+                  （2026-09-10 修复 IKEMCM/#6：原实现只取基准记录一条，同月多批次时
+                  含三险的批次可能不是基准记录导致漏报当月三险。）
     """
     from copy import deepcopy
     single_certs = single_certs or set()
@@ -50,6 +58,14 @@ def merge_records_by_person(records, by_pay_month: bool = False,
             base = max(recs, key=lambda r: (int(r.当月批次 or 0), r.tc930_id))
         m = deepcopy(base)
         single = by_pay_month and m.身份证 in single_certs
+        if single:
+            month = cur_month if cur_month is not None else \
+                max(int(r.工资所属年月 or 0) for r in recs)
+            cur_recs = [r for r in recs if int(r.工资所属年月 or 0) == month]
+            m.养老个人 = sum(r.养老个人 for r in cur_recs)
+            m.医疗个人 = sum(r.医疗个人 for r in cur_recs)
+            m.失业个人 = sum(r.失业个人 for r in cur_recs)
+            m.公积金个人 = sum(r.公积金个人 for r in cur_recs)
         for rec in recs:
             if rec is base:
                 continue
@@ -108,12 +124,16 @@ def _main_unit_of(recs, main_units):
     return min(pool, key=lambda u: (unit_first_month[u], u))
 
 
-def _slips_of(recs):
-    """某人全部工资单明细（跨单元/月/批次），按所属月升序，附本期收入与三险一金金额。
+def _slips_of(recs, cur_month=None):
+    """某人全部工资单明细（跨单元/月/批次），排序: 含三险一金的排最前
+    （其中所属月==当月/pay_month 的第一个），其余按所属月升序。
 
-    is_base: 该工资单是否为基准记录(tc930_id 最大)——单倍时三险一金只取基准记录，
-             与 merge_records_by_person(single_certs) 口径一致。
+    is_base: 该工资单是否为基准记录(tc930_id 最大, 最新经办)。
+    单倍取数口径(2026-09-10 IKEMCM/#6): 当月(所属月==cur_month, 缺省 max 所属月)
+    全部 slips 的三险之和, 而非基准记录一条。
     """
+    if cur_month is None:
+        cur_month = max(int(r.工资所属年月 or 0) for r in recs)
     base = max(recs, key=lambda r: r.tc930_id)
     slips = []
     for r in recs:
@@ -135,7 +155,12 @@ def _slips_of(recs):
             "insurance": round(pension + medical + unemp + housing, 2),
             "is_base": r is base,
         })
-    slips.sort(key=lambda s: (s["salary_month"], s["unit"], s["seq"]))
+    # 排序: ①含三险一金的排最前 ②含三险的其中所属月==当月(pay_month)的第一个
+    # ③无三险的保持按所属月升序 (当月优先只作用于含三险记录)
+    slips.sort(key=lambda s: (
+        0 if s["insurance"] > 0 else 1,
+        0 if (s["insurance"] > 0 and s["salary_month"] == cur_month) else 1,
+        s["salary_month"], s["unit"], s["seq"]))
     return slips
 
 
@@ -243,15 +268,17 @@ def build_merge_suggestions(conn, pay_month, combos):
         unit_names = {str(r.结算单元): str(r.结算单元名称 or "") for r in recs
                       if (r.结算单元, r.工资所属年月, r.当月批次) in combo_set}
         main_unit = _main_unit_of(recs, main_units)
-        slips = _slips_of(recs)
-        # 合并金额口径 (与 merge_records_by_person 完全一致):
-        # 收入(本期收入)跨月总是全加; 三险一金 翻倍=各月全加, 单倍=只取基准记录(tc930_id 最大)。
+        slips = _slips_of(recs, cur_month=pay_month)
+        # 合并金额口径 (与 merge_records_by_person 一致):
+        # 收入(本期收入)跨月总是全加; 三险一金 翻倍=各月全加,
+        # 单倍=当月(pay_month, 所属月==发放月)全部 slips 之和 (2026-09-10 IKEMCM/#6)。
         income_total = round(sum(float(calc_本期收入(r)) for r in recs), 2)
         insurance_double = round(sum(s["insurance"] for s in slips), 2)
-        insurance_single = next(s["insurance"] for s in slips if s["is_base"])
-        base_slip = next(s for s in slips if s["is_base"])
+        cur_slips = [s for s in slips if s["salary_month"] == pay_month]
+        insurance_single = round(sum(s["insurance"] for s in cur_slips), 2)
         KEY_KINDS = ("pension", "medical", "unemployment", "housing")
-        insurance_single_detail = {k: base_slip[k] for k in KEY_KINDS}
+        insurance_single_detail = {k: round(sum(s[k] for s in cur_slips), 2)
+                                   for k in KEY_KINDS}
         insurance_double_detail = {k: round(sum(s[k] for s in slips), 2) for k in KEY_KINDS}
         candidates.append({
             "cert_no": cert,
