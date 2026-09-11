@@ -95,7 +95,11 @@ def generate_normal_salary(records: List[SalaryRecord], title: str, output_dir: 
 
     # 人员排序：按结算单元名称排序，相同结算单元相邻（同单元内按姓名、工号稳定）
     def _unit_sort(r):
-        return (str(getattr(r, "结算单元名称", "") or ""), str(r.姓名 or ""), int(r.职工号 or 0))
+        try:
+            emp_no = int(r.职工号 or 0)
+        except (ValueError, TypeError):
+            emp_no = 0
+        return (str(getattr(r, "结算单元名称", "") or ""), str(r.姓名 or ""), emp_no)
 
     records = sorted(records, key=_unit_sort)
     if raw_records:
