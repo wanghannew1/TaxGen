@@ -28,3 +28,6 @@ tax_return.db
 
 # Playwright MCP 测试产物
 .playwright-mcp/
+
+# 调试日志
+.debug-journal.md
