@@ -778,18 +778,20 @@ def get_tc90_salary_end_dates(conn, cert_numbers) -> Dict[str, datetime]:
 
 
 def get_certs_in_system(conn, cert_numbers) -> Set[str]:
-    """按身份证号批量判定人员是否在系统管理 (AC01 人员主档存在)。
+    """按身份证号批量判定人员是否在系统管理 (TC90 有无合同记录)。
 
-    名单在册人员在系统中查不到 (AC01 无此人) 属人工管理人员,
-    非本系统工资业务管理, 零申报默认不生成、由用户面板确认。
-    返回系统内存在的 {证件号(大写)} 集合。
+    2026-09-11 用户确认口径: 是否在系统管理以 TC90 合同为准 ——
+    TC90 有没有记录才代表这个人在不在系统管理;
+    AC01 仅是个人基本信息 (如电话等), 只能辅助查询个人信息, 不判定系统管理。
+    名单在册人员 TC90 查无合同 (人工管理) → 零申报默认不生成、由用户面板确认。
+    返回 TC90 存在合同的 {证件号(大写)} 集合。
     """
     if not cert_numbers:
         return set()
     certs = sorted({str(c).strip().upper() for c in cert_numbers if str(c).strip()})
     found: Set[str] = set()
     sql = """
-        SELECT DISTINCT AAC002 FROM AC01
+        SELECT DISTINCT AAC002 FROM TC90
         WHERE AAC002 IN ({placeholders})
     """
     with conn.cursor() as cursor:

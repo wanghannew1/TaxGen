@@ -9,9 +9,12 @@
 - B  个税端在职无工资: 个税端名单 (境内/境外 xls, SQLite tax_roster) 在册
      无离职日期, 且本期无任何 TC93 工资记录 → 新签合同未做工资(B1) / 在册无痕迹(B2)
 - B 类三分类 (2026-09-11 用户确认):
-     b_outside  名单在册但系统查无此人 (AC01 无记录, 人工管理) → 默认不生成, 面板体现确认
+     b_outside  名单在册但系统查无此人 (TC90 无合同, 人工管理) → 默认不生成, 面板体现确认
      b_left     在系统但工资结束年月 (TC90.ATC90AV) 早于发放月 → 已离职, 默认不生成+建议减员
      b_roster   在系统且在册在职 → 维持 B1/B2 (默认 declare 保留在册)
+- 在系统判定 (2026-09-11 用户确认): 以 TC90 有无合同为准 (既有 AC01 仅是个人基本信息,
+     如电话等, 只能辅助查询, 不判定系统管理); 同一证件多份合同时以最后一份
+     (开始日期 ATC90C 最大) 为准 —— 孙文强/杨冰 AC01 有主档但 TC90 无合同 → b_outside
 
 口径 (用户确认):
 - 判定: 单条记录本期收入=0 (报税公式逐条计算, 与生成文件"本期收入"列对应)
@@ -38,6 +41,15 @@ CAT_A2_UNPAID = "a2_unpaid"             # 做了工资没发 (TC8M 无发放)
 CAT_B_ROSTER = "b_roster"               # 个税端在职无工资 (名单在册, 在职)
 CAT_B_OUTSIDE = "b_outside"             # 名单在册但系统查无此人 (人工管理, 默认不生成)
 CAT_B_LEFT = "b_left"                   # 在系统但工资结束年月早于发放月 (已离职, 默认不生成+建议减员)
+
+# 单元内人员展示排序 (2026-09-11 用户确认): 名单在册最前, 不在系统最后
+_CAT_SORT_ORDER = {
+    CAT_B_ROSTER: 0,          # 名单在册 (在职) → 最前
+    CAT_B_LEFT: 1,            # 名单在册·已离职
+    CAT_A1_INCOME_ZERO: 2,    # 工资单收入=0
+    CAT_A2_UNPAID: 3,         # 做了工资没发
+    CAT_B_OUTSIDE: 4,         # 名单在册·不在系统 → 最后
+}
 
 REASON_A1 = "工资表按公式计算本期收入为0，默认生成零申报"
 REASON_A1_CONFIG = "结算单元配置'工资为0不增员不报税'，默认不生成零申报"
@@ -200,9 +212,11 @@ def build_zero_salary_suggestions(conn, pay_month, combos, roster=None):
                                  get_tc90_salary_end_dates, get_person_system_info)
             contract_map = get_person_units_contract(conn, list(b_certs))
             # B 类三分类 (2026-09-11 用户确认):
-            # 不在系统 (AC01 无此人, 人工管理) → 默认不生成, 面板体现让用户确认;
+            # 不在系统 (TC90 无合同, 人工管理) → 默认不生成, 面板体现让用户确认;
             # 在系统但工资结束年月 (TC90.ATC90AV) < 发放月 → 已离职, 默认不生成+建议减员;
             # 在系统且在册在职 → 维持 B1/B2 (默认 declare 保留在册)
+            # 在系统判定口径: TC90 有无合同为准 (AC01 仅个人基本信息, 不判定系统管理);
+            # 同一证件多份合同时以最后一份 (ATC90C 最大) 为准
             in_system = get_certs_in_system(conn, list(b_certs))
             salary_ends = get_tc90_salary_end_dates(conn, list(b_certs))
             # 在系统人员展示: 结算单元/最后发薪工资单/工资结束年月/经办人 (2026-09-11 用户需求)
@@ -310,8 +324,10 @@ def build_zero_salary_suggestions(conn, pay_month, combos, roster=None):
                     parts.append(f"经办人:{si['handler']}")
                 p["sys_info"] = "；".join(parts) if parts else "系统内无合同/工资记录"
         u["income_total"] = round(u["income_total"], 2)
+        # 人员排序: 名单在册(b_roster)最前, 不在系统(b_outside)最后 (2026-09-11 用户确认)
         u["persons"] = sorted(u["persons"].values(),
-                              key=lambda x: (x["cert_no"],))
+                              key=lambda x: (_CAT_SORT_ORDER.get(x["category"], 9),
+                                             x["cert_no"]))
 
     result_units = sorted(units.values(), key=lambda u: u["unit"])
     unit_names = {int(c.get("unit", 0) or 0): str(c.get("unit_name", "") or "")

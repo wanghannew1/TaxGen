@@ -71,7 +71,8 @@ class TestBuildSuggestions:
         monkeypatch.setattr(tax_zero, "get_excluded_unit_codes",
                             lambda: [102])       # 102 为完全排除单元
         monkeypatch.setattr(tax_zero, "get_zero_overrides", lambda: {})
-        # B 类系统判定 (2026-09-11): 默认全部在系统 (AC01), 且无工资结束年月
+        # B 类系统判定 (2026-09-11 用户确认): 以 TC90 有无合同为准 (AC01 不判定系统管理)
+        # 默认全部在系统 (TC90 有合同), 且无工资结束年月
         monkeypatch.setattr("queries.get_certs_in_system",
                             lambda conn, certs: set(certs))
         monkeypatch.setattr("queries.get_tc90_salary_end_dates",
@@ -276,15 +277,15 @@ class TestBuildSuggestions:
         assert res["units"] == []
 
     def test_roster_outside_system_skip(self, monkeypatch):
-        # 名单在册但系统查无此人 (AC01 无记录, 人工管理) → 默认不生成,
-        # 面板体现 (2026-09-11 用户确认: 不在系统默认不生成0申报, 用户可确认)
+        # 名单在册但系统查无此人 (TC90 无合同, 人工管理; AC01 不判定) → 默认不生成,
+        # 面板体现 (2026-09-11 用户确认: 以 TC90 有无合同判定在系统, 不在系统默认不生成0申报)
         from datetime import datetime
         self.records = []
         roster = [_roster(cert="C1", hire="2020-01-01")]
         monkeypatch.setattr("queries.get_person_units_contract",
             lambda conn, certs: {"C1": {"unit_code": 100, "unit_name": "单元100"}})
         monkeypatch.setattr("queries.get_certs_in_system",
-            lambda conn, certs: set())   # AC01 查无此人
+            lambda conn, certs: set())   # TC90 查无合同 (孙文强/艾丽场景)
         res = tax_zero.build_zero_salary_suggestions(None, 202606, self.COMBOS,
                                                      roster=roster)
         p = res["units"][0]["persons"][0]
@@ -375,15 +376,69 @@ class TestBuildSuggestions:
         assert "经办人:合同经办人" in res["units"][0]["persons"][0]["sys_info"]
 
     def test_roster_sys_info_no_records(self, monkeypatch):
-        # 在系统但无合同无工资记录 (如 孙文强/杨冰): sys_info 显示"系统内无合同/工资记录"
+        # 以 TC90 判定后: TC90 无合同人员 (如 孙文强/杨冰/艾丽, AC01 有但 TC90 无)
+        # → b_outside 不在系统管理, 不再出现"系统内无合同/工资记录"矛盾文案
         self.records = []
         roster = [_roster(cert="C1", hire="2020-01-01")]
         monkeypatch.setattr("queries.get_person_units_contract",
             lambda conn, certs: {"C1": {"unit_code": 0, "unit_name": ""}})
+        monkeypatch.setattr("queries.get_certs_in_system",
+            lambda conn, certs: set())   # TC90 查无合同
         res = tax_zero.build_zero_salary_suggestions(None, 202606, self.COMBOS,
                                                      roster=roster)
         p = res["units"][0]["persons"][0]
-        assert p["sys_info"] == "系统内无合同/工资记录"
+        assert p["category"] == tax_zero.CAT_B_OUTSIDE
+        assert p["reason"] == tax_zero.REASON_B_OUTSIDE
+        assert "sys_info" not in p
+
+    def test_roster_sys_info_in_system_no_pay_records(self, monkeypatch):
+        # 在系统 (TC90 有合同) 但无 TC93 工资记录: sys_info 显示合同单元与合同经办人
+        from datetime import datetime
+        self.records = []
+        roster = [_roster(cert="C1", hire="2020-01-01")]
+        monkeypatch.setattr("queries.get_person_units_contract",
+            lambda conn, certs: {"C1": {"unit_code": 100, "unit_name": "单元100",
+                                        "contract_handlers": ["合同经办人"]}})
+        res = tax_zero.build_zero_salary_suggestions(None, 202606, self.COMBOS,
+                                                     roster=roster)
+        p = res["units"][0]["persons"][0]
+        assert p["category"] == tax_zero.CAT_B_ROSTER
+        assert p["sys_info"] == "结算单元:单元100(100)；经办人:合同经办人"
+
+    def test_person_display_order_roster_first_outside_last(self, monkeypatch):
+        # 单元内人员排序 (2026-09-11 用户确认): 名单在册(b_roster)最前,
+        # 不在系统(b_outside)最后; 中间为 已离职→收入0→未发放
+        from datetime import datetime
+        self.records = [
+            _rec(cert="A1", unit=100, income=Decimal("0")),          # A1 收入0
+            _rec(cert="A2", unit=100, income=Decimal("0"), sm=202606),  # 同人 A2 未发放
+        ]
+        # A2 未发放: 需构造 无 TC8M 发放 的对集合
+        self.unpaid_pairs = {("A2", 202606)}
+        roster = [
+            _roster(cert="B1", hire="2019-01-01"),   # b_roster 名单在册
+            _roster(cert="B2", hire="2019-01-01"),   # b_outside 不在系统
+            _roster(cert="B3", hire="2019-01-01"),   # b_left 已离职
+        ]
+        from queries import get_person_units_contract as _g
+        def fake_contract(conn, certs):
+            return {c: {"unit_code": 100, "unit_name": "单元100",
+                        "contract_handlers": []} for c in certs}
+        monkeypatch.setattr("queries.get_person_units_contract", fake_contract)
+        monkeypatch.setattr("queries.get_certs_in_system",
+            lambda conn, certs: {"B1", "B3"})   # B1/B3 在系统, B2 不在系统
+        monkeypatch.setattr("queries.get_tc90_salary_end_dates",
+            lambda conn, certs: {"B3": datetime(2026, 5, 31)})   # B3 已离职
+        res = tax_zero.build_zero_salary_suggestions(None, 202606, self.COMBOS,
+                                                     roster=roster)
+        persons = res["units"][0]["persons"]
+        order = [(p["cert_no"], p["category"]) for p in persons]
+        # 排序要求: b_roster 最前, b_outside 最后
+        assert order[0][0] == "B1" and order[0][1] == tax_zero.CAT_B_ROSTER
+        assert order[-1][0] == "B2" and order[-1][1] == tax_zero.CAT_B_OUTSIDE
+        # 中间: 已离职(B3) → A1(A1) → A2未发放(A2); 各分类内部按证件号
+        mids = [c for c in order[1:-1]]
+        assert [c[0] for c in mids] == ["B3", "A1", "A2"]
 
 
 class TestFilterZero:
