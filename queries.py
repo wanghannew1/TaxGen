@@ -1707,7 +1707,7 @@ def get_person_system_info(conn, cert_numbers) -> Dict[str, dict]:
     供零申报 B 类 (在系统) 人员展示"结算单元/最后发薪工资单/发薪经办人":
     - unit_code/unit_name: 最后一次发薪工资单的结算单元 (TC93.ATB930/ATB931)
     - last_pay_ym: 最后一次发薪工资所属年月 (TC93.ATC931)
-    - last_slip_no: 工资单流水号 (TC93.ATC930)
+    - pay_month: 最后一次发薪的发放年月 (TC8M.ATC8G7), 所属≠发放时标注
     - last_batch: 发放次数 (TC93.ATC937)
     - make_handler: 做工资经办人 (TC93.AAE019)
     - pay_handler: 发薪经办人 (TC8M.AAE219 发放经办人, 经 (ATB930,ATC931,ATC937) 关联批次)
@@ -1719,13 +1719,16 @@ def get_person_system_info(conn, cert_numbers) -> Dict[str, dict]:
     certs = sorted({str(c).strip().upper() for c in cert_numbers if str(c).strip()})
     result: Dict[str, dict] = {}
     sql = """
-        SELECT cert, unit_code, unit_name, last_pay_ym, slip_no, batch,
+        SELECT cert, unit_code, unit_name, last_pay_ym, pay_month, batch,
                make_handler, pay_handler
         FROM (
             SELECT ac01.AAC002 AS cert,
                    t93.ATB930 AS unit_code, t93.ATB931 AS unit_name,
-                   t93.ATC931 AS last_pay_ym, t93.ATC930 AS slip_no,
-                   t93.ATC937 AS batch, t93.AAE019 AS make_handler,
+                   t93.ATC931 AS last_pay_ym, t93.ATC937 AS batch,
+                   t93.AAE019 AS make_handler,
+                   (SELECT MAX(m.ATC8G7) FROM TC8M m
+                    WHERE m.ATB930 = t93.ATB930 AND m.ATC931 = t93.ATC931
+                      AND m.ATC937 = t93.ATC937) AS pay_month,
                    (SELECT MAX(m.AAE219) FROM TC8M m
                     WHERE m.ATB930 = t93.ATB930 AND m.ATC931 = t93.ATC931
                       AND m.ATC937 = t93.ATC937) AS pay_handler,
@@ -1754,7 +1757,7 @@ def get_person_system_info(conn, cert_numbers) -> Dict[str, dict]:
                     "unit_code": int(row[1] or 0),
                     "unit_name": str(row[2] or ""),
                     "last_pay_ym": int(row[3] or 0),
-                    "last_slip_no": str(row[4] or ""),
+                    "pay_month": int(row[4] or 0),
                     "last_batch": str(row[5] or ""),
                     "make_handler": str(row[6] or ""),
                     "pay_handler": str(row[7] or ""),

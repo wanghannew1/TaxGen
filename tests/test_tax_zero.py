@@ -329,7 +329,7 @@ class TestBuildSuggestions:
         assert "未减员" in p["reason"]
 
     def test_roster_sys_info_full_display(self, monkeypatch):
-        # 在系统人员展示在册信息: 结算单元/最后发薪工资单/工资结束年月/经办人
+        # 在系统人员展示在册信息: 结算单元/最后发薪年月+批次/工资结束年月/经办人
         from datetime import datetime
         self.records = []
         roster = [_roster(cert="C1", hire="2020-01-01")]
@@ -340,15 +340,14 @@ class TestBuildSuggestions:
             lambda conn, certs: {"C1": datetime(2026, 6, 30)})
         monkeypatch.setattr("queries.get_person_system_info",
             lambda conn, certs: {"C1": {"unit_code": 100, "unit_name": "单元100",
-                                        "last_pay_ym": 202509,
-                                        "last_slip_no": "4141355",
+                                        "last_pay_ym": 202509, "pay_month": 202509,
                                         "last_batch": "1",
                                         "make_handler": "张朦",
                                         "pay_handler": "白云"}})
         res = tax_zero.build_zero_salary_suggestions(None, 202606, self.COMBOS,
                                                      roster=roster)
         p = res["units"][0]["persons"][0]
-        assert p["sys_info"] == "结算单元:单元100(100)；最后发薪:202509单4141355批1；工资结束:202606；经办人:白云"
+        assert p["sys_info"] == "结算单元:单元100(100)；最后发薪:202509批1；工资结束:202606；经办人:白云"
 
     def test_roster_sys_info_handler_priority(self, monkeypatch):
         # 经办人优先级: 发薪经办人 > 做工资经办人 > 合同经办人 (2026-09-11 用户确认)
@@ -362,8 +361,8 @@ class TestBuildSuggestions:
             lambda conn, certs: {"C1": datetime(2026, 6, 30)})
         # 只有做工资经办人 + 合同经办人 → 回落做工资经办人
         monkeypatch.setattr("queries.get_person_system_info",
-            lambda conn, certs: {"C1": {"last_pay_ym": 202509, "slip_no": "4141355",
-                                        "batch": "1", "make_handler": "张朦",
+            lambda conn, certs: {"C1": {"last_pay_ym": 202509, "pay_month": 202509,
+                                        "last_batch": "1", "make_handler": "张朦",
                                         "pay_handler": ""}})
         res = tax_zero.build_zero_salary_suggestions(None, 202606, self.COMBOS,
                                                      roster=roster)
@@ -404,6 +403,43 @@ class TestBuildSuggestions:
         p = res["units"][0]["persons"][0]
         assert p["category"] == tax_zero.CAT_B_ROSTER
         assert p["sys_info"] == "结算单元:单元100(100)；经办人:合同经办人"
+
+    def test_roster_sys_info_pay_month_differs(self, monkeypatch):
+        from datetime import datetime
+        self.records = []
+        roster = [_roster(cert="C1", hire="2020-01-01")]
+        monkeypatch.setattr("queries.get_person_units_contract",
+            lambda conn, certs: {"C1": {"unit_code": 100, "unit_name": "单元100",
+                                        "contract_handlers": []}})
+        monkeypatch.setattr("queries.get_tc90_salary_end_dates",
+            lambda conn, certs: {"C1": datetime(2026, 6, 30)})
+        monkeypatch.setattr("queries.get_person_system_info",
+            lambda conn, certs: {"C1": {"unit_code": 100, "unit_name": "单元100",
+                                        "last_pay_ym": 202607, "pay_month": 202608,
+                                        "last_batch": "2", "pay_handler": "白云"}})
+        res = tax_zero.build_zero_salary_suggestions(None, 202606, self.COMBOS,
+                                                     roster=roster)
+        p = res["units"][0]["persons"][0]
+        assert p["sys_info"] == "结算单元:单元100(100)；最后发薪:202607批2(202608发)；工资结束:202606；经办人:白云"
+
+    def test_roster_sys_info_pay_month_same_omitted(self, monkeypatch):
+        from datetime import datetime
+        self.records = []
+        roster = [_roster(cert="C1", hire="2020-01-01")]
+        monkeypatch.setattr("queries.get_person_units_contract",
+            lambda conn, certs: {"C1": {"unit_code": 100, "unit_name": "单元100",
+                                        "contract_handlers": []}})
+        monkeypatch.setattr("queries.get_tc90_salary_end_dates",
+            lambda conn, certs: {"C1": datetime(2026, 6, 30)})
+        monkeypatch.setattr("queries.get_person_system_info",
+            lambda conn, certs: {"C1": {"unit_code": 100, "unit_name": "单元100",
+                                        "last_pay_ym": 202607, "pay_month": 202607,
+                                        "last_batch": "1", "pay_handler": "白云"}})
+        res = tax_zero.build_zero_salary_suggestions(None, 202606, self.COMBOS,
+                                                     roster=roster)
+        p = res["units"][0]["persons"][0]
+        assert "202607发" not in p["sys_info"]
+        assert p["sys_info"] == "结算单元:单元100(100)；最后发薪:202607批1；工资结束:202606；经办人:白云"
 
     def test_person_display_order_roster_first_outside_last(self, monkeypatch):
         # 单元内人员排序 (2026-09-11 用户确认): 名单在册(b_roster)最前,

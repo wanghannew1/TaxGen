@@ -265,7 +265,7 @@ def build_zero_salary_suggestions(conn, pay_month, combos, roster=None):
                     p_entry["_sys_info"] = {
                         "unit_code": u_code, "unit_name": u_name,
                         "last_pay_ym": int(si.get("last_pay_ym") or 0),
-                        "slip_no": str(si.get("last_slip_no") or ""),
+                        "pay_month": int(si.get("pay_month") or 0),
                         "batch": str(si.get("last_batch") or ""),
                         "end_ym": end_ym,
                         "handler": handler,
@@ -315,9 +315,11 @@ def build_zero_salary_suggestions(conn, pay_month, combos, roster=None):
                                   + (f"({si['unit_code']})" if si["unit_code"] else ""))
                     parts.append(f"结算单元:{unit_label}")
                 if si["last_pay_ym"]:
-                    slip = (f"单{si['slip_no']}" if si["slip_no"] else "")
                     batch = (f"批{si['batch']}" if si["batch"] else "")
-                    parts.append(f"最后发薪:{si['last_pay_ym']}{slip}{batch}")
+                    pay_note = (f"({si['pay_month']}发)"
+                                if si["pay_month"] and si["pay_month"] != si["last_pay_ym"]
+                                else "")
+                    parts.append(f"最后发薪:{si['last_pay_ym']}{batch}{pay_note}")
                 if si["end_ym"]:
                     parts.append(f"工资结束:{si['end_ym']}")
                 if si["handler"]:
