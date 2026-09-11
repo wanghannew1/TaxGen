@@ -104,14 +104,14 @@ def _zero_salary_record(rec) -> SalaryRecord:
                    个人代理费=Decimal("0"), 意外险个人=Decimal("0"), 经济补偿金=Decimal("0"))
 
 
-def build_zero_salary_suggestions(conn, pay_month, combos, roster=None):
+def build_zero_salary_suggestions(conn, pay_month, combos, roster=None, handler=""):
     """扫描候选零申报人员并分组, 候选来源 (2026-09-11 用户确认三来源):
     - A1 工资单收入=0: TC93 有记录且公式计算本期收入=0
     - A2 做了工资没发: TC93 有记录但 TC8M 无发放 (未发无纳税义务, 一律进候选)
     - B  个税端在职无工资: 名单 (config_db.tax_roster, 境内/境外) 在册无离职日期,
          本期无 TC93 工资记录。B 类三分类 (2026-09-11 用户确认):
          b_outside 系统查无此人 (AC01 无, 人工管理) → 默认不生成, 面板体现确认;
-         b_left    在系统但工资结束年月 (TC90.ATC90AV) < 发放月 → 已离职, 默认不生成+建议减员;
+         b_left    在系统但工资结束年月 (TC90.ATC90AV) < 所属年月 → 已离职, 默认不生成+建议减员;
          b_roster  在系统且在册在职 → 新签合同未做工资(B1) / 在册无痕迹(B2)
 
     Args:
@@ -119,6 +119,10 @@ def build_zero_salary_suggestions(conn, pay_month, combos, roster=None):
         pay_month: 发放月份, 如 202606
         combos: 前端确认的组合列表, 每项含 unit/salary_month/seq 等
         roster: 个税端名单列表 (get_tax_roster()), None/空则不生成 B 来源
+        handler: 经办人过滤 (2026-09-11 用户需求), 非空时 A/B 候选均只保留
+            经办人匹配者: A 类由前端按 combo.handler 预过滤; B 类在此按
+            handler(TC8M.AAE019) > make_handler(TC93.AAE019) > 合同经办人 链匹配,
+            无经办人关联的 b_outside 一并排除
 
     Returns:
         dict: {
@@ -131,6 +135,7 @@ def build_zero_salary_suggestions(conn, pay_month, combos, roster=None):
         }
         category: a1_income_zero | a2_unpaid | b_roster (前端按分类展示理由)
     """
+    handler_filter = (handler or "").strip()
     combo_set = {(int(c.get("unit", 0) or 0), int(c.get("salary_month", 0) or 0),
                   str(c.get("seq", "") or "")) for c in combos}
     salary_months = sorted({c[1] for c in combo_set})
@@ -229,6 +234,16 @@ def build_zero_salary_suggestions(conn, pay_month, combos, roster=None):
                 unit_name = str(info.get("unit_name") or "")
                 if unit in excl_codes:
                     continue
+                if handler_filter:
+                    # 经办人过滤: B 类候选无经办人关联 (b_outside) 或
+                    # 经办人链 (TC8M 经办人 > TC93 做工资经办人 > 合同经办人)
+                    # 不含过滤值时排除
+                    si = system_info.get(cert, {})
+                    h = (str(si.get("handler") or "")
+                         or str(si.get("make_handler") or "")
+                         or str((info.get("contract_handlers") or [""])[0] or ""))
+                    if handler_filter not in h:
+                        continue
                 hire = str(p.get("hire_date") or "").strip()
                 is_new = bool(hire) and hire >= hire_start
                 u = _ensure_unit(unit, unit_name or "未关联结算单元",

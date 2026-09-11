@@ -439,6 +439,64 @@ class TestBuildSuggestions:
         assert "202607发" not in p["sys_info"]
         assert p["sys_info"] == "结算单元:单元100(100)；最后发薪:202607批1；工资结束:202607；经办人:白云"
 
+    def test_handler_filter_keeps_matching_roster(self, monkeypatch):
+        # 经办人过滤 (2026-09-11 用户需求): B 类候选经办人链含过滤值 → 保留
+        from datetime import datetime
+        self.records = []
+        roster = [_roster(cert="C1", hire="2020-01-01")]
+        monkeypatch.setattr("queries.get_person_units_contract",
+            lambda conn, certs: {"C1": {"unit_code": 100, "unit_name": "单元100",
+                                        "contract_handlers": []}})
+        monkeypatch.setattr("queries.get_tc90_salary_end_dates",
+            lambda conn, certs: {"C1": datetime(2026, 7, 31)})
+        monkeypatch.setattr("queries.get_person_system_info",
+            lambda conn, certs: {"C1": {"handler": "张朦"}})
+        res = tax_zero.build_zero_salary_suggestions(None, 202606, self.COMBOS,
+                                                     roster=roster, handler="张朦")
+        assert [p["cert_no"] for p in res["units"][0]["persons"]] == ["C1"]
+
+    def test_handler_filter_drops_nonmatching_roster(self, monkeypatch):
+        # B 类候选经办人链不含过滤值 → 排除
+        from datetime import datetime
+        self.records = []
+        roster = [_roster(cert="C1", hire="2020-01-01")]
+        monkeypatch.setattr("queries.get_person_units_contract",
+            lambda conn, certs: {"C1": {"unit_code": 100, "unit_name": "单元100",
+                                        "contract_handlers": []}})
+        monkeypatch.setattr("queries.get_tc90_salary_end_dates",
+            lambda conn, certs: {"C1": datetime(2026, 7, 31)})
+        monkeypatch.setattr("queries.get_person_system_info",
+            lambda conn, certs: {"C1": {"handler": "白云"}})
+        res = tax_zero.build_zero_salary_suggestions(None, 202606, self.COMBOS,
+                                                     roster=roster, handler="张朦")
+        assert res["units"] == []
+
+    def test_handler_filter_drops_outside_system_roster(self, monkeypatch):
+        # b_outside 无经办人关联 → 过滤时一并排除
+        self.records = []
+        roster = [_roster(cert="C1", hire="2020-01-01")]
+        monkeypatch.setattr("queries.get_person_units_contract",
+            lambda conn, certs: {})
+        monkeypatch.setattr("queries.get_certs_in_system",
+            lambda conn, certs: set())   # 不在系统 → b_outside
+        res = tax_zero.build_zero_salary_suggestions(None, 202606, self.COMBOS,
+                                                     roster=roster, handler="张朦")
+        assert res["units"] == []
+
+    def test_handler_filter_empty_keeps_all(self, monkeypatch):
+        # handler 为空(未填经办人) → 不过滤
+        from datetime import datetime
+        self.records = []
+        roster = [_roster(cert="C1", hire="2020-01-01")]
+        monkeypatch.setattr("queries.get_person_units_contract",
+            lambda conn, certs: {"C1": {"unit_code": 100, "unit_name": "单元100",
+                                        "contract_handlers": ["合同经办人"]}})
+        monkeypatch.setattr("queries.get_tc90_salary_end_dates",
+            lambda conn, certs: {"C1": datetime(2026, 7, 31)})
+        res = tax_zero.build_zero_salary_suggestions(None, 202606, self.COMBOS,
+                                                     roster=roster, handler="")
+        assert [p["cert_no"] for p in res["units"][0]["persons"]] == ["C1"]
+
     def test_person_display_order_roster_first_outside_last(self, monkeypatch):
         # 单元内人员排序 (2026-09-11 用户确认): 名单在册(b_roster)最前,
         # 不在系统(b_outside)最后; 中间为 已离职→收入0→未发放

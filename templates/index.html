@@ -1257,13 +1257,20 @@
             if (tempList.length === 0) { showError('请先搜索并添加报税批次到待报列表'); return; }
             const confirmedCombos = getSelectedListCombos();
             if (confirmedCombos.length === 0) { showError('请在待报列表中勾选要报送的批次'); return; }
+            // 经办人过滤 (2026-09-11 用户需求): 继承批次搜索框填写的经办人,
+            // 仅对经办人匹配的批次做跨月合并确认, 避免结算单元太多看不过来
+            const mergeHandlerFilter = searchHandler.value.trim();
+            const mergeCombos = mergeHandlerFilter
+                ? confirmedCombos.filter(c => (c.handler || '').includes(mergeHandlerFilter))
+                : confirmedCombos;
+            if (mergeCombos.length === 0) { showError(`待报批次中没有经办人为「${mergeHandlerFilter}」的批次`); return; }
 
             btnMergeCheck.disabled = true;
             btnMergeCheck.textContent = '检查中...';
             fetch('/api/merge-suggestions', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ pay_month: parseInt(month), combos: confirmedCombos })
+                body: JSON.stringify({ pay_month: parseInt(month), combos: mergeCombos })
             })
             .then(async resp => {
                 const data = await resp.json();
@@ -1275,8 +1282,8 @@
                 } catch (e) { mergeGroupTags = {}; }
                 renderMergeGroups(data);
                 lastMergePayMonth = data.pay_month;
-                lastMergeCombos = confirmedCombos;
-                mergeModalSubtitle.textContent = `${data.pay_month} 发放 → 上月档 ${data.prev_month}`;
+                lastMergeCombos = mergeCombos;
+                mergeModalSubtitle.textContent = `${data.pay_month} 发放 → 上月档 ${data.prev_month}${mergeHandlerFilter ? `（经办人：${mergeHandlerFilter}）` : ''}`;
                 bootstrap.Modal.getOrCreateInstance(mergeConfirmModal).show();
             })
             .catch(e => showError(`检查合并规则失败: ${e.message}`))
@@ -1592,6 +1599,13 @@
             if (tempList.length === 0) { showError('请先搜索并添加报税批次到待报列表'); return; }
             const confirmedCombos = getSelectedListCombos();
             if (confirmedCombos.length === 0) { showError('请在待报列表中勾选要报送的批次'); return; }
+            // 经办人过滤 (2026-09-11 用户需求): 继承批次搜索框填写的经办人,
+            // 仅对经办人匹配的批次做零申报确认, 避免结算单元太多看不过来
+            const zeroHandlerFilter = searchHandler.value.trim();
+            const zeroCombos = zeroHandlerFilter
+                ? confirmedCombos.filter(c => (c.handler || '').includes(zeroHandlerFilter))
+                : confirmedCombos;
+            if (zeroCombos.length === 0) { showError(`待报批次中没有经办人为「${zeroHandlerFilter}」的批次`); return; }
 
             btnZeroCheck.disabled = true;
             btnZeroCheck.textContent = '检查中...';
@@ -1599,7 +1613,7 @@
             fetch('/api/zero-suggestions', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ pay_month: parseInt(month), combos: confirmedCombos })
+                body: JSON.stringify({ pay_month: parseInt(month), combos: zeroCombos, handler: zeroHandlerFilter })
             })
             .then(async resp => {
                 const data = await resp.json();
@@ -1613,7 +1627,7 @@
                     return;
                 }
                 renderZeroSuggestions(data);
-                zeroModalSubtitle.textContent = `本月共 ${total} 条零申报候选记录，${data.units.length} 个结算单元`;
+                zeroModalSubtitle.textContent = `本月共 ${total} 条零申报候选记录，${data.units.length} 个结算单元${zeroHandlerFilter ? `（经办人：${zeroHandlerFilter}）` : ''}`;
                 bootstrap.Modal.getOrCreateInstance(zeroConfirmModal).show();
             })
             .catch(e => showError(`检查零申报失败: ${e.message}`))

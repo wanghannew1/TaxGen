@@ -196,6 +196,7 @@ def api_zero_suggestions():
         data = request.get_json()
         pay_month = int(data.get("pay_month") or 0)
         combos = data.get("combos") or []
+        handler = (data.get("handler") or "").strip()
         if not pay_month or not combos:
             return jsonify({"error": "请选择月份并勾选待报组合"}), 400
         if any(not c.get("seq") for c in combos):
@@ -203,7 +204,8 @@ def api_zero_suggestions():
         conn = get_connection()
         from config_db import get_tax_roster
         return jsonify(build_zero_salary_suggestions(conn, pay_month, combos,
-                                                     roster=get_tax_roster()))
+                                                     roster=get_tax_roster(),
+                                                     handler=handler))
     except Exception as e:
         return _log_api_error(e)
 
