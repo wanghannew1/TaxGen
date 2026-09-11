@@ -1704,13 +1704,13 @@ def get_person_units_contract(conn, cert_numbers) -> Dict[str, dict]:
 def get_person_system_info(conn, cert_numbers) -> Dict[str, dict]:
     """按证件号批量查询在系统人员的最后一次发薪信息 (零申报面板展示用)。
 
-    供零申报 B 类 (在系统) 人员展示"结算单元/最后发薪工资单/发薪经办人":
+    供零申报 B 类 (在系统) 人员展示"结算单元/最后发薪工资单/经办人":
     - unit_code/unit_name: 最后一次发薪工资单的结算单元 (TC93.ATB930/ATB931)
     - last_pay_ym: 最后一次发薪工资所属年月 (TC93.ATC931)
     - pay_month: 最后一次发薪的发放年月 (TC8M.ATC8G7), 所属≠发放时标注
     - last_batch: 发放次数 (TC93.ATC937)
     - make_handler: 做工资经办人 (TC93.AAE019)
-    - pay_handler: 发薪经办人 (TC8M.AAE219 发放经办人, 经 (ATB930,ATC931,ATC937) 关联批次)
+    - handler: 经办人/业务经办人 (TC8M.AAE019, 经 (ATB930,ATC931,ATC937) 关联批次)
     取发放年月 (AAE001 优先, 次 ATC932, 再 ATC931) 最近一条结算记录;
     仅返回有 TC93 结算记录的人员, 无记录者不出现。
     """
@@ -1720,7 +1720,7 @@ def get_person_system_info(conn, cert_numbers) -> Dict[str, dict]:
     result: Dict[str, dict] = {}
     sql = """
         SELECT cert, unit_code, unit_name, last_pay_ym, pay_month, batch,
-               make_handler, pay_handler
+               make_handler, handler
         FROM (
             SELECT ac01.AAC002 AS cert,
                    t93.ATB930 AS unit_code, t93.ATB931 AS unit_name,
@@ -1729,9 +1729,9 @@ def get_person_system_info(conn, cert_numbers) -> Dict[str, dict]:
                    (SELECT MAX(m.ATC8G7) FROM TC8M m
                     WHERE m.ATB930 = t93.ATB930 AND m.ATC931 = t93.ATC931
                       AND m.ATC937 = t93.ATC937) AS pay_month,
-                   (SELECT MAX(m.AAE219) FROM TC8M m
-                    WHERE m.ATB930 = t93.ATB930 AND m.ATC931 = t93.ATC931
-                      AND m.ATC937 = t93.ATC937) AS pay_handler,
+                   (SELECT MAX(m.AAE019) FROM TC8M m
+                     WHERE m.ATB930 = t93.ATB930 AND m.ATC931 = t93.ATC931
+                       AND m.ATC937 = t93.ATC937) AS handler,
                    RANK() OVER (PARTITION BY ac01.AAC002
                                 ORDER BY COALESCE(t93.AAE001, t93.ATC932, t93.ATC931)
                                          DESC NULLS LAST,
@@ -1760,7 +1760,7 @@ def get_person_system_info(conn, cert_numbers) -> Dict[str, dict]:
                     "pay_month": int(row[4] or 0),
                     "last_batch": str(row[5] or ""),
                     "make_handler": str(row[6] or ""),
-                    "pay_handler": str(row[7] or ""),
+                    "handler": str(row[7] or ""),
                 }
     return result
 

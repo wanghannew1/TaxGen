@@ -57,7 +57,7 @@ REASON_A2 = "已做工资但未发放(TC8M无发放)，无纳税义务，默认�
 REASON_B1 = "个税端在职，本期新签合同未做工资，默认生成零申报保留在册"
 REASON_B2 = "个税端在职，本期未做工资未发放未减员，默认生成零申报；若已离职请先办理减员"
 REASON_B_OUTSIDE = "个税端在职但不在系统管理(人工管理)，默认不生成零申报；如需在个税端保留请确认生成"
-REASON_B_LEFT = "工资结束年月{ym}早于发放月{pay}，判定已离职，默认不生成零申报，建议办理减员"
+REASON_B_LEFT = "工资结束年月{ym}早于所属年月{pay}，判定已离职，默认不生成零申报，建议办理减员"
 
 
 def _income_of_dict(d: dict) -> Decimal:
@@ -246,8 +246,9 @@ def build_zero_salary_suggestions(conn, pay_month, combos, roster=None):
                     # 不在系统管理 (人工管理): 默认不生成零申报, 面板体现由用户确认
                     p_entry["category"] = CAT_B_OUTSIDE
                 elif cert in salary_ends and \
-                        salary_ends[cert].year * 100 + salary_ends[cert].month < pay_month:
-                    # 工资结束年月(ATC90AV)早于发放月 → 判定已离职: 默认不生成, 建议减员
+                        salary_ends[cert].year * 100 + salary_ends[cert].month \
+                        < min(salary_months):
+                    # 工资结束年月(ATC90AV)早于所属年月 → 判定已离职: 默认不生成, 建议减员
                     p_entry["category"] = CAT_B_LEFT
                     p_entry["_end_ym"] = salary_ends[cert].year * 100 + salary_ends[cert].month
                 else:
@@ -259,7 +260,7 @@ def build_zero_salary_suggestions(conn, pay_month, combos, roster=None):
                     u_name = unit_name or str(si.get("unit_name") or "")
                     end_ym = salary_ends[cert].year * 100 + salary_ends[cert].month \
                         if cert in salary_ends else 0
-                    handler = (str(si.get("pay_handler") or "")
+                    handler = (str(si.get("handler") or "")
                                or str(si.get("make_handler") or "")
                                or str((info.get("contract_handlers") or [""])[0] or ""))
                     p_entry["_sys_info"] = {
@@ -285,8 +286,8 @@ def build_zero_salary_suggestions(conn, pay_month, combos, roster=None):
                 elif p["category"] == CAT_B_OUTSIDE:
                     suggested, reason = "skip", REASON_B_OUTSIDE
                 elif p["category"] == CAT_B_LEFT:
-                    suggested, reason = "skip", REASON_B_LEFT.format(ym=p["_end_ym"],
-                                                                     pay=pay_month)
+                    suggested, reason = "skip", REASON_B_LEFT.format(
+                        ym=p["_end_ym"], pay=min(salary_months))
                 elif in_config:
                     suggested, reason = "skip", REASON_A1_CONFIG
                 elif p["category"] == CAT_B_ROSTER:
