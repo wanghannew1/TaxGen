@@ -448,8 +448,11 @@ def api_generate():
             personnel = get_personnel_info(conn, month)
             tc93_all = get_tc93_all_fields(conn, month)
             abnormal = get_abnormal_records(conn, month)
-        merge_by_person = data.get("merge_by_person", True)
-        merge_by_pay_month = bool(data.get("merge_by_pay_month", True))
+        # 合并固化 (2026-09-11 用户确认): 每次生成都必须按人+发放月份合并
+        # (每人一行, 本期收入/五险一金/个税全部合计), 另一选项已移除无意义,
+        # 不再接受请求参数, 防止误选其他粒度影响输出正确性
+        merge_by_person = True
+        merge_by_pay_month = True
         # 年平均工资总额（解除劳动合同一次性补偿金 3 倍免税判断基准，默认 12 万）
         annual_avg_wage = float(data.get("annual_avg_wage") or 120000)
         # 特殊结算单元规则: 工资为0不申报 + 完全排除不申报

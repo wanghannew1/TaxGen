@@ -516,24 +516,13 @@
                         <button id="btnDeleteSelected" class="btn btn-sm btn-outline-danger" disabled>删除选中</button>
                     </div>
                     <div class="form-check mt-2 mb-1">
-                        <input class="form-check-input" type="checkbox" id="mergeByPerson" checked>
+                        <input class="form-check-input" type="checkbox" id="mergeByPerson" checked disabled>
                         <label class="form-check-label" for="mergeByPerson">
-                            合并多条工资记录
+                            合并多条工资记录（固定按人+发放月份合并）
                         </label>
                     </div>
-                    <div class="ms-4 mb-1" id="mergeGranularityBox">
-                        <div class="form-check">
-                            <input class="form-check-input" type="radio" name="mergeGranularity" id="mergeByPayMonth" value="pay_month" checked>
-                            <label class="form-check-label" for="mergeByPayMonth">
-                                按人+发放月份合并（每人一行，本期收入/五险一金/个税全部合计）
-                            </label>
-                        </div>
-                        <div class="form-check">
-                            <input class="form-check-input" type="radio" name="mergeGranularity" id="mergeByMonth" value="month">
-                            <label class="form-check-label" for="mergeByMonth">
-                                按人+所属月份合并（同人同月多笔合并，同一人可能多行）
-                            </label>
-                        </div>
+                    <div class="ms-4 mb-1 text-muted small" id="mergeGranularityBox">
+                        <i class="bi bi-info-circle me-1"></i>每人一行，本期收入/五险一金/个税全部合计（此方式已固化，无需选择）
                     </div>
                     <button id="btnMergeCheck" class="btn btn-outline-warning w-100 mt-2">检查合并规则并确认</button>
                     <span id="mergeConfirmedBadge" class="text-success small mt-1" style="display:none;"></span>
@@ -882,7 +871,7 @@
                             <div id="guideSecGenerate" class="accordion-collapse collapse" data-bs-parent="#guideAccordion">
                                 <div class="accordion-body">
                                     <ul class="mb-2">
-                                        <li><strong>合并多条工资记录</strong>（默认勾选）：按人+发放月份合并（每人一行，全部合计，多月三险在此体现）或按人+所属月份合并（同人可能多行）。</li>
+                                        <li><strong>合并多条工资记录</strong>（固定开启）：按人+发放月份合并，每人一行，本期收入/五险一金/个税全部合计（多月三险在此体现），无需选择。</li>
                                         <li><strong>年平均工资总额</strong>（默认 120000 元）：用于判断解除劳动合同一次性补偿金是否达 3 倍年平均工资的交税标准。</li>
                                         <li>已做过合并规则/零申报确认时，选择会自动带入。</li>
                                         <li>点「生成报税数据」→ 等待生成（批次多时约 2-10 秒）→ 结果区显示 4 类文件：正常工资薪金所得（30 列主表）、劳务报酬所得（14 列）、全年一次性奖金收入（11 列，仅奖金&gt;0）、人员信息采集导入模板（51 列）。</li>
@@ -1060,7 +1049,7 @@
                             </h2>
                             <div id="faq5" class="accordion-collapse collapse" data-bs-parent="#guideFaq">
                                 <div class="accordion-body small">
-                                    全部加入待报列表 → 点「检查合并规则」→ 跨月人员会全部列出并逐人确认 → 生成时选"按人+发放月份合并"。这正是跨月合并的标准流程。
+                                    全部加入待报列表 → 点「检查合并规则」→ 跨月人员会全部列出并逐人确认 → 生成时自动按人+发放月份合并。这正是跨月合并的标准流程。
                                 </div>
                             </div>
                         </div>
@@ -1072,7 +1061,7 @@
                             </h2>
                             <div id="faq6" class="accordion-collapse collapse" data-bs-parent="#guideFaq">
                                 <div class="accordion-body small">
-                                    先核对：1) 待报列表是否<strong>包含全部</strong>相关批次（漏批次=少人）；2) 合并规则弹窗是否已确认（未确认的跨月人员按单月，可能少三险）；3) 合并粒度选的是"发放月合并"还是"所属月合并"。
+                                    先核对：1) 待报列表是否<strong>包含全部</strong>相关批次（漏批次=少人）；2) 合并规则弹窗是否已确认（未确认的跨月人员按单月，可能少三险）；3) 合并已固定为按人+发放月份合并，每人一行。
                                 </div>
                             </div>
                         </div>
@@ -1184,12 +1173,6 @@
         document.addEventListener('DOMContentLoaded', function() {
             suggestionsCard.style.display = 'block';
             loadMonths();
-            const mergeByPerson = document.getElementById('mergeByPerson');
-            const granularityBox = document.getElementById('mergeGranularityBox');
-            granularityBox.style.display = mergeByPerson.checked ? 'block' : 'none';
-            mergeByPerson.addEventListener('change', function() {
-                granularityBox.style.display = this.checked ? 'block' : 'none';
-            });
         });
 
         selectAllCb.addEventListener('change', function() {
@@ -2313,7 +2296,7 @@
             validationReport.style.display = 'none';
 
             try {
-                const body = { month: parseInt(month), templates, confirmed_combos: confirmedCombos, merge_by_person: document.getElementById('mergeByPerson').checked, merge_by_pay_month: document.getElementById('mergeByPerson').checked && document.querySelector('input[name="mergeGranularity"]:checked').value === 'pay_month', annual_avg_wage: parseFloat(document.getElementById('annualAvgWage').value) || 120000 };
+                const body = { month: parseInt(month), templates, confirmed_combos: confirmedCombos, merge_by_person: true, merge_by_pay_month: true, annual_avg_wage: parseFloat(document.getElementById('annualAvgWage').value) || 120000 };
                 if (Object.keys(mergeChoices).length > 0) {
                     body.merge_choices = mergeChoices;
                     body.persist_merge_choices = persistMergeChoices;
