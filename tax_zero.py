@@ -8,6 +8,10 @@
 - A2 做了工资没发: TC93 有记录但 TC8M 无对应已发记录 (未发放无纳税义务)
 - B  个税端在职无工资: 个税端名单 (境内/境外 xls, SQLite tax_roster) 在册
      无离职日期, 且本期无任何 TC93 工资记录 → 新签合同未做工资(B1) / 在册无痕迹(B2)
+- B 类三分类 (2026-09-11 用户确认):
+     b_outside  名单在册但系统查无此人 (AC01 无记录, 人工管理) → 默认不生成, 面板体现确认
+     b_left     在系统但工资结束年月 (TC90.ATC90AV) 早于发放月 → 已离职, 默认不生成+建议减员
+     b_roster   在系统且在册在职 → 维持 B1/B2 (默认 declare 保留在册)
 
 口径 (用户确认):
 - 判定: 单条记录本期收入=0 (报税公式逐条计算, 与生成文件"本期收入"列对应)
@@ -15,7 +19,8 @@
         完全排除单元 (exclude_all) 仍强制排除, 不进入候选
 - 建议: 配置单元(38973/41100等 zero_salary_no_add=1) → 默认 skip (不生成), 含 B 类;
         其他单元 → 默认 declare (生成零申报);
-        A2 未发放 → 默认 skip (无纳税义务); B 在册无工资 → 默认 declare (保留在册)
+        A2 未发放 → 默认 skip (无纳税义务); B 不在系统/已离职 → 默认 skip (面板确认);
+        B 在册在职 → 默认 declare (保留在册)
 - 持久化: config_db.zero_override, 用户"记住本次选择"后下次默认沿用
 """
 from decimal import Decimal
@@ -30,13 +35,17 @@ from models import SalaryRecord
 # 候选来源分类 (2026-09-11 用户确认, 理由列按分类显示)
 CAT_A1_INCOME_ZERO = "a1_income_zero"   # 工资表公式计算本期收入=0
 CAT_A2_UNPAID = "a2_unpaid"             # 做了工资没发 (TC8M 无发放)
-CAT_B_ROSTER = "b_roster"               # 个税端在职无工资 (名单在册)
+CAT_B_ROSTER = "b_roster"               # 个税端在职无工资 (名单在册, 在职)
+CAT_B_OUTSIDE = "b_outside"             # 名单在册但系统查无此人 (人工管理, 默认不生成)
+CAT_B_LEFT = "b_left"                   # 在系统但工资结束年月早于发放月 (已离职, 默认不生成+建议减员)
 
 REASON_A1 = "工资表按公式计算本期收入为0，默认生成零申报"
 REASON_A1_CONFIG = "结算单元配置'工资为0不增员不报税'，默认不生成零申报"
 REASON_A2 = "已做工资但未发放(TC8M无发放)，无纳税义务，默认不生成；若个税端需保留在册可改生成"
 REASON_B1 = "个税端在职，本期新签合同未做工资，默认生成零申报保留在册"
 REASON_B2 = "个税端在职，本期未做工资未发放未减员，默认生成零申报；若已离职请先办理减员"
+REASON_B_OUTSIDE = "个税端在职但不在系统管理(人工管理)，默认不生成零申报；如需在个税端保留请确认生成"
+REASON_B_LEFT = "工资结束年月{ym}早于发放月{pay}，判定已离职，默认不生成零申报，建议办理减员"
 
 
 def _income_of_dict(d: dict) -> Decimal:
@@ -88,7 +97,10 @@ def build_zero_salary_suggestions(conn, pay_month, combos, roster=None):
     - A1 工资单收入=0: TC93 有记录且公式计算本期收入=0
     - A2 做了工资没发: TC93 有记录但 TC8M 无发放 (未发无纳税义务, 一律进候选)
     - B  个税端在职无工资: 名单 (config_db.tax_roster, 境内/境外) 在册无离职日期,
-         本期无 TC93 工资记录 → 新签合同未做工资(B1) / 在册无痕迹(B2)
+         本期无 TC93 工资记录。B 类三分类 (2026-09-11 用户确认):
+         b_outside 系统查无此人 (AC01 无, 人工管理) → 默认不生成, 面板体现确认;
+         b_left    在系统但工资结束年月 (TC90.ATC90AV) < 发放月 → 已离职, 默认不生成+建议减员;
+         b_roster  在系统且在册在职 → 新签合同未做工资(B1) / 在册无痕迹(B2)
 
     Args:
         conn: Oracle 连接 (只读)
@@ -184,8 +196,15 @@ def build_zero_salary_suggestions(conn, pay_month, combos, roster=None):
                 continue
             b_certs[cert] = p
         if b_certs:
-            from queries import get_person_units_contract
+            from queries import (get_person_units_contract, get_certs_in_system,
+                                 get_tc90_salary_end_dates)
             contract_map = get_person_units_contract(conn, list(b_certs))
+            # B 类三分类 (2026-09-11 用户确认):
+            # 不在系统 (AC01 无此人, 人工管理) → 默认不生成, 面板体现让用户确认;
+            # 在系统但工资结束年月 (TC90.ATC90AV) < 发放月 → 已离职, 默认不生成+建议减员;
+            # 在系统且在册在职 → 维持 B1/B2 (默认 declare 保留在册)
+            in_system = get_certs_in_system(conn, list(b_certs))
+            salary_ends = get_tc90_salary_end_dates(conn, list(b_certs))
             y, m = divmod(max(salary_months), 100)
             hire_start = f"{y - 1:04d}-{m:02d}-01"  # 近12个月入职 → B1 新签合同未做工资
             for cert, p in b_certs.items():
@@ -207,8 +226,17 @@ def build_zero_salary_suggestions(conn, pay_month, combos, roster=None):
                     "salary_months": [],
                     "income_total": 0.0,
                 })
-                p_entry["category"] = CAT_B_ROSTER
-                p_entry["_is_new"] = is_new
+                if cert not in in_system:
+                    # 不在系统管理 (人工管理): 默认不生成零申报, 面板体现由用户确认
+                    p_entry["category"] = CAT_B_OUTSIDE
+                elif cert in salary_ends and \
+                        salary_ends[cert].year * 100 + salary_ends[cert].month < pay_month:
+                    # 工资结束年月(ATC90AV)早于发放月 → 判定已离职: 默认不生成, 建议减员
+                    p_entry["category"] = CAT_B_LEFT
+                    p_entry["_end_ym"] = salary_ends[cert].year * 100 + salary_ends[cert].month
+                else:
+                    p_entry["category"] = CAT_B_ROSTER
+                    p_entry["_is_new"] = is_new
 
     if not units:
         return {"pay_month": pay_month, "units": []}
@@ -221,6 +249,11 @@ def build_zero_salary_suggestions(conn, pay_month, combos, roster=None):
             if p.get("suggested") is None:
                 if p["category"] == CAT_A2_UNPAID:
                     suggested, reason = "skip", REASON_A2
+                elif p["category"] == CAT_B_OUTSIDE:
+                    suggested, reason = "skip", REASON_B_OUTSIDE
+                elif p["category"] == CAT_B_LEFT:
+                    suggested, reason = "skip", REASON_B_LEFT.format(ym=p["_end_ym"],
+                                                                     pay=pay_month)
                 elif in_config:
                     suggested, reason = "skip", REASON_A1_CONFIG
                 elif p["category"] == CAT_B_ROSTER:

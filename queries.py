@@ -777,6 +777,34 @@ def get_tc90_salary_end_dates(conn, cert_numbers) -> Dict[str, datetime]:
     return dates
 
 
+def get_certs_in_system(conn, cert_numbers) -> Set[str]:
+    """按身份证号批量判定人员是否在系统管理 (AC01 人员主档存在)。
+
+    名单在册人员在系统中查不到 (AC01 无此人) 属人工管理人员,
+    非本系统工资业务管理, 零申报默认不生成、由用户面板确认。
+    返回系统内存在的 {证件号(大写)} 集合。
+    """
+    if not cert_numbers:
+        return set()
+    certs = sorted({str(c).strip().upper() for c in cert_numbers if str(c).strip()})
+    found: Set[str] = set()
+    sql = """
+        SELECT DISTINCT AAC002 FROM AC01
+        WHERE AAC002 IN ({placeholders})
+    """
+    with conn.cursor() as cursor:
+        for start in range(0, len(certs), _IN_BATCH_SIZE):
+            chunk = certs[start:start + _IN_BATCH_SIZE]
+            placeholders = ", ".join(f":c{i}" for i in range(len(chunk)))
+            binds = {f"c{i}": c for i, c in enumerate(chunk)}
+            cursor.execute(sql.format(placeholders=placeholders), binds)
+            for row in cursor.fetchall():
+                cert = str(row[0] or "").strip().upper()
+                if cert:
+                    found.add(cert)
+    return found
+
+
 def get_payroll_personnel(conn, pay_month: int, start_time=None, end_time=None) -> List[PersonnelInfo]:
     """按发放月份(经办年月)查询全部发薪人员详细信息, 用于增员模板。
 

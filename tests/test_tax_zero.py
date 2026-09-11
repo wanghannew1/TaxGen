@@ -71,6 +71,11 @@ class TestBuildSuggestions:
         monkeypatch.setattr(tax_zero, "get_excluded_unit_codes",
                             lambda: [102])       # 102 为完全排除单元
         monkeypatch.setattr(tax_zero, "get_zero_overrides", lambda: {})
+        # B 类系统判定 (2026-09-11): 默认全部在系统 (AC01), 且无工资结束年月
+        monkeypatch.setattr("queries.get_certs_in_system",
+                            lambda conn, certs: set(certs))
+        monkeypatch.setattr("queries.get_tc90_salary_end_dates",
+                            lambda conn, certs: {})
 
     def test_zero_income_record_is_candidate(self):
         self.records = [_rec(cert="C1", unit=100, income=Decimal("0"))]
@@ -266,6 +271,58 @@ class TestBuildSuggestions:
         res = tax_zero.build_zero_salary_suggestions(None, 202606, self.COMBOS,
                                                      roster=roster)
         assert res["units"] == []
+
+    def test_roster_outside_system_skip(self, monkeypatch):
+        # 名单在册但系统查无此人 (AC01 无记录, 人工管理) → 默认不生成,
+        # 面板体现 (2026-09-11 用户确认: 不在系统默认不生成0申报, 用户可确认)
+        from datetime import datetime
+        self.records = []
+        roster = [_roster(cert="C1", hire="2020-01-01")]
+        monkeypatch.setattr("queries.get_person_units_contract",
+            lambda conn, certs: {"C1": {"unit_code": 100, "unit_name": "单元100"}})
+        monkeypatch.setattr("queries.get_certs_in_system",
+            lambda conn, certs: set())   # AC01 查无此人
+        res = tax_zero.build_zero_salary_suggestions(None, 202606, self.COMBOS,
+                                                     roster=roster)
+        p = res["units"][0]["persons"][0]
+        assert p["category"] == tax_zero.CAT_B_OUTSIDE
+        assert p["suggested"] == "skip"
+        assert p["default_chosen"] == "skip"
+        assert "人工管理" in p["reason"]
+
+    def test_roster_left_salary_end_before_pay_month_skip(self, monkeypatch):
+        # 名单在册但在系统工资结束年月(ATC90AV)早于发放月 → 判定已离职,
+        # 默认不生成 + 建议减员 (2026-09-11 用户确认)
+        from datetime import datetime
+        self.records = []
+        roster = [_roster(cert="C1", hire="2020-01-01")]
+        monkeypatch.setattr("queries.get_person_units_contract",
+            lambda conn, certs: {"C1": {"unit_code": 100, "unit_name": "单元100"}})
+        monkeypatch.setattr("queries.get_tc90_salary_end_dates",
+            lambda conn, certs: {"C1": datetime(2026, 5, 31)})  # 工资结束 202605 < 发放月
+        res = tax_zero.build_zero_salary_suggestions(None, 202606, self.COMBOS,
+                                                     roster=roster)
+        p = res["units"][0]["persons"][0]
+        assert p["category"] == tax_zero.CAT_B_LEFT
+        assert p["suggested"] == "skip"
+        assert p["default_chosen"] == "skip"
+        assert "已离职" in p["reason"] and "减员" in p["reason"]
+
+    def test_roster_in_system_salary_end_after_pay_month_declare(self, monkeypatch):
+        # 名单在册且在系统, 工资结束年月 >= 发放月 (在职) → 维持 B2 默认生成
+        from datetime import datetime
+        self.records = []
+        roster = [_roster(cert="C1", hire="2020-01-01")]
+        monkeypatch.setattr("queries.get_person_units_contract",
+            lambda conn, certs: {"C1": {"unit_code": 100, "unit_name": "单元100"}})
+        monkeypatch.setattr("queries.get_tc90_salary_end_dates",
+            lambda conn, certs: {"C1": datetime(2026, 6, 30)})  # 工资结束 202606 >= 发放月
+        res = tax_zero.build_zero_salary_suggestions(None, 202606, self.COMBOS,
+                                                     roster=roster)
+        p = res["units"][0]["persons"][0]
+        assert p["category"] == tax_zero.CAT_B_ROSTER
+        assert p["suggested"] == "declare"
+        assert "未减员" in p["reason"]
 
 
 class TestFilterZero:

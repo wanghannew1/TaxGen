@@ -1675,7 +1675,9 @@
             const catBadge = {
                 'a1_income_zero': '<span class="badge bg-info text-dark">收入为0</span>',
                 'a2_unpaid': '<span class="badge bg-warning text-dark">做了未发</span>',
-                'b_roster': '<span class="badge bg-primary">名单在册</span>'
+                'b_roster': '<span class="badge bg-primary">名单在册</span>',
+                'b_outside': '<span class="badge bg-secondary">名单在册·不在系统</span>',
+                'b_left': '<span class="badge bg-danger">名单在册·已离职</span>'
             };
             data.units.forEach((unit, ui) => {
                 const cfgBadge = unit.config === 'zero_salary_no_add'
