@@ -201,9 +201,64 @@ def api_zero_suggestions():
         if any(not c.get("seq") for c in combos):
             return jsonify({"error": "组合缺少批次号"}), 400
         conn = get_connection()
-        return jsonify(build_zero_salary_suggestions(conn, pay_month, combos))
+        from config_db import get_tax_roster
+        return jsonify(build_zero_salary_suggestions(conn, pay_month, combos,
+                                                     roster=get_tax_roster()))
     except Exception as e:
         return _log_api_error(e)
+
+@app.route("/api/tax-roster/import", methods=["POST"])
+def api_tax_roster_import():
+    """导入个税端人员信息列表 (境内/境外 .xls), 覆盖式写入 SQLite tax_roster。
+
+    源头文件为个税端全量快照, 按来源(source)整体覆盖, 用于零申报确认的
+    "个税端在职无工资"候选 (B1 新签合同未做工资 / B2 在册无痕迹)。
+    """
+    try:
+        from templates_gen.tax_export_parser import parse_tax_export
+        from config_db import upsert_tax_roster
+        file = request.files.get("file")
+        if not file:
+            return jsonify({"error": "请上传个税端人员信息列表文件"}), 400
+        source = (request.form.get("source") or "").strip() or "境内"
+        if source not in ("境内", "境外"):
+            return jsonify({"error": "source 仅支持 境内/境外"}), 400
+        ext = os.path.splitext(file.filename or "")[1].lower()
+        if ext != ".xls":
+            return jsonify({"error": "仅支持 .xls 格式的个税端导出文件"}), 400
+        tmp_path = os.path.join(OUTPUT_DIR, "_tax_roster_tmp" + ext)
+        file.save(tmp_path)
+        try:
+            parsed = parse_tax_export(tmp_path)
+        except Exception as e:
+            return jsonify({"error": f"解析个税端导出文件失败: {e}"}), 400
+        finally:
+            if os.path.exists(tmp_path):
+                os.remove(tmp_path)
+        if not parsed:
+            return jsonify({"error": "导出文件中未解析到有效人员记录"}), 400
+        persons = [{"cert_no": p.get("证件号码", ""),
+                    "name": p.get("姓名", ""),
+                    "emp_no": p.get("工号", ""),
+                    "cert_type": p.get("证件类型", "") or "居民身份证",
+                    "hire_date": p.get("任职受雇从业日期", ""),
+                    "leave_date": p.get("离职日期", ""),
+                    "nationality": p.get("国籍", "")} for p in parsed]
+        n = upsert_tax_roster(persons, source)
+        return jsonify({"ok": True, "count": n, "source": source})
+    except Exception as e:
+        return _log_api_error(e)
+
+
+@app.route("/api/tax-roster/status")
+def api_tax_roster_status():
+    """个税端名单导入状态: 是否已导入/总人数/分来源人数/最近导入时间。"""
+    try:
+        from config_db import get_tax_roster_status
+        return jsonify(get_tax_roster_status())
+    except Exception as e:
+        return _log_api_error(e)
+
 
 @app.route("/api/merge-suggestions/export", methods=["POST"])
 def api_merge_suggestions_export():
@@ -407,9 +462,11 @@ def api_generate():
             # 用户已通过零申报确认面板明确选择: 以面板选择取代配置自动排除
             # (包含"工资为0不申报"配置单元的可反转恢复); excl_codes 恒排除。
             from config_db import upsert_zero_overrides as _persist_zero_choices
-            records = filter_zero_records(records, zero_choices, excl_codes)
-            tc93_all = filter_zero_dicts(tc93_all, zero_choices, excl_codes)
-            abnormal = filter_zero_dicts(abnormal, zero_choices, excl_codes)
+            from queries import get_unpaid_salary_persons as _get_unpaid
+            _unpaid_certs = _get_unpaid(conn, sorted(salary_months if confirmed_combos else {month}))
+            records = filter_zero_records(records, zero_choices, excl_codes, unpaid_certs=_unpaid_certs)
+            tc93_all = filter_zero_dicts(tc93_all, zero_choices, excl_codes, unpaid_certs=_unpaid_certs)
+            abnormal = filter_zero_dicts(abnormal, zero_choices, excl_codes, unpaid_certs=_unpaid_certs)
             if data.get("persist_zero_choices") and zero_choices:
                 _persist_zero_choices({c: m for c, m in zero_choices.items()
                                        if m in ("declare", "skip")})
@@ -446,6 +503,23 @@ def api_generate():
             if data.get("persist_merge_choices") and merge_choices:
                 upsert_merge_overrides({c: m for c, m in merge_choices.items()
                                         if m in ("double", "single", "skip")})
+        # B 类名单在册无工资人员注入 (2026-09-11): 名单已导入且用户确认"生成"时,
+        # 将名单在册无 TC93 记录人员构造零申报记录追加到生成列表。
+        # 注入必须在合并之后且不进 raw_records (合并须在注入前完成, B 类人员无 TC93
+        # 原始记录不参与合并; raw_records 保持纯净, 避免污染劳务报酬/合并告警/主单元统计)。
+        if zero_choices:
+            from config_db import get_tax_roster
+            from tax_zero import build_roster_zero_records
+            _roster = get_tax_roster()
+            if _roster:
+                _checked = {str(r.身份证 or r.职工号 or "").strip().upper()
+                            for r in records}
+                _injected = build_roster_zero_records(
+                    conn, month, _roster, zero_choices, excl_codes,
+                    checked_certs=_checked,
+                    salary_months=sorted(salary_months if confirmed_combos else {month}))
+                if _injected:
+                    records = records + _injected
         warnings = []
         if confirmed_combos and merge_by_person:
             persons = list({r.职工号 for r in raw_records})

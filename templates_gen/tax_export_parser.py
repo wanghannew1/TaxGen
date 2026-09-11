@@ -72,16 +72,27 @@ def parse_tax_export(filepath: str) -> List[Dict[str, str]]:
 
     读取首个 Sheet 全部行 (跳过第 0 行表头), 提取增减员比对所需字段。
     姓名与证件号码均为空的行跳过。返回字段字典列表。
+
+    自动识别境内(52列)/境外(54列)两种导出格式:
+    - 境内: 任职受雇从业类型 Col35, 国籍 Col38, 纳税人识别号无
+    - 境外: 任职受雇从业类型 Col30, 国籍 Col34, 纳税人识别号 Col35
+    核心字段 (工号/姓名/证件类型/证件号码/离职日期) 两种格式列号一致。
     """
     wb = xlrd.open_workbook(filepath)
     sh = wb.sheet_by_index(0)
+    is_overseas = sh.ncols >= 50 and "纳税人识别号" in str(sh.cell_value(0, 35))
+    col_任职类型 = 35 if not is_overseas else 30
+    col_国籍 = 38 if not is_overseas else 34
+    col_纳税人识别号 = None if not is_overseas else 35
+    col_备注 = COL_备注 if not is_overseas else 49
+    col_更新时间 = COL_更新时间 if not is_overseas else 53
     persons = []
     for r in range(1, sh.nrows):
         name = _normalize_cell(sh.cell_value(r, COL_姓名), wb)
         cert = _normalize_cell(sh.cell_value(r, COL_证件号码), wb)
         if not name and not cert:
             continue
-        persons.append({
+        p = {
             "工号": _normalize_cell(sh.cell_value(r, COL_工号), wb),
             "姓名": name,
             "证件类型": _normalize_cell(sh.cell_value(r, COL_证件类型), wb),
@@ -94,12 +105,15 @@ def parse_tax_export(filepath: str) -> List[Dict[str, str]]:
             "任职受雇从业日期": _normalize_cell(sh.cell_value(r, COL_任职受雇从业日期), wb),
             "离职日期": _normalize_cell(sh.cell_value(r, COL_离职日期), wb),
             "是否扣除减除费用": _normalize_cell(sh.cell_value(r, COL_是否扣除减除费用), wb),
-            "任职受雇从业类型": _normalize_cell(sh.cell_value(r, COL_任职受雇从业类型), wb),
+            "任职受雇从业类型": _normalize_cell(sh.cell_value(r, col_任职类型), wb),
             "其他情况说明": _normalize_cell(sh.cell_value(r, COL_其他情况说明), wb),
-            "国籍": _normalize_cell(sh.cell_value(r, COL_国籍), wb),
-            "备注": _normalize_cell(sh.cell_value(r, COL_备注), wb),
-            "更新时间": _normalize_cell(sh.cell_value(r, COL_更新时间), wb),
-        })
+            "国籍": _normalize_cell(sh.cell_value(r, col_国籍), wb),
+            "备注": _normalize_cell(sh.cell_value(r, col_备注), wb),
+            "更新时间": _normalize_cell(sh.cell_value(r, col_更新时间), wb),
+        }
+        if col_纳税人识别号 is not None:
+            p["纳税人识别号"] = _normalize_cell(sh.cell_value(r, col_纳税人识别号), wb)
+        persons.append(p)
     return persons
 
 

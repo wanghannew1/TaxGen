@@ -100,6 +100,23 @@ def init_db() -> None:
             updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         )
     """)
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS tax_roster (
+            cert_no TEXT PRIMARY KEY,
+            name TEXT DEFAULT '',
+            emp_no TEXT DEFAULT '',
+            cert_type TEXT DEFAULT '居民身份证',
+            hire_date TEXT DEFAULT '',
+            leave_date TEXT DEFAULT '',
+            nationality TEXT DEFAULT '',
+            source TEXT DEFAULT '境内',
+            imported_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+    """)
+    try:
+        conn.execute("ALTER TABLE tax_roster ADD COLUMN hire_date TEXT DEFAULT ''")
+    except Exception:
+        pass
     conn.commit()
     conn.close()
 
@@ -365,3 +382,74 @@ def set_merge_group_tags(unit_code: int, tags: list) -> None:
         (unit_code, json.dumps(clean, ensure_ascii=False)))
     conn.commit()
     conn.close()
+
+
+# ---------------------------------------------------------------------------
+# tax_roster: 个税端人员信息名单 (2026-09-11 零申报候选扩源)
+# 来源: 个税端导出的 境内人员信息列表.xls / 境外人员信息列表.xls。
+# 用于零申报确认的"个税端在职无工资"候选 (B1 新签合同未做工资 / B2 在册无痕迹)
+# 与增减员比对的在职名单。cert_no (证件号码, 大写) 为主键, 按来源覆盖式导入。
+# ---------------------------------------------------------------------------
+
+def upsert_tax_roster(persons: list, source: str = "境内") -> int:
+    """整体覆盖式导入某来源的个税端名单。
+
+    先删除该 source 的全部记录再批量插入 (个税端导出是全量快照, 覆盖式更新避免残留)。
+    persons: List[dict], 含 cert_no/name/emp_no/cert_type/leave_date/nationality。
+    返回写入条数。
+    """
+    rows = []
+    for p in persons or []:
+        cert = str(p.get("cert_no") or "").strip().upper()
+        if not cert:
+            continue
+        rows.append((cert, str(p.get("name") or "").strip(),
+                     str(p.get("emp_no") or "").strip(),
+                     str(p.get("cert_type") or "") or "居民身份证",
+                     str(p.get("hire_date") or "").strip(),
+                     str(p.get("leave_date") or "").strip(),
+                     str(p.get("nationality") or "").strip(),
+                     source))
+    if not rows:
+        return 0
+    conn = get_db()
+    conn.execute("DELETE FROM tax_roster WHERE source = ?", (source,))
+    conn.executemany(
+        "INSERT INTO tax_roster (cert_no, name, emp_no, cert_type, hire_date, leave_date, nationality, source, imported_at) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)",
+        rows)
+    conn.commit()
+    conn.close()
+    return len(rows)
+
+
+def get_tax_roster() -> list:
+    """查询全部个税端名单记录, 返回 dict 列表 (cert_no 大写, 含来源)。"""
+    conn = get_db()
+    rows = conn.execute(
+        "SELECT cert_no, name, emp_no, cert_type, hire_date, leave_date, nationality, source, imported_at "
+        "FROM tax_roster ORDER BY source, cert_no").fetchall()
+    conn.close()
+    return [{"cert_no": str(r["cert_no"]),
+             "name": str(r["name"] or ""),
+             "emp_no": str(r["emp_no"] or ""),
+             "cert_type": str(r["cert_type"] or ""),
+             "hire_date": str(r["hire_date"] or ""),
+             "leave_date": str(r["leave_date"] or ""),
+             "nationality": str(r["nationality"] or ""),
+             "source": str(r["source"] or ""),
+             "imported_at": str(r["imported_at"] or "")} for r in rows]
+
+
+def get_tax_roster_status() -> dict:
+    """名单导入状态: 是否已导入、总人数、分来源人数、最近导入时间。"""
+    conn = get_db()
+    total = conn.execute("SELECT COUNT(*) FROM tax_roster").fetchone()[0]
+    by_source = {str(r["source"]): int(r["n"])
+                 for r in conn.execute(
+                     "SELECT source, COUNT(*) AS n FROM tax_roster GROUP BY source").fetchall()}
+    latest = conn.execute(
+        "SELECT MAX(imported_at) FROM tax_roster").fetchone()[0]
+    conn.close()
+    return {"imported": total > 0, "total": int(total), "by_source": by_source,
+            "latest_import": str(latest or "")}
