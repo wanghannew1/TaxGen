@@ -54,15 +54,18 @@ class TestBuildSuggestions:
     @pytest.fixture(autouse=True)
     def patch_sources(self, monkeypatch):
         self.records = []
-        self.unpaid_certs = set()
+        self.unpaid_pairs = set()
+        self.paid_units = set()
 
         def fake_salary(conn, combos):
             months = {int(c.get("salary_month", 0) or 0) for c in combos}
             return [r for r in self.records if r.工资所属年月 in months]
 
         monkeypatch.setattr(tax_zero, "get_salary_records_by_combos", fake_salary)
-        monkeypatch.setattr(tax_zero, "get_unpaid_salary_persons",
-                            lambda conn, months: self.unpaid_certs)
+        monkeypatch.setattr(tax_zero, "get_unpaid_salary_cert_months",
+                            lambda conn, months: self.unpaid_pairs)
+        monkeypatch.setattr(tax_zero, "get_paid_units_in_month",
+                            lambda conn, pay_month: self.paid_units)
         monkeypatch.setattr(tax_zero, "get_zero_salary_unit_codes",
                             lambda: [101])       # 101 为配置"工资为0不申报"单元
         monkeypatch.setattr(tax_zero, "get_excluded_unit_codes",
@@ -161,13 +164,36 @@ class TestBuildSuggestions:
     def test_a2_unpaid_always_candidate_suggested_skip(self):
         # A2 做了工资没发: 本期收入>0 也进候选, 默认 skip (无纳税义务)
         self.records = [_rec(cert="C1", unit=100, income=Decimal("5000"))]
-        self.unpaid_certs = {"C1"}
+        self.unpaid_pairs = {("C1", 202606)}
         res = tax_zero.build_zero_salary_suggestions(None, 202606, self.COMBOS)
         p = res["units"][0]["persons"][0]
         assert p["category"] == tax_zero.CAT_A2_UNPAID
         assert p["suggested"] == "skip"
         assert p["default_chosen"] == "skip"
         assert "未发放" in p["reason"]
+
+    def test_a2_granular_by_salary_month(self):
+        # A2 精确到 (cert, 所属月): 同人 5 月已发(A1) 6 月未发(A2), 未发月单独标记
+        self.records = [
+            _rec(cert="C1", unit=100, sm=202605, income=Decimal("0")),
+            _rec(cert="C1", unit=100, sm=202606, income=Decimal("0")),
+        ]
+        self.unpaid_pairs = {("C1", 202606)}   # 仅 6 月未发
+        combos = [{"unit": 100, "salary_month": 202605, "seq": "1"},
+                  {"unit": 100, "salary_month": 202606, "seq": "1"}]
+        res = tax_zero.build_zero_salary_suggestions(None, 202606, combos)
+        assert res["units"] and res["units"][0]["count"] == 2
+        p = next(x for x in res["units"][0]["persons"] if x["cert_no"] == "C1")
+        assert p["category"] == tax_zero.CAT_A2_UNPAID
+        assert p["salary_months"] == [202605, 202606]
+
+    def test_a2_paid_unit_excluded_from_candidates(self):
+        # 发放月已发单元 (2026-09-11 规则): 单元发放月有发放 → 做了没发不进零申报候选
+        self.records = [_rec(cert="C1", unit=100, income=Decimal("5000"))]
+        self.unpaid_pairs = {("C1", 202606)}
+        self.paid_units = {100}     # 单元 100 在发放月有已发记录
+        res = tax_zero.build_zero_salary_suggestions(None, 202606, self.COMBOS)
+        assert res["units"] == []
 
     def test_roster_b1_new_hire_declare(self, monkeypatch):
         # B1 名单在册近12个月新入职无工资 → 默认 declare 保留在册
@@ -289,3 +315,60 @@ class TestFilterZero:
         records = [_dict_rec(cert="C1", unit=100, income="5000", owe="5000")]
         kept = tax_zero.filter_zero_dicts(records, {"C1": "skip"}, set())
         assert kept == []
+
+    def test_unpaid_pairs_drop_only_unpaid_month(self):
+        # A2 精确粒度: 同人 6 月已发(正常申报) 7 月未发(剔除), 互不牵连
+        records = [
+            _rec(cert="C1", unit=100, sm=202606, income=Decimal("5000")),
+            _rec(cert="C1", unit=100, sm=202607, income=Decimal("8000")),
+        ]
+        kept = tax_zero.filter_zero_records(
+            records, {}, set(),
+            unpaid_pairs={("C1", 202607)})
+        assert [r.工资所属年月 for r in kept] == [202606]
+
+    def test_unpaid_pairs_declare_zeroes_only_unpaid_month(self):
+        # declare 的未发人员: 未发月保留全零, 已发月仍按原额正常生成
+        records = [
+            _rec(cert="C1", unit=100, sm=202606, income=Decimal("5000")),
+            _rec(cert="C1", unit=100, sm=202607, income=Decimal("8000")),
+        ]
+        kept = tax_zero.filter_zero_records(
+            records, {"C1": "declare"}, set(),
+            unpaid_pairs={("C1", 202607)})
+        by_month = {r.工资所属年月: r for r in kept}
+        assert by_month[202606].工资总额 == Decimal("5000")
+        assert by_month[202607].工资总额 == Decimal("0")
+
+    def test_dict_unpaid_pairs_granular(self):
+        records = [
+            _dict_rec(cert="C1", unit=100, income="5000"),
+            dict(_dict_rec(cert="C1", unit=100, income="8000"), ATC931=202607),
+        ]
+        kept = tax_zero.filter_zero_dicts(
+            records, {}, set(),
+            unpaid_pairs={("C1", 202607)})
+        assert [r["ATC931"] for r in kept] == [202606]
+
+    def test_paid_unit_unpaid_always_dropped_even_declare(self):
+        # 发放月已发单元: 做了没发的记录无论 declare 与否一律剔除 (不零申报不按数额申报)
+        records = [
+            _rec(cert="C1", unit=100, income=Decimal("8000")),   # 未发
+            _rec(cert="C2", unit=200, income=Decimal("8000")),   # 未发, 单元无发放 → declare 保留
+        ]
+        kept = tax_zero.filter_zero_records(
+            records, {"C1": "declare", "C2": "declare"}, set(),
+            unpaid_pairs={("C1", 202606), ("C2", 202606)},
+            paid_units={100})
+        assert [r.身份证 for r in kept] == ["C2"]
+
+    def test_dict_paid_unit_unpaid_dropped(self):
+        records = [
+            _dict_rec(cert="C1", unit=100, income="8000"),
+            _dict_rec(cert="C2", unit=200, income="8000"),
+        ]
+        kept = tax_zero.filter_zero_dicts(
+            records, {"C1": "declare", "C2": "declare"}, set(),
+            unpaid_pairs={("C1", 202606), ("C2", 202606)},
+            paid_units={100})
+        assert [r["身份证"] for r in kept] == ["C2"]

@@ -44,7 +44,7 @@
 from dataclasses import dataclass
 from datetime import datetime
 from decimal import Decimal
-from typing import Dict, List, Set
+from typing import Dict, List, Set, Tuple
 
 from models import MonthOption, PersonnelInfo, SalaryRecord
 
@@ -888,6 +888,69 @@ def get_unpaid_salary_persons(conn, salary_months) -> Set[str]:
                 if cert:
                     certs.add(cert)
     return certs
+
+
+def get_unpaid_salary_cert_months(conn, salary_months) -> Set[Tuple[str, int]]:
+    """查询"已做工资单但未发薪"人员的 (证件号, 所属年月) 精确对集合。
+
+    与 get_unpaid_salary_persons 同口径 (TC93 有记录, 但 TC8M 无对应
+    ATC8M3=2 已发记录), 但精确到 (人, 所属月): 同一人 6 月已发、7 月未发时,
+    仅 (cert, 202607) 在集合中, 202606 已发记录不受牵连。
+    返回统一大写的证件号 + 所属年月 int 对。用于零申报候选与生成过滤。
+    """
+    if not salary_months:
+        return set()
+    pairs = set()
+    sql = """
+        SELECT DISTINCT ac01.AAC002, t93.ATC931
+        FROM TC93 t93
+        LEFT JOIN TC8M m ON m.ATB930 = t93.ATB930
+                        AND m.ATC931 = t93.ATC931
+                        AND m.ATC937 = t93.ATC937
+                        AND m.ATC8M3 = 2
+        LEFT JOIN AC01 ac01 ON t93.AAC001 = ac01.AAC001
+        WHERE t93.ATC931 IN ({placeholders})
+          AND t93.ATC93G = '1'
+          AND m.ATB930 IS NULL
+          AND ac01.AAC002 IS NOT NULL
+    """
+    months = sorted(set(salary_months))
+    with conn.cursor() as cursor:
+        for start in range(0, len(months), _IN_BATCH_SIZE):
+            chunk = months[start:start + _IN_BATCH_SIZE]
+            placeholders = ", ".join(f":m{i}" for i in range(len(chunk)))
+            binds = {f"m{i}": m for i, m in enumerate(chunk)}
+            cursor.execute(sql.format(placeholders=placeholders), binds)
+            for row in cursor.fetchall():
+                cert = str(row[0] or "").strip().upper()
+                month = int(row[1] or 0)
+                if cert and month:
+                    pairs.add((cert, month))
+    return pairs
+
+
+def get_paid_units_in_month(conn, pay_month) -> Set[int]:
+    """查询发放月(pay_month, TC8M.ATC8G7)有已发记录(ATC8M3=2)的结算单元集合。
+
+    用途 (2026-09-11 用户确认规则): 结算单元在发放当月只要有任一发放
+    (不管发的是 6 月还是 5 月所属的工资), 该单元"做了没发"的其他所属月
+    人员既不需要零申报也不需要按工资表数额申报, 不进零申报候选。
+    返回 int 结算单元代码集合。
+    """
+    if not pay_month:
+        return set()
+    units = set()
+    sql = """
+        SELECT DISTINCT ATB930 FROM TC8M
+        WHERE ATC8G7 = :pay_month AND ATC8M3 = 2
+    """
+    with conn.cursor() as cursor:
+        cursor.execute(sql, {"pay_month": int(pay_month)})
+        for row in cursor.fetchall():
+            u = int(row[0] or 0)
+            if u:
+                units.add(u)
+    return units
 
 
 def get_deferred_pay_persons(conn, pay_months, window_days: int = 10) -> Set[str]:

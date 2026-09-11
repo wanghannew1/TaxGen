@@ -21,7 +21,8 @@
 from decimal import Decimal
 from dataclasses import replace
 
-from queries import get_salary_records_by_combos, get_unpaid_salary_persons
+from queries import (get_salary_records_by_combos, get_unpaid_salary_cert_months,
+                     get_paid_units_in_month)
 from config_db import get_zero_overrides, get_zero_salary_unit_codes, get_excluded_unit_codes
 from templates_gen.formulas import calc_本期收入
 from models import SalaryRecord
@@ -119,7 +120,11 @@ def build_zero_salary_suggestions(conn, pay_month, combos, roster=None):
     zero_codes = set(get_zero_salary_unit_codes())
     excl_codes = set(get_excluded_unit_codes())
     overrides = get_zero_overrides()
-    unpaid_certs = get_unpaid_salary_persons(conn, salary_months)
+    # A2 未发判定精确到 (cert, 所属月): 同人 6 月已发、7 月未发时仅 7 月记录被标记
+    unpaid_pairs = get_unpaid_salary_cert_months(conn, salary_months)
+    # 发放月已发单元 (2026-09-11 用户确认规则): 单元在发放当月有任一发放 →
+    # 该单元"做了没发"人员既不需要零申报也不按数额申报, 不进候选
+    paid_units = get_paid_units_in_month(conn, pay_month)
 
     units = {}
     checked_certs = set()
@@ -141,7 +146,10 @@ def build_zero_salary_suggestions(conn, pay_month, combos, roster=None):
             continue
         checked_certs.add(cert)
         income = calc_本期收入(rec)
-        if cert in unpaid_certs:
+        if (cert, rec.工资所属年月) in unpaid_pairs:
+            # 发放月已发单元: 该单元"做了没发"人员不零申报也不按数额申报
+            if _unit_of(rec) in paid_units:
+                continue
             category = CAT_A2_UNPAID
         elif income == 0:
             category = CAT_A1_INCOME_ZERO
@@ -300,15 +308,19 @@ def build_roster_zero_records(conn, pay_month, roster, zero_choices, excl_codes,
     return rows
 
 
-def filter_zero_records(records, zero_choices, excl_codes, unpaid_certs=None):
+def filter_zero_records(records, zero_choices, excl_codes,
+                        unpaid_pairs=None, paid_units=None):
     """按用户零申报选择过滤记录: 本期收入=0 且用户选择 skip 的记录剔除。
 
     Records with 本期收入 != 0 are always kept; exclude_all units always dropped.
     zero_choices: {cert_no: 'declare'|'skip'} (面板确认后的完整选择)。
     未在 zero_choices 中的本期收入=0 记录: 保留 (用户未表态即生成零申报)。
 
-    unpaid_certs (可选, A2 未发集合): 未发人员一律跳过 (无纳税义务, 不进生成),
-    无论本期收入是否为 0; 但零申报面板确认 declare 的未发人员保留为全零记录。
+    unpaid_pairs (可选, A2 未发集合 {(cert, 所属月)}): 未发记录一律跳过
+    (无纳税义务, 不进生成), 无论本期收入是否为 0; 但零申报面板确认 declare
+    的未发人员保留为全零记录。同人 6 月已发、7 月未发时仅 7 月记录被跳过。
+    paid_units (可选, 发放月已发单元集合): 该单元"做了没发"记录一律剔除,
+    默认跳过逻辑也无条件剔除 (2026-09-11 用户确认: 不零申报也不按数额申报)。
     """
     skip_certs = {c for c, m in zero_choices.items() if m == "skip"}
     declare_certs = {c for c, m in zero_choices.items() if m == "declare"}
@@ -317,7 +329,10 @@ def filter_zero_records(records, zero_choices, excl_codes, unpaid_certs=None):
         if _unit_of(rec) in excl_codes:
             continue
         cert = _cert_of(rec)
-        if unpaid_certs and cert in unpaid_certs:
+        if unpaid_pairs and (cert, rec.工资所属年月) in unpaid_pairs:
+            # 发放月已发单元的未发记录: 无论 declare 与否一律剔除
+            if paid_units and _unit_of(rec) in paid_units:
+                continue
             # A2 未发: 默认跳过 (无纳税义务); 仅当用户显式确认 declare 时保留为全零记录
             if cert in declare_certs:
                 kept.append(_zero_salary_record(rec))
@@ -328,7 +343,8 @@ def filter_zero_records(records, zero_choices, excl_codes, unpaid_certs=None):
     return kept
 
 
-def filter_zero_dicts(records, zero_choices, excl_codes, unpaid_certs=None):
+def filter_zero_dicts(records, zero_choices, excl_codes,
+                      unpaid_pairs=None, paid_units=None):
     """tc93_all/abnormal 字典记录版本的 filter_zero_records (A2 未发同理剔除)。"""
     skip_certs = {c for c, m in zero_choices.items() if m == "skip"}
     declare_certs = {c for c, m in zero_choices.items() if m == "declare"}
@@ -337,7 +353,10 @@ def filter_zero_dicts(records, zero_choices, excl_codes, unpaid_certs=None):
         if _unit_of_dict(rec) in excl_codes:
             continue
         cert = _cert_of_dict(rec)
-        if unpaid_certs and cert in unpaid_certs:
+        month = int(rec.get("ATC931") or 0)
+        if unpaid_pairs and (cert, month) in unpaid_pairs:
+            if paid_units and _unit_of_dict(rec) in paid_units:
+                continue
             if cert in declare_certs:
                 retained = dict(rec)
                 for k in _MONEY_DICT_KEYS:

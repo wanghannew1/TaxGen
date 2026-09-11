@@ -465,11 +465,16 @@ def api_generate():
             # 用户已通过零申报确认面板明确选择: 以面板选择取代配置自动排除
             # (包含"工资为0不申报"配置单元的可反转恢复); excl_codes 恒排除。
             from config_db import upsert_zero_overrides as _persist_zero_choices
-            from queries import get_unpaid_salary_persons as _get_unpaid
-            _unpaid_certs = _get_unpaid(conn, sorted(salary_months if confirmed_combos else {month}))
-            records = filter_zero_records(records, zero_choices, excl_codes, unpaid_certs=_unpaid_certs)
-            tc93_all = filter_zero_dicts(tc93_all, zero_choices, excl_codes, unpaid_certs=_unpaid_certs)
-            abnormal = filter_zero_dicts(abnormal, zero_choices, excl_codes, unpaid_certs=_unpaid_certs)
+            from queries import get_unpaid_salary_cert_months as _get_unpaid, \
+                get_paid_units_in_month as _get_paid_units
+            _unpaid_pairs = _get_unpaid(conn, sorted(salary_months if confirmed_combos else {month}))
+            _paid_units = _get_paid_units(conn, month)
+            records = filter_zero_records(records, zero_choices, excl_codes,
+                                          unpaid_pairs=_unpaid_pairs, paid_units=_paid_units)
+            tc93_all = filter_zero_dicts(tc93_all, zero_choices, excl_codes,
+                                         unpaid_pairs=_unpaid_pairs, paid_units=_paid_units)
+            abnormal = filter_zero_dicts(abnormal, zero_choices, excl_codes,
+                                         unpaid_pairs=_unpaid_pairs, paid_units=_paid_units)
             if data.get("persist_zero_choices") and zero_choices:
                 _persist_zero_choices({c: m for c, m in zero_choices.items()
                                        if m in ("declare", "skip")})
