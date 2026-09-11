@@ -76,6 +76,9 @@ class TestBuildSuggestions:
                             lambda conn, certs: set(certs))
         monkeypatch.setattr("queries.get_tc90_salary_end_dates",
                             lambda conn, certs: {})
+        # 在册信息 (2026-09-11): 默认无 TC93 记录
+        monkeypatch.setattr("queries.get_person_system_info",
+                            lambda conn, certs: {})
 
     def test_zero_income_record_is_candidate(self):
         self.records = [_rec(cert="C1", unit=100, income=Decimal("0"))]
@@ -323,6 +326,64 @@ class TestBuildSuggestions:
         assert p["category"] == tax_zero.CAT_B_ROSTER
         assert p["suggested"] == "declare"
         assert "未减员" in p["reason"]
+
+    def test_roster_sys_info_full_display(self, monkeypatch):
+        # 在系统人员展示在册信息: 结算单元/最后发薪工资单/工资结束年月/经办人
+        from datetime import datetime
+        self.records = []
+        roster = [_roster(cert="C1", hire="2020-01-01")]
+        monkeypatch.setattr("queries.get_person_units_contract",
+            lambda conn, certs: {"C1": {"unit_code": 100, "unit_name": "单元100",
+                                        "contract_handlers": ["合同经办人"]}})
+        monkeypatch.setattr("queries.get_tc90_salary_end_dates",
+            lambda conn, certs: {"C1": datetime(2026, 6, 30)})
+        monkeypatch.setattr("queries.get_person_system_info",
+            lambda conn, certs: {"C1": {"unit_code": 100, "unit_name": "单元100",
+                                        "last_pay_ym": 202509,
+                                        "last_slip_no": "4141355",
+                                        "last_batch": "1",
+                                        "make_handler": "张朦",
+                                        "pay_handler": "白云"}})
+        res = tax_zero.build_zero_salary_suggestions(None, 202606, self.COMBOS,
+                                                     roster=roster)
+        p = res["units"][0]["persons"][0]
+        assert p["sys_info"] == "结算单元:单元100(100)；最后发薪:202509单4141355批1；工资结束:202606；经办人:白云"
+
+    def test_roster_sys_info_handler_priority(self, monkeypatch):
+        # 经办人优先级: 发薪经办人 > 做工资经办人 > 合同经办人 (2026-09-11 用户确认)
+        from datetime import datetime
+        self.records = []
+        roster = [_roster(cert="C1", hire="2020-01-01")]
+        monkeypatch.setattr("queries.get_person_units_contract",
+            lambda conn, certs: {"C1": {"unit_code": 100, "unit_name": "单元100",
+                                        "contract_handlers": ["合同经办人"]}})
+        monkeypatch.setattr("queries.get_tc90_salary_end_dates",
+            lambda conn, certs: {"C1": datetime(2026, 6, 30)})
+        # 只有做工资经办人 + 合同经办人 → 回落做工资经办人
+        monkeypatch.setattr("queries.get_person_system_info",
+            lambda conn, certs: {"C1": {"last_pay_ym": 202509, "slip_no": "4141355",
+                                        "batch": "1", "make_handler": "张朦",
+                                        "pay_handler": ""}})
+        res = tax_zero.build_zero_salary_suggestions(None, 202606, self.COMBOS,
+                                                     roster=roster)
+        assert "经办人:张朦" in res["units"][0]["persons"][0]["sys_info"]
+        # 只有合同经办人 → 回落合同经办人
+        monkeypatch.setattr("queries.get_person_system_info",
+            lambda conn, certs: {"C1": {"last_pay_ym": 202509}})
+        res = tax_zero.build_zero_salary_suggestions(None, 202606, self.COMBOS,
+                                                     roster=roster)
+        assert "经办人:合同经办人" in res["units"][0]["persons"][0]["sys_info"]
+
+    def test_roster_sys_info_no_records(self, monkeypatch):
+        # 在系统但无合同无工资记录 (如 孙文强/杨冰): sys_info 显示"系统内无合同/工资记录"
+        self.records = []
+        roster = [_roster(cert="C1", hire="2020-01-01")]
+        monkeypatch.setattr("queries.get_person_units_contract",
+            lambda conn, certs: {"C1": {"unit_code": 0, "unit_name": ""}})
+        res = tax_zero.build_zero_salary_suggestions(None, 202606, self.COMBOS,
+                                                     roster=roster)
+        p = res["units"][0]["persons"][0]
+        assert p["sys_info"] == "系统内无合同/工资记录"
 
 
 class TestFilterZero:

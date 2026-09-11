@@ -197,7 +197,7 @@ def build_zero_salary_suggestions(conn, pay_month, combos, roster=None):
             b_certs[cert] = p
         if b_certs:
             from queries import (get_person_units_contract, get_certs_in_system,
-                                 get_tc90_salary_end_dates)
+                                 get_tc90_salary_end_dates, get_person_system_info)
             contract_map = get_person_units_contract(conn, list(b_certs))
             # B 类三分类 (2026-09-11 用户确认):
             # 不在系统 (AC01 无此人, 人工管理) → 默认不生成, 面板体现让用户确认;
@@ -205,6 +205,8 @@ def build_zero_salary_suggestions(conn, pay_month, combos, roster=None):
             # 在系统且在册在职 → 维持 B1/B2 (默认 declare 保留在册)
             in_system = get_certs_in_system(conn, list(b_certs))
             salary_ends = get_tc90_salary_end_dates(conn, list(b_certs))
+            # 在系统人员展示: 结算单元/最后发薪工资单/工资结束年月/经办人 (2026-09-11 用户需求)
+            system_info = get_person_system_info(conn, list(in_system)) if in_system else {}
             y, m = divmod(max(salary_months), 100)
             hire_start = f"{y - 1:04d}-{m:02d}-01"  # 近12个月入职 → B1 新签合同未做工资
             for cert, p in b_certs.items():
@@ -237,6 +239,23 @@ def build_zero_salary_suggestions(conn, pay_month, combos, roster=None):
                 else:
                     p_entry["category"] = CAT_B_ROSTER
                     p_entry["_is_new"] = is_new
+                if cert in in_system:
+                    si = system_info.get(cert, {})
+                    u_code = unit or int(si.get("unit_code") or 0)
+                    u_name = unit_name or str(si.get("unit_name") or "")
+                    end_ym = salary_ends[cert].year * 100 + salary_ends[cert].month \
+                        if cert in salary_ends else 0
+                    handler = (str(si.get("pay_handler") or "")
+                               or str(si.get("make_handler") or "")
+                               or str((info.get("contract_handlers") or [""])[0] or ""))
+                    p_entry["_sys_info"] = {
+                        "unit_code": u_code, "unit_name": u_name,
+                        "last_pay_ym": int(si.get("last_pay_ym") or 0),
+                        "slip_no": str(si.get("last_slip_no") or ""),
+                        "batch": str(si.get("last_batch") or ""),
+                        "end_ym": end_ym,
+                        "handler": handler,
+                    }
 
     if not units:
         return {"pay_month": pay_month, "units": []}
@@ -274,6 +293,22 @@ def build_zero_salary_suggestions(conn, pay_month, combos, roster=None):
                 persisted = False
             p["default_chosen"] = default_chosen
             p["persisted"] = persisted
+            si = p.pop("_sys_info", None)
+            if si is not None:
+                parts = []
+                if si["unit_name"]:
+                    unit_label = (f"{si['unit_name']}"
+                                  + (f"({si['unit_code']})" if si["unit_code"] else ""))
+                    parts.append(f"结算单元:{unit_label}")
+                if si["last_pay_ym"]:
+                    slip = (f"单{si['slip_no']}" if si["slip_no"] else "")
+                    batch = (f"批{si['batch']}" if si["batch"] else "")
+                    parts.append(f"最后发薪:{si['last_pay_ym']}{slip}{batch}")
+                if si["end_ym"]:
+                    parts.append(f"工资结束:{si['end_ym']}")
+                if si["handler"]:
+                    parts.append(f"经办人:{si['handler']}")
+                p["sys_info"] = "；".join(parts) if parts else "系统内无合同/工资记录"
         u["income_total"] = round(u["income_total"], 2)
         u["persons"] = sorted(u["persons"].values(),
                               key=lambda x: (x["cert_no"],))

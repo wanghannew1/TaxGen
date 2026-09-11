@@ -1699,6 +1699,67 @@ def get_person_units_contract(conn, cert_numbers) -> Dict[str, dict]:
     return result
 
 
+def get_person_system_info(conn, cert_numbers) -> Dict[str, dict]:
+    """按证件号批量查询在系统人员的最后一次发薪信息 (零申报面板展示用)。
+
+    供零申报 B 类 (在系统) 人员展示"结算单元/最后发薪工资单/发薪经办人":
+    - unit_code/unit_name: 最后一次发薪工资单的结算单元 (TC93.ATB930/ATB931)
+    - last_pay_ym: 最后一次发薪工资所属年月 (TC93.ATC931)
+    - last_slip_no: 工资单流水号 (TC93.ATC930)
+    - last_batch: 发放次数 (TC93.ATC937)
+    - make_handler: 做工资经办人 (TC93.AAE019)
+    - pay_handler: 发薪经办人 (TC8M.AAE219 发放经办人, 经 (ATB930,ATC931,ATC937) 关联批次)
+    取发放年月 (AAE001 优先, 次 ATC932, 再 ATC931) 最近一条结算记录;
+    仅返回有 TC93 结算记录的人员, 无记录者不出现。
+    """
+    if not cert_numbers:
+        return {}
+    certs = sorted({str(c).strip().upper() for c in cert_numbers if str(c).strip()})
+    result: Dict[str, dict] = {}
+    sql = """
+        SELECT cert, unit_code, unit_name, last_pay_ym, slip_no, batch,
+               make_handler, pay_handler
+        FROM (
+            SELECT ac01.AAC002 AS cert,
+                   t93.ATB930 AS unit_code, t93.ATB931 AS unit_name,
+                   t93.ATC931 AS last_pay_ym, t93.ATC930 AS slip_no,
+                   t93.ATC937 AS batch, t93.AAE019 AS make_handler,
+                   (SELECT MAX(m.AAE219) FROM TC8M m
+                    WHERE m.ATB930 = t93.ATB930 AND m.ATC931 = t93.ATC931
+                      AND m.ATC937 = t93.ATC937) AS pay_handler,
+                   RANK() OVER (PARTITION BY ac01.AAC002
+                                ORDER BY COALESCE(t93.AAE001, t93.ATC932, t93.ATC931)
+                                         DESC NULLS LAST,
+                                         t93.ATC931 DESC NULLS LAST,
+                                         t93.BAZ002 DESC NULLS LAST) AS rk
+            FROM TC93 t93
+            LEFT JOIN AC01 ac01 ON t93.AAC001 = ac01.AAC001
+            WHERE t93.ATC93G = '1'
+              AND ac01.AAC002 IN ({placeholders})
+        ) WHERE rk = 1
+    """
+    with conn.cursor() as cursor:
+        for start in range(0, len(certs), _IN_BATCH_SIZE):
+            chunk = certs[start:start + _IN_BATCH_SIZE]
+            placeholders = ", ".join(f":c{i}" for i in range(len(chunk)))
+            binds = {f"c{i}": c for i, c in enumerate(chunk)}
+            cursor.execute(sql.format(placeholders=placeholders), binds)
+            for row in cursor.fetchall():
+                cert = str(row[0] or "").strip().upper()
+                if not cert:
+                    continue
+                result[cert] = {
+                    "unit_code": int(row[1] or 0),
+                    "unit_name": str(row[2] or ""),
+                    "last_pay_ym": int(row[3] or 0),
+                    "last_slip_no": str(row[4] or ""),
+                    "last_batch": str(row[5] or ""),
+                    "make_handler": str(row[6] or ""),
+                    "pay_handler": str(row[7] or ""),
+                }
+    return result
+
+
 def get_depts(conn, pay_month: int = 0) -> List[str]:
     """查询单位名称列表 (TC93.AAB004, 已结算状态)。
 
