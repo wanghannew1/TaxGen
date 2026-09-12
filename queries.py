@@ -76,6 +76,9 @@ _PERSON_SYSTEM_INFO_TTL = 300.0   # 5 分钟
 _TC90_INFO_CACHE: dict = {"ts": 0.0, "data": None}
 _TC90_INFO_TTL = 300.0            # TC90 合同/经办人/工资结束 全表汇总, 5 分钟 TTL
 
+_TC90_PERSON_ID_CACHE: dict = {"ts": 0.0, "data": None}
+_TC90_PERSON_ID_TTL = 300.0       # TC90 AAC001/ATC900 个人标识取号, 同 5 分钟 TTL
+
 
 def _cache_get(cache: dict, ttl: float):
     """check-then-set 读取缓存, 未命中返回 None。"""
@@ -1755,6 +1758,43 @@ def get_person_tc90_info(conn) -> Dict[str, dict]:
             "salary_end_ym": salary_end_ym,
         }
     _cache_set(_TC90_INFO_CACHE, result)
+    return result
+
+
+def get_tc90_person_ids(conn) -> Dict[str, dict]:
+    """一次全表扫描 TC90, 汇总每个证件的合同个人标识 (验证报告"工号(实际取用ID)"列)。
+
+    2026-09-12 用户需求: 个人标识取合同表 TC90 编号 (替代 AC01.AAC001);
+    口径: 每人取最后一份合同 (ATC90C 最大) 的 AAC001, 该值为空时回落 ATC900。
+    与 get_person_tc90_info 同模式全表扫描 + Python 聚合, 模块级 TTL 缓存 5 分钟。
+    返回 {证件号(大写): {"aac001": str, "atc900": str}},
+    aac001/atc900 为空串表示该合同行无值; 无合同人员缺键。
+    """
+    cached = _cache_get(_TC90_PERSON_ID_CACHE, _TC90_PERSON_ID_TTL)
+    if cached is not None:
+        return cached
+    sql = """
+        SELECT AAC002, AAC001, ATC900, ATC90C
+        FROM TC90
+        WHERE AAC002 IS NOT NULL
+    """
+    rows_by_cert: Dict[str, List[tuple]] = {}
+    with conn.cursor() as cursor:
+        cursor.execute(sql)
+        for row in cursor.fetchall():
+            cert = str(row[0] or "").strip().upper()
+            if cert:
+                rows_by_cert.setdefault(cert, []).append(row)
+    result: Dict[str, dict] = {}
+    for cert, rows in rows_by_cert.items():
+        # 最后一份合同 = ATC90C 最大 (NULLS LAST: 无起始日期的行排最后, 不入 rk=1)
+        max_c = max((r[3] for r in rows if r[3] is not None), default=None)
+        last = [r for r in rows
+                if (max_c is None and r[3] is None) or r[3] == max_c]
+        aac001 = next((str(r[1] or "") for r in last if r[1]), "")
+        atc900 = next((str(r[2] or "") for r in last if r[2]), "")
+        result[cert] = {"aac001": aac001, "atc900": atc900}
+    _cache_set(_TC90_PERSON_ID_CACHE, result)
     return result
 
 

@@ -79,8 +79,8 @@ class TestTemplateGeneration:
         wb = load_workbook(result.file_path)
         ws = wb.active
         assert ws.max_row == len(records) + 1  # 表头 + 数据行
-        assert ws.max_column == 31  # 30 列（含占位列"住房公积金调整"）+ 第31列"工号(实际取用ID)"
-        assert ws.cell(row=1, column=31).value == "工号(实际取用ID)"  # 工号列留空, 实际ID单独成列
+        assert ws.max_column == 30  # 30 列模板（含占位列"住房公积金调整"），无额外列
+        assert ws.cell(row=1, column=30).value == "备注"  # 工号列留空, 实际ID只在验证报告
     
     def test_generate_labor_service(self, conn, output_dir):
         """测试劳务报酬所得模板生成"""
@@ -275,15 +275,18 @@ class TestGenerateEndToEnd:
         wb = load_workbook(result.file_path)
         inc = wb["正常工资薪金收入"]
         vs = wb["验证报告"]
-        # 表头: 收入表30列 + 工号(实际取用ID) + 组合合并列 + 发放经办人 + 原28列 = 61列
-        assert vs.max_column == 61
+        # 表头: 收入表30列 + 工号(实际取用ID) + 申报类别/说明 + 组合合并列 + 发放经办人 + 原28列 = 63列
+        assert vs.max_column == 63
         headers = [vs.cell(row=1, column=c).value for c in range(1, vs.max_column + 1)]
         assert "ATC930" in headers
         assert headers[30] == "工号(实际取用ID)"  # 第31列(索引30)为实际ID
-        assert headers[31] == "结算单元名称-所属月份-批次"
-        assert headers[32] == "发放经办人"
-        assert headers[33] == "ATC930"
-        # 逐行一一对应: 收入表前30列与验证报告同列同值（跳过空列）; 工号列数据行均留空, 第31列ID一致
+        assert headers[31] == "申报类别"  # 第32列(索引31)为申报类别
+        assert headers[32] == "申报类别说明"  # 第33列(索引32)为申报类别说明
+        assert headers[33] == "结算单元名称-所属月份-批次"
+        assert headers[34] == "发放经办人"
+        assert headers[35] == "ATC930"
+        # 逐行一一对应: 收入表前30列与验证报告同列同值（跳过空列）; 工号列数据行均留空,
+        # 第31列ID为TC90取号 (未传 tc90_ids 回落职工号, 测试断言非空)
         assert vs.max_row == inc.max_row
         for r in range(1, inc.max_row + 1):
             for c in (1, 2, 3, 4, 5, 7, 8, 9, 10, 18, 30):
@@ -291,7 +294,12 @@ class TestGenerateEndToEnd:
                     f"row{r} col{c} 不一致"
             if r > 1:  # 表头行的工号列是标题文本, 只有数据行留空
                 assert inc.cell(row=r, column=1).value in (None, ""), "工号列必须留空"
-            assert vs.cell(row=r, column=31).value == inc.cell(row=r, column=31).value
+            if r > 1:
+                assert str(vs.cell(row=r, column=31).value or "").strip() != "", \
+                    f"row{r} 工号(实际取用ID)必须非空"
+            if r > 1:
+                assert vs.cell(row=r, column=32).value in ("正常申报", "合并申报", "零申报"), \
+                    f"row{r} 申报类别非法: {vs.cell(row=r, column=32).value}"
 
     def test_records_have_tc930_id(self, conn):
         """查询到的每条记录 tc930_id 必须非零"""
@@ -312,10 +320,22 @@ class TestGenerateEndToEnd:
         assert data['tc93_total_count'] >= data['abnormal_count']
 
     def test_generate_api_default_merge_by_pay_month(self, app_client, conn):
-        """未传 merge_by_pay_month 时默认按人+发放月份合并: 导出行数=唯一人数"""
+        """未传 merge_by_pay_month 时默认按人+发放月份合并: 导出行数=配置过滤后唯一人数"""
         from queries import get_salary_records
+        from config_db import get_zero_salary_unit_codes, get_excluded_unit_codes
         raw = get_salary_records(conn, 202607)
-        unique_persons = len({r.职工号 for r in raw})
+        zero_codes = set(get_zero_salary_unit_codes())
+        excl_codes = set(get_excluded_unit_codes())
+
+        def _keep(unit, salary_total):
+            if unit in excl_codes:
+                return False
+            if unit in zero_codes and (salary_total or 0) == 0:
+                return False
+            return True
+
+        kept = [r for r in raw if _keep(r.结算单元, r.工资总额)]
+        unique_persons = len({r.职工号 for r in kept})
         resp = app_client.post('/api/generate',
             json={"month": 202607, "templates": ["normalSalary"]})
         assert resp.status_code == 200
@@ -462,19 +482,28 @@ class TestMergeByPayMonth:
         from tax_merge import merge_records_by_person
         raw = self._wang4()
         merged = merge_records_by_person(raw, by_pay_month=True)
+        # 与真实 confirmed_combos 一致: 全部 4 个组合均注册 unit_name,
+        # 否则名称为空回落单元代码 (见 _row_combos name_of 逻辑)
+        combos = [
+            {"unit": 37339, "salary_month": m, "seq": s, "unit_name": "吉林大学第二医院B"}
+            for m, s in [(202604, "1"), (202605, "3"), (202606, "4"), (202607, "2")]
+        ]
         result = generate_normal_salary(
             merged, "测试按人合并", output_dir, raw_records=raw, merge_mode="pay_month",
-            combos=[{"unit": 37339, "salary_month": 202607, "seq": "2",
-                     "unit_name": "吉林大学第二医院B"}])
+            combos=combos)
         wb = load_workbook(result.file_path)
         ws = wb["正常工资薪金收入"]
         assert ws.max_row == 2  # 表头 + 1人1行
         assert ws.cell(row=2, column=5).value == 71189.25  # 本期收入合计
         assert ws.cell(row=2, column=7).value == 4093.18  # 养老合计
-        assert "吉林大学第二医院B202607-2" in str(ws.cell(row=2, column=30).value)
+        # 备注列按设计只写单元名称(不含年月-批次, 见 build_remark_text)
+        assert ws.cell(row=2, column=30).value == "吉林大学第二医院B"
         md = wb["合并明细"]
         assert md.max_row == 2
         assert md.cell(row=2, column=4).value == 4  # 原始条数
         assert md.cell(row=2, column=3).value == "202604;202605;202606;202607"
         assert md.cell(row=2, column=9).value == 4093.18  # 合并五险
         assert md.cell(row=2, column=10).value == 14165.81  # 合并个税
+        # 完整组合串(单元名称-所属月份-批次)在验证报告第34列"结算单元名称-所属月份-批次"
+        vs = wb["验证报告"]
+        assert "吉林大学第二医院B-202607-2" in str(vs.cell(row=2, column=34).value)

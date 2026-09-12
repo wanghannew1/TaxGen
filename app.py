@@ -517,10 +517,17 @@ def api_generate():
         # 将名单在册无 TC93 记录人员构造零申报记录追加到生成列表。
         # 注入必须在合并之后且不进 raw_records (合并须在注入前完成, B 类人员无 TC93
         # 原始记录不参与合并; raw_records 保持纯净, 避免污染劳务报酬/合并告警/主单元统计)。
+        from config_db import get_tax_roster as _get_roster
+        _roster = _get_roster()
+        # 证件类型映射: 个税端名单(config_db tax_roster, 境外人员信息列表来源)逐人匹配,
+        # 未命中回落"居民身份证"。名单同时复用做 B 类零申报注入 (见下方 zero_choices 分支)。
+        cert_type_map = {str(p.get("cert_no") or "").strip().upper():
+                         str(p.get("cert_type") or "") or "居民身份证"
+                         for p in _roster or []}
+        unpaid_certs = None
         if zero_choices:
-            from config_db import get_tax_roster
             from tax_zero import build_roster_zero_records
-            _roster = get_tax_roster()
+            unpaid_certs = {c for c, _m in _unpaid_pairs}
             if _roster:
                 _checked = {str(r.身份证 or r.职工号 or "").strip().upper()
                             for r in records}
@@ -571,6 +578,8 @@ def api_generate():
                         file_title = f"{head}{n_units}家单位" + (f"{n_people}人" if n_people else "")
                 else:
                     file_title = f"劳务派遣人员工资发放表{month}"
+                from queries import get_tc90_person_ids as _get_tc90_ids
+                tc90_ids = _get_tc90_ids(conn)
                 r = generate_normal_salary(records, file_title, OUTPUT_DIR,
                                            tc93_all=tc93_all, abnormal=abnormal,
                                            abnormal_reasons=abnormal_reasons,
@@ -583,7 +592,10 @@ def api_generate():
                                             merge_choices=merge_choices if merge_by_person else None,
                                             zero_choices=zero_choices,
                                             persist_merge_choices=bool(data.get("persist_merge_choices")),
-                                            persist_zero_choices=bool(data.get("persist_zero_choices")))
+                                            persist_zero_choices=bool(data.get("persist_zero_choices")),
+                                            cert_type_map=cert_type_map,
+                                            tc90_ids=tc90_ids,
+                                            unpaid_certs=unpaid_certs)
             elif tpl == "laborService":
                 lab_records, lab_raw, lab_combos = build_labor_service_records(
                     conn, raw_records, confirmed_combos, month,
