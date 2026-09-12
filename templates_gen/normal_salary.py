@@ -365,6 +365,7 @@ def generate_normal_salary(records: List[SalaryRecord], title: str, output_dir: 
         generate_merge_verification_sheet(wb, merge_choices, name_map, persist_merge_choices)
     if zero_choices:
         generate_zero_verification_sheet(wb, zero_choices, records, name_map, persist_zero_choices)
+    generate_category_stats_sheet(wb, validations, len(records))
     add_explanation_sheet(wb, [
         ("正常工资薪金收入", [
             "30 列个税申报模板（含占位列'住房公积金调整'），一行为一人（按人合并）。",
@@ -400,6 +401,10 @@ def generate_normal_salary(records: List[SalaryRecord], title: str, output_dir: 
             "生成(declare)：保留/注入该人员零申报记录（收入与五险一金全0上报）；",
             "不生成(skip)：该人员零申报被剔除，不出现在本文件收入表中。",
             "未在零申报弹窗确认的零收入人员默认保留（生成零申报）；'本次已记住'=写入 SQLite zero_override 表，下次弹窗默认选中。",
+        ]),
+        ("申报分类统计", [
+            "按收入表逐行申报类别统计人数：合计 = 收入表总行数 = 文件名人数（2026-09-12 起口径一致）。",
+            "零申报子类 A1/A2/B 按'验证报告'申报类别说明区分；如需不含零申报的人数，看'正常+合并'行。",
         ]),
         ("TC93总表", [
             "TC93 工资原始全字段，按身份证排序、同证相邻；重复次数=该身份证出现行数。",
@@ -919,3 +924,42 @@ def generate_zero_verification_sheet(wb: Workbook, zero_choices: dict,
             ws.cell(row=idx, column=col, value=val)
     for col, h in enumerate(headers, 1):
         ws.column_dimensions[get_column_letter(col)].width = max(12, len(str(h)) * 2)
+
+
+def generate_category_stats_sheet(wb: Workbook, validations: List[dict], total: int):
+    """申报分类统计sheet：按申报类别统计人数，合计 = 收入表总行数 = 文件名人数。
+
+    文件名人数 (2026-09-12 用户确认) 改口径为收入表实际行数 (含零申报注入,
+    不再用 TC8M 发放人数替代); 如需不含零申报的人数, 看"正常+合并"行。
+    零申报子类 (A1/A2/B) 按 申报类别说明 前缀统计。
+    """
+    cats: Counter = Counter(v["申报类别"] for v in validations)
+    zero_sub: Counter = Counter()
+    for v in validations:
+        d = str(v["申报类别说明"] or "")
+        if d.startswith("A1"):
+            zero_sub["A1"] += 1
+        elif d.startswith("A2"):
+            zero_sub["A2"] += 1
+        elif d.startswith("B类"):
+            zero_sub["B类"] += 1
+    rows = [
+        ("正常申报", "", cats.get("正常申报", 0)),
+        ("合并申报", "", cats.get("合并申报", 0)),
+        ("零申报", "A1: 工资表收入为0", zero_sub.get("A1", 0)),
+        ("零申报", "A2: 做了工资当月未发放", zero_sub.get("A2", 0)),
+        ("零申报", "B类: 名单在册无工资（零申报注入）", zero_sub.get("B类", 0)),
+        ("零申报合计", "", cats.get("零申报", 0)),
+        ("合计(=收入表总行数, 文件名人数)", "", total),
+        ("不含零申报人数(正常+合并)", "", cats.get("正常申报", 0) + cats.get("合并申报", 0)),
+    ]
+    headers = ["申报类别", "子类说明", "人数"]
+    ws = wb.create_sheet("申报分类统计")
+    for col, h in enumerate(headers, 1):
+        ws.cell(row=1, column=col, value=h)
+    for i, r in enumerate(rows, 2):
+        for col, val in enumerate(r, 1):
+            if val != "":
+                ws.cell(row=i, column=col, value=val)
+    for col, h in enumerate(headers, 1):
+        ws.column_dimensions[get_column_letter(col)].width = max(14, len(str(h)) * 2)

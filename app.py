@@ -572,7 +572,8 @@ def api_generate():
                             str(c.get("handler", "") or "").strip()
                             for c in confirmed_combos if str(c.get("handler", "") or "").strip()))
                         n_units = len(confirmed_combos)
-                        n_people = sum(int(c.get("person_count", 0) or 0) for c in confirmed_combos)
+                        # 文件名人数=收入表实际总行数(注入零申报后), 与表内行数一致 (2026-09-12 用户确认)
+                        n_people = len(records)
                         head = f"{month}{handlers}" if handlers else str(month)
                         file_title = f"{head}{n_units}家单位" + (f"{n_people}人" if n_people else "")
                 else:
