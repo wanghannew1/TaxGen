@@ -412,7 +412,7 @@
                         <label class="form-label form-label-sm">&nbsp;</label>
                         <div>
                             <div class="form-check form-check-inline mt-1">
-                                <input class="form-check-input" type="checkbox" id="searchConfirmedOnly" checked>
+                                <input class="form-check-input" type="checkbox" id="searchConfirmedOnly" checked disabled>
                                 <label class="form-check-label form-label-sm" for="searchConfirmedOnly">仅已发放</label>
                             </div>
                         </div>
@@ -1160,6 +1160,7 @@
         let tempList = [];
         let importedNames = [];
         let mergeChoices = {};
+        let mergeConfirmed = false;  // 本月是否已检查并确认合并规则 (2026-09-12: 生成前校验)
         let persistMergeChoices = false;
         let mergeCandidatesData = [];
         let mergeWorkSheetsData = [];
@@ -1167,6 +1168,7 @@
         let lastMergeCombos = [];
         let lastMergePayMonth = 0;
         let zeroChoices = {};
+        let zeroConfirmed = false;  // 本月是否已检查并确认零申报 (2026-09-12: 生成前校验)
         let persistZeroChoices = false;
         let zeroUnitsData = [];
         let rosterLoaded = false;
@@ -1241,10 +1243,12 @@
 
         monthSelect.addEventListener('change', function() {
             mergeChoices = {};
+            mergeConfirmed = false;
             persistMergeChoices = false;
             mergeConfirmedBadge.style.display = 'none';
             mergeConfirmedBadge.textContent = '';
             zeroChoices = {};
+            zeroConfirmed = false;
             persistZeroChoices = false;
             zeroConfirmedBadge.style.display = 'none';
             zeroConfirmedBadge.textContent = '';
@@ -1275,7 +1279,7 @@
             .then(async resp => {
                 const data = await resp.json();
                 if (!resp.ok || data.error) { showError(data.error || '检查合并规则失败，请稍后重试'); return; }
-                if (!data.candidates || data.candidates.length === 0) { alert('本月无跨月合并人员'); return; }
+                if (!data.candidates || data.candidates.length === 0) { mergeConfirmed = true; alert('本月无跨月合并人员'); return; }
                 try {
                     const tagResp = await fetch('/api/merge-group-tags');
                     if (tagResp.ok) mergeGroupTags = (await tagResp.json()).tags || {};
@@ -1587,6 +1591,7 @@
             });
             persistMergeChoices = persistMergeCb.checked;
             const n = Object.keys(mergeChoices).length;
+            mergeConfirmed = true;  // 已检查并确认合并规则
             mergeConfirmedBadge.textContent = `已确认 ${n} 人合并规则`;
             mergeConfirmedBadge.style.display = 'block';
             bootstrap.Modal.getInstance(mergeConfirmModal).hide();
@@ -1620,6 +1625,7 @@
                 if (!resp.ok || data.error) { showError(data.error || '检查零申报失败，请稍后重试'); return; }
                 const total = (data.units || []).reduce((s, u) => s + u.count, 0);
                 if (!data.units || data.units.length === 0) {
+                    zeroConfirmed = true;
                     refreshRosterStatus().then(() => {
                         if (rosterLoaded) { alert('本月无零申报候选人员'); }
                         else { alert('本月无本期收入为0的人员。\n未导入个税端人员名单，无法提示"个税端在职无工资"候选。'); }
@@ -1794,6 +1800,7 @@
             });
             persistZeroChoices = persistZeroCb.checked;
             const n = Object.keys(zeroChoices).length;
+            zeroConfirmed = true;  // 已检查并确认零申报
             zeroConfirmedBadge.textContent = `已确认 ${n} 人零申报`;
             zeroConfirmedBadge.style.display = 'block';
             bootstrap.Modal.getInstance(zeroConfirmModal).hide();
@@ -2306,6 +2313,24 @@
 
             const confirmedCombos = getSelectedListCombos();
             if (confirmedCombos.length === 0) { showError('请在待报列表中勾选要报送的批次'); return; }
+
+            // 生成前确认检查 (2026-09-12 用户要求): 未检查合并规则/零申报直接生成,
+            // 跨月人员将全部按默认多月合并、收入为0人员全部按默认生成零申报,
+            // B 类名单在册零申报记录不会注入, 存在漏报/错报风险, 提示用户先按流程确认。
+            if (!mergeConfirmed || !zeroConfirmed) {
+                const parts = [];
+                if (!mergeConfirmed) parts.push('「检查合并规则并确认」');
+                if (!zeroConfirmed) parts.push('「检查零申报并确认」');
+                const riskLines = [];
+                if (!mergeConfirmed) riskLines.push('· 合并规则未确认：跨月人员将全部按默认"多月合并"处理');
+                if (!zeroConfirmed) riskLines.push('· 零申报未确认：收入为0人员将全部按默认"生成零申报"，名单在册人员零申报不会注入');
+                const hint = confirm(
+                    `尚未完成 ${parts.join('和')}，直接生成可能存在漏报/错报风险：\n\n` +
+                    riskLines.join('\n') + '\n\n' +
+                    '建议按流程先确认合并规则和零申报，再生成报税数据。\n\n是否仍要直接生成？'
+                );
+                if (!hint) return;
+            }
 
             btnGenerate.disabled = true;
             loadingDiv.style.display = 'block';
