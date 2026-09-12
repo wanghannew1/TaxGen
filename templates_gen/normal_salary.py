@@ -67,8 +67,16 @@ def _classify_row(rec: SalaryRecord, income, trips, merge_choices,
             # 无历史发放 → 注明"当期无未发工资，无历史发放记录"，不臆造所属月给用户错觉
             last_ym = int(getattr(rec, "工资所属年月", 0) or 0)
             last_seq = str(getattr(rec, "当月批次", "") or "")
+            pay_month = int(getattr(rec, "发放月", 0) or 0)
             if last_ym:
-                note = f"；当期无未发工资，上次发放:{last_ym}" + (f"-批次{last_seq}" if last_seq else "")
+                if pay_month and pay_month != last_ym:
+                    # 发放月≠所属月 (如 9月1日才发8月工资): 单独小类, 标注实际发放月,
+                    # 避免"上次发放:202608"误导以为所属月已发工资
+                    uname = str(getattr(rec, "结算单元名称", "") or "")
+                    combo = f"{uname}-{last_ym}" + (f"-{last_seq}" if last_seq else "")
+                    note = f"；当期无工资发放，次月发放了当期工资：{combo}（{pay_month}发）"
+                else:
+                    note = f"；当期无未发工资，上次发放:{last_ym}" + (f"-批次{last_seq}" if last_seq else "")
             else:
                 note = "；当期无未发工资，无历史发放记录"
             return "零申报", "B类: 名单在册无工资（零申报注入）" + note
@@ -383,6 +391,8 @@ def generate_normal_salary(records: List[SalaryRecord], title: str, output_dir: 
             "合并申报 = 跨多个所属月 / 同月多个批次 / 跨多个结算单元，并以 '；' 列出跨月数、批次数、单元数及三险合并口径（多月合并=默认、单月、不报）；",
             "零申报 = 本期收入为0；子类 A1=工资表收入为0、A2=做了工资当月未发放（TC8M 未发放月）、B类=名单在册无工资（零申报注入，无 TC93 原始记录）；",
              "B 类行'所属月份/批次' = 该人最后一次真实发放的所属月-批次（TC93），无历史发放则所属月为空并注明'当期无未发工资，无历史发放记录'（不臆造所属月）。",
+             "B 类发放月≠所属月（如202608的工资9月1日才发放）时单独小类'次月发放了当期工资'，标注'所属月-批次（发放月发）'（如长春市公共关系学校-202608-1（202609发）），",
+             "避免'上次发放:202608'误导以为所属月当月已发工资（申报8月个税时该笔次月发放工资不能计入）。",
             "随后为该行人员实际涉及的组合列（结算单元-所属月-批次，不受字数限制，该人员跨多个组合分号连接）与发放经办人，再向右为原验算列。",
             "左=右校验：左 = 本期收入 − 养老 − 失业 − 医疗 − 公积金 − 意外险 + 本次免税(ATC936)；",
             "右 = (实发 − 经济补偿金) + 税后工会会费 + 个人代理费 + 个税 + 个人其他调整(ATC93AG)；|左−右|<0.01 为通过。",
@@ -941,6 +951,8 @@ def generate_category_stats_sheet(wb: Workbook, validations: List[dict], total: 
             zero_sub["A1"] += 1
         elif d.startswith("A2"):
             zero_sub["A2"] += 1
+        elif "次月发放了当期工资" in d:
+            zero_sub["B类-次月发放"] += 1
         elif d.startswith("B类"):
             zero_sub["B类"] += 1
     rows = [
@@ -949,6 +961,7 @@ def generate_category_stats_sheet(wb: Workbook, validations: List[dict], total: 
         ("零申报", "A1: 工资表收入为0", zero_sub.get("A1", 0)),
         ("零申报", "A2: 做了工资当月未发放", zero_sub.get("A2", 0)),
         ("零申报", "B类: 名单在册无工资（零申报注入）", zero_sub.get("B类", 0)),
+        ("零申报", "B类: 名单在册无工资（零申报注入），次月发放了当期工资（发放月≠所属月）", zero_sub.get("B类-次月发放", 0)),
         ("零申报合计", "", cats.get("零申报", 0)),
         ("合计(=收入表总行数, 文件名人数)", "", total),
         ("不含零申报人数(正常+合并)", "", cats.get("正常申报", 0) + cats.get("合并申报", 0)),

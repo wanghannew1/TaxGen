@@ -655,6 +655,27 @@ class TestBuildRosterZeroRecords:
         assert rows[0].工资所属年月 == 202605
         assert rows[0].当月批次 == ""
 
+    def test_pay_month_differs_attached(self):
+        # 发放月≠所属月 (如 9月1日发8月工资) → 挂载 发放月 动态属性, 供验证报告小类标注
+        self.contract_map = {"C1": {"unit_code": 100, "unit_name": "单元100"}}
+        self.sys_info = {"C1": {"last_pay_ym": 202608, "last_batch": "1", "pay_month": 202609}}
+        rows = self._call()
+        assert getattr(rows[0], "发放月", 0) == 202609
+
+    def test_pay_month_same_not_attached(self):
+        # 发放月==所属月 (当月发放) → 不挂载 (无需标注发放月)
+        self.contract_map = {"C1": {"unit_code": 100, "unit_name": "单元100"}}
+        self.sys_info = {"C1": {"last_pay_ym": 202605, "last_batch": "1", "pay_month": 202605}}
+        rows = self._call()
+        assert getattr(rows[0], "发放月", 0) == 0
+
+    def test_no_pay_month_not_attached(self):
+        # sys_info 无 pay_month (无 TC8M 批次映射) → 不挂载
+        self.contract_map = {"C1": {"unit_code": 100, "unit_name": "单元100"}}
+        self.sys_info = {"C1": {"last_pay_ym": 202605, "last_batch": "1"}}
+        rows = self._call()
+        assert getattr(rows[0], "发放月", 0) == 0
+
     def test_declare_only_included_others_dropped(self):
         # 仅 declare 的人进入注入; skip 的不注入
         self.contract_map = {"C1": {"unit_code": 100, "unit_name": "单元100"},
@@ -690,3 +711,58 @@ class TestBuildRosterZeroRecords:
     def test_no_declare_returns_empty(self):
         rows = self._call(choices={})
         assert rows == []
+
+
+class TestClassifyRowZeroSubcategories:
+    """_classify_row 零申报子类标注: A2/A1/B类/B类-次月发放。
+
+    B类-次月发放 (2026-09-12 用户确认): 发放月≠所属月 (如 9月1日才发8月工资) 时,
+    单独小类并标注"所属月-批次（发放月发）", 避免"上次发放:202608"误导。
+    """
+
+    def _call(self, rec, income=0, raw_certs=set(), unpaid_certs=set()):
+        from templates_gen.normal_salary import _classify_row
+        return _classify_row(rec, income, set(), {}, raw_certs, unpaid_certs)
+
+    def test_b_pay_month_differs_new_subcategory(self):
+        rec = SalaryRecord(身份证="C1", 结算单元名称="长春市公共关系学校",
+                           工资所属年月=202608, 当月批次="1")
+        rec.发放月 = 202609
+        cat, detail = self._call(rec)
+        assert cat == "零申报"
+        assert "B类: 名单在册无工资（零申报注入）" in detail
+        assert "当期无工资发放，次月发放了当期工资" in detail
+        assert "长春市公共关系学校-202608-1（202609发）" in detail
+
+    def test_b_pay_month_same_keeps_previous_note(self):
+        rec = SalaryRecord(身份证="C1", 结算单元名称="单元100",
+                           工资所属年月=202608, 当月批次="1")
+        rec.发放月 = 202608
+        cat, detail = self._call(rec)
+        assert detail == "B类: 名单在册无工资（零申报注入）；当期无未发工资，上次发放:202608-批次1"
+
+    def test_b_no_pay_month_keeps_previous_note(self):
+        rec = SalaryRecord(身份证="C1", 结算单元名称="单元100",
+                           工资所属年月=202608, 当月批次="1")
+        cat, detail = self._call(rec)
+        assert detail == "B类: 名单在册无工资（零申报注入）；当期无未发工资，上次发放:202608-批次1"
+
+    def test_b_no_history_note(self):
+        rec = SalaryRecord(身份证="C1", 结算单元名称="单元100",
+                           工资所属年月=0, 当月批次="")
+        cat, detail = self._call(rec)
+        assert detail == "B类: 名单在册无工资（零申报注入）；当期无未发工资，无历史发放记录"
+
+    def test_b_batch_empty_pay_month_differs(self):
+        rec = SalaryRecord(身份证="C1", 结算单元名称="单元100",
+                           工资所属年月=202605, 当月批次="")
+        rec.发放月 = 202606
+        cat, detail = self._call(rec)
+        assert "单元100-202605（202606发）" in detail
+
+    def test_a1_and_a2_unchanged(self):
+        rec = SalaryRecord(身份证="C1")
+        cat, detail = self._call(rec, raw_certs={"C1"})
+        assert detail == "A1: 工资表收入为0"
+        cat, detail = self._call(rec, unpaid_certs={"C1"})
+        assert detail == "A2: 做了工资当月未发放"

@@ -82,15 +82,15 @@ class TestTemplateGeneration:
         assert ws.max_column == 30  # 30 列模板（含占位列"住房公积金调整"），无额外列
         assert ws.cell(row=1, column=30).value == "备注"  # 工号列留空, 实际ID只在验证报告
         # 申报分类统计 sheet (2026-09-12 用户确认: 文件名人数=收入表总行数口径):
-        # 正常+合并+零申报 = 合计 = record_count
+        # 正常+合并+零申报 = 合计 = record_count; B类-次月发放为 B类子行 (2026-09-12)
         st = wb["申报分类统计"]
         normal = st.cell(row=2, column=3).value or 0
         merged = st.cell(row=3, column=3).value or 0
-        zero = st.cell(row=7, column=3).value or 0
-        total = st.cell(row=8, column=3).value or 0
+        zero = st.cell(row=8, column=3).value or 0
+        total = st.cell(row=9, column=3).value or 0
         assert normal + merged + zero == len(records)
         assert total == len(records)
-        non_zero = st.cell(row=9, column=3).value or 0
+        non_zero = st.cell(row=10, column=3).value or 0
         assert non_zero == normal + merged
     
     def test_generate_labor_service(self, conn, output_dir):

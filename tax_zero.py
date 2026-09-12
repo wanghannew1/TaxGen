@@ -364,6 +364,10 @@ def build_roster_zero_records(conn, pay_month, roster, zero_choices, excl_codes,
     所属年月-批次 (get_person_system_info.last_pay_ym/last_batch, TC93 结算记录)。
     从未在系统发过工资 (无 TC93 记录) → 年月=0 批次空, 验证报告申报类别说明备注
     "当期无未发工资，无历史发放记录", 让用户知道真相。
+
+    发放月 pay_month (动态属性, 不修改 models.py): 最后发放的发放年月
+    (TC8M.ATC8G7); 若发放月≠所属月, _classify_row 单独划为"次月发放当期工资"
+    小类并标注"所属月-批次（发放月发）", 避免"上次发放:所属月"误导.
     """
     declare_certs = {str(c).strip().upper() for c, m in (zero_choices or {}).items()
                      if m == "declare"}
@@ -392,7 +396,7 @@ def build_roster_zero_records(conn, pay_month, roster, zero_choices, excl_codes,
         if unit in excl_codes:
             continue
         last = sys_info.get(cert, {})
-        rows.append(SalaryRecord(
+        rec = SalaryRecord(
             职工号=str(p.get("emp_no") or "") or cert,
             姓名=str(p.get("name") or ""),
             身份证=cert,
@@ -409,7 +413,13 @@ def build_roster_zero_records(conn, pay_month, roster, zero_choices, excl_codes,
             个人其他调整=Decimal("0"), 个人欠款=Decimal("0"),
             扣款大病险=Decimal("0"), 税后工会会费=Decimal("0"),
             个人代理费=Decimal("0"), 意外险个人=Decimal("0"), 经济补偿金=Decimal("0"),
-        ))
+        )
+        # 发放月 (TC8M.ATC8G7): 动态属性, 不修改 models.py; 仅当发放月≠所属月时挂载,
+        # 供 _classify_row 划"次月发放当期工资"小类并标注（发放月发）
+        if _发放月 := int(last.get("pay_month") or 0):
+            if _发放月 != int(last.get("last_pay_ym") or 0):
+                rec.发放月 = _发放月
+        rows.append(rec)
     return rows
 
 
