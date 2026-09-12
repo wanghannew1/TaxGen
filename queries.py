@@ -41,6 +41,8 @@
 (SalaryRecord / MonthOption / PersonnelInfo) 均来自 models.py。
 """
 
+import time
+
 from dataclasses import dataclass
 from datetime import datetime
 from decimal import Decimal
@@ -61,6 +63,32 @@ _AAA901_FIELDS = {
 
 # Oracle 11g IN 列表表达式上限为 1000 (ORA-01795), 分批大小留余量
 _IN_BATCH_SIZE = 900
+
+# ---- 全量人员信息 TTL 缓存 (2026-09-12 零申报面板性能优化) ----
+# 零申报 B 类 "在系统人员" 展示的是"最后一次发薪信息", 不依赖当前 pay_month,
+# 语义上可整体缓存。全表一次 KEEP DENSE_RANK FIRST (9.5s) + TC8M 批次映射 (0.5s)
+# 计算一次, 5 分钟内重复查询直接命中, 将点击"检查零申报"的 125s 降至 ~1s。
+# 生成报税数据时用的是 get_salary_records_by_combos 等实时查询, 本缓存仅影响
+# 确认面板展示, 5 分钟 TTL 可接受 (Oracle 评审确认 60-300s 区间安全)。
+_PERSON_SYSTEM_INFO_CACHE: dict = {"ts": 0.0, "data": None}
+_PERSON_SYSTEM_INFO_TTL = 300.0   # 5 分钟
+
+_TC90_INFO_CACHE: dict = {"ts": 0.0, "data": None}
+_TC90_INFO_TTL = 300.0            # TC90 合同/经办人/工资结束 全表汇总, 5 分钟 TTL
+
+
+def _cache_get(cache: dict, ttl: float):
+    """check-then-set 读取缓存, 未命中返回 None。"""
+    data = cache["data"]
+    if data is not None and time.time() - cache["ts"] < ttl:
+        return data
+    return None
+
+
+def _cache_set(cache: dict, data):
+    """写入缓存并刷新时间戳。"""
+    cache["data"] = data
+    cache["ts"] = time.time()
 
 
 @dataclass
@@ -771,7 +799,9 @@ def get_tc90_salary_end_dates(conn, cert_numbers) -> Dict[str, datetime]:
                 except (ValueError, TypeError):
                     continue
                 y, m = divmod(av, 100)
-                if not (1 <= m <= 12):
+                # 脏数据防护 (2026-09-11 实测): 个别 ATC90AV 异常值 (如 12/6)
+                # divmod 后 y=0 导致 datetime(year=0) ValueError 崩溃
+                if not (1 <= m <= 12) or not (1900 <= y <= 9999):
                     continue
                 dates[cert] = datetime(y, m, calendar.monthrange(y, m)[1])
     return dates
@@ -1654,6 +1684,80 @@ def get_last_salary_handlers(conn, cert_numbers) -> Dict[str, list]:
     return {c: list(dict.fromkeys(hs)) for c, hs in result.items()}
 
 
+def get_person_tc90_info(conn) -> Dict[str, dict]:
+    """一次全表扫描 TC90, 汇总每个证件的合同/在系统/工资结束信息 (零申报 B 类)。
+
+    2026-09-12 性能优化: 合并 get_certs_in_system + get_person_units_contract +
+    get_tc90_salary_end_dates 三个分批 IN 查询为单次全表扫描 + Python 聚合,
+    TC90 全表 ~5 万行一次拉回 ~1.4s (原先每批 ~1.7s×数十批且重复扫表)。
+    口径与原实现逐条一致:
+    - 在系统判定: TC90 有无合同记录 (AC01 不判定系统管理);
+    - 单位/经办人: 最后一份合同 (ATC90C 最大, 同日多份全保留经办人);
+    - 工资结束: 最后合同行的 MAX(ATC90AV), 脏数据 (year<1900 等) 视为无。
+    模块级 TTL 缓存 5 分钟。
+    返回 {证件号(大写): {"unit_code", "unit_name", "dept_name",
+                          "contract_handlers": [经办人...], "salary_end_ym": int}}。
+    salary_end_ym 为工资结束年月 YYYYMM (与 get_tc90_salary_end_dates 换算结果一致),
+    0 表示无有效值 (未设/脏数据)。
+    """
+    cached = _cache_get(_TC90_INFO_CACHE, _TC90_INFO_TTL)
+    if cached is not None:
+        return cached
+    sql = """
+        SELECT AAC002, ATB930, ATC90X, AAB004, AAE019, ATC90AV, ATC90C
+        FROM TC90
+        WHERE AAC002 IS NOT NULL
+    """
+    rows_by_cert: Dict[str, List[tuple]] = {}
+    with conn.cursor() as cursor:
+        cursor.execute(sql)
+        for row in cursor.fetchall():
+            cert = str(row[0] or "").strip().upper()
+            if cert:
+                rows_by_cert.setdefault(cert, []).append(row)
+    result: Dict[str, dict] = {}
+    for cert, rows in rows_by_cert.items():
+        # 最后一份合同 = ATC90C 最大 (NULLS LAST: 无起始日期的行排最后, 不入 rk=1)
+        max_c = max((r[6] for r in rows if r[6] is not None), default=None)
+        last = [r for r in rows
+                if (max_c is None and r[6] is None) or r[6] == max_c]
+        unit_code = 0
+        unit_name = ""
+        dept_name = ""
+        handlers: List[str] = []
+        for r in last:
+            unit_code = max(unit_code, int(r[1] or 0))
+            unit_name = max(unit_name, str(r[2] or ""))
+            dept_name = max(dept_name, str(r[3] or ""))
+            if r[4]:
+                handlers.append(str(r[4]))
+        salary_end_ym = 0
+        avail = []
+        for r in last:
+            if r[5] is None:
+                continue
+            try:
+                avail.append(int(r[5]))
+            except (ValueError, TypeError):
+                continue
+        if avail:
+            best = max(avail)
+            y, m = divmod(best, 100)
+            # 脏数据防护 (2026-09-11 实测): 个别 ATC90AV 异常值 (如 12/6)
+            # divmod 后 y=0 导致 datetime(year=0) ValueError 崩溃
+            if (1 <= m <= 12) and (1900 <= y <= 9999):
+                salary_end_ym = best
+        result[cert] = {
+            "unit_code": unit_code,
+            "unit_name": unit_name,
+            "dept_name": dept_name,
+            "contract_handlers": list(dict.fromkeys(handlers)),
+            "salary_end_ym": salary_end_ym,
+        }
+    _cache_set(_TC90_INFO_CACHE, result)
+    return result
+
+
 def get_person_units_contract(conn, cert_numbers) -> Dict[str, dict]:
     """按最后一份合同 (开始日期最大) 补充结算单元/单位/合同经办人信息。
 
@@ -1702,8 +1806,16 @@ def get_person_units_contract(conn, cert_numbers) -> Dict[str, dict]:
 
 
 def get_person_system_info(conn, cert_numbers) -> Dict[str, dict]:
-    """按证件号批量查询在系统人员的最后一次发薪信息 (零申报面板展示用)。
+    """按证件号查询在系统人员的最后一次发薪信息 (零申报面板展示用)。
 
+    2026-09-12 性能优化: 原实现每行 2 个 TC8M 相关子查询 + RANK 窗口排序,
+    35 批共 ~125s 卡顿。改为:
+    1. TC93 全表一次 KEEP DENSE_RANK FIRST 单趟 hash 聚合 (~9.5s),
+       免去窗口排序/临时表溢出 (RANK 全表 ~10.9s, KEEP 实测更快);
+    2. TC8M 全表 GROUP BY (ATB930, ATC931, ATC937) 批次映射 (~0.5s);
+    3. Python 按批次三元组合并 发放月(pay_month)/经办人(handler)。
+    全量结果模块级 TTL 缓存 5 分钟, 重复点击 <1s; 生成报税数据走实时查询,
+    本缓存仅影响确认面板展示。
     供零申报 B 类 (在系统) 人员展示"结算单元/最后发薪工资单/经办人":
     - unit_code/unit_name: 最后一次发薪工资单的结算单元 (TC93.ATB930/ATB931)
     - last_pay_ym: 最后一次发薪工资所属年月 (TC93.ATC931)
@@ -1717,52 +1829,71 @@ def get_person_system_info(conn, cert_numbers) -> Dict[str, dict]:
     if not cert_numbers:
         return {}
     certs = sorted({str(c).strip().upper() for c in cert_numbers if str(c).strip()})
-    result: Dict[str, dict] = {}
+    cached = _cache_get(_PERSON_SYSTEM_INFO_CACHE, _PERSON_SYSTEM_INFO_TTL)
+    if cached is not None:
+        return {c: cached[c] for c in certs if c in cached}
+    # TC93 全表一次 KEEP DENSE_RANK FIRST: 每人最新结算记录的展示字段
     sql = """
-        SELECT cert, unit_code, unit_name, last_pay_ym, pay_month, batch,
-               make_handler, handler
-        FROM (
-            SELECT ac01.AAC002 AS cert,
-                   t93.ATB930 AS unit_code, t93.ATB931 AS unit_name,
-                   t93.ATC931 AS last_pay_ym, t93.ATC937 AS batch,
-                   t93.AAE019 AS make_handler,
-                   (SELECT MAX(m.ATC8G7) FROM TC8M m
-                    WHERE m.ATB930 = t93.ATB930 AND m.ATC931 = t93.ATC931
-                      AND m.ATC937 = t93.ATC937) AS pay_month,
-                   (SELECT MAX(m.AAE019) FROM TC8M m
-                     WHERE m.ATB930 = t93.ATB930 AND m.ATC931 = t93.ATC931
-                       AND m.ATC937 = t93.ATC937) AS handler,
-                   RANK() OVER (PARTITION BY ac01.AAC002
-                                ORDER BY COALESCE(t93.AAE001, t93.ATC932, t93.ATC931)
-                                         DESC NULLS LAST,
-                                         t93.ATC931 DESC NULLS LAST,
-                                         t93.BAZ002 DESC NULLS LAST) AS rk
-            FROM TC93 t93
-            LEFT JOIN AC01 ac01 ON t93.AAC001 = ac01.AAC001
-            WHERE t93.ATC93G = '1'
-              AND ac01.AAC002 IN ({placeholders})
-        ) WHERE rk = 1
+        SELECT ac01.AAC002 AS cert,
+               MAX(t93.ATB930) KEEP (DENSE_RANK FIRST ORDER BY
+                   COALESCE(t93.AAE001, t93.ATC932, t93.ATC931) DESC NULLS LAST,
+                   t93.ATC931 DESC NULLS LAST,
+                   t93.BAZ002 DESC NULLS LAST) AS unit_code,
+               MAX(t93.ATB931) KEEP (DENSE_RANK FIRST ORDER BY
+                   COALESCE(t93.AAE001, t93.ATC932, t93.ATC931) DESC NULLS LAST,
+                   t93.ATC931 DESC NULLS LAST,
+                   t93.BAZ002 DESC NULLS LAST) AS unit_name,
+               MAX(t93.ATC931) KEEP (DENSE_RANK FIRST ORDER BY
+                   COALESCE(t93.AAE001, t93.ATC932, t93.ATC931) DESC NULLS LAST,
+                   t93.ATC931 DESC NULLS LAST,
+                   t93.BAZ002 DESC NULLS LAST) AS last_pay_ym,
+               MAX(t93.ATC937) KEEP (DENSE_RANK FIRST ORDER BY
+                   COALESCE(t93.AAE001, t93.ATC932, t93.ATC931) DESC NULLS LAST,
+                   t93.ATC931 DESC NULLS LAST,
+                   t93.BAZ002 DESC NULLS LAST) AS batch,
+               MAX(t93.AAE019) KEEP (DENSE_RANK FIRST ORDER BY
+                   COALESCE(t93.AAE001, t93.ATC932, t93.ATC931) DESC NULLS LAST,
+                   t93.ATC931 DESC NULLS LAST,
+                   t93.BAZ002 DESC NULLS LAST) AS make_handler
+        FROM TC93 t93
+        LEFT JOIN AC01 ac01 ON t93.AAC001 = ac01.AAC001
+        WHERE t93.ATC93G = '1'
+        GROUP BY ac01.AAC002
     """
+    all_info: Dict[str, dict] = {}
     with conn.cursor() as cursor:
-        for start in range(0, len(certs), _IN_BATCH_SIZE):
-            chunk = certs[start:start + _IN_BATCH_SIZE]
-            placeholders = ", ".join(f":c{i}" for i in range(len(chunk)))
-            binds = {f"c{i}": c for i, c in enumerate(chunk)}
-            cursor.execute(sql.format(placeholders=placeholders), binds)
-            for row in cursor.fetchall():
-                cert = str(row[0] or "").strip().upper()
-                if not cert:
-                    continue
-                result[cert] = {
+        cursor.execute(sql)
+        for row in cursor.fetchall():
+            cert = str(row[0] or "").strip().upper()
+            if cert:
+                all_info[cert] = {
                     "unit_code": int(row[1] or 0),
                     "unit_name": str(row[2] or ""),
                     "last_pay_ym": int(row[3] or 0),
-                    "pay_month": int(row[4] or 0),
-                    "last_batch": str(row[5] or ""),
-                    "make_handler": str(row[6] or ""),
-                    "handler": str(row[7] or ""),
+                    "last_batch": str(row[4] or ""),
+                    "make_handler": str(row[5] or ""),
+                    "pay_month": 0,
+                    "handler": "",
                 }
-    return result
+        # TC8M 全表批次映射: (ATB930, ATC931, ATC937) -> (发放月, 经办人)
+        sql8m = """
+            SELECT ATB930, ATC931, ATC937,
+                   MAX(ATC8G7) AS pay_month, MAX(AAE019) AS handler
+            FROM TC8M
+            GROUP BY ATB930, ATC931, ATC937
+        """
+        cursor.execute(sql8m)
+        batch_map: Dict[tuple, tuple] = {}
+        for row in cursor.fetchall():
+            key = (int(row[0] or 0), int(row[1] or 0), str(row[2] or ""))
+            batch_map[key] = (int(row[3] or 0), str(row[4] or ""))
+    for info in all_info.values():
+        pay_month, handler = batch_map.get(
+            (info["unit_code"], info["last_pay_ym"], info["last_batch"]), (0, ""))
+        info["pay_month"] = pay_month
+        info["handler"] = handler
+    _cache_set(_PERSON_SYSTEM_INFO_CACHE, all_info)
+    return {c: all_info[c] for c in certs if c in all_info}
 
 
 def get_depts(conn, pay_month: int = 0) -> List[str]:

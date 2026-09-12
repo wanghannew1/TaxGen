@@ -213,23 +213,23 @@ def build_zero_salary_suggestions(conn, pay_month, combos, roster=None, handler=
                 continue
             b_certs[cert] = p
         if b_certs:
-            from queries import (get_person_units_contract, get_certs_in_system,
-                                 get_tc90_salary_end_dates, get_person_system_info)
-            contract_map = get_person_units_contract(conn, list(b_certs))
+            from queries import get_person_tc90_info, get_person_system_info
+            # TC90 一次全表合并: 在系统判定 + 合同单元/经办人 + 工资结束年月
+            # (2026-09-12 性能优化: 原 3 个分批 IN 查询合并为单次全表 ~1.4s + 5 分钟缓存)
+            tc90_info = get_person_tc90_info(conn)
             # B 类三分类 (2026-09-11 用户确认):
             # 不在系统 (TC90 无合同, 人工管理) → 默认不生成, 面板体现让用户确认;
             # 在系统但工资结束年月 (TC90.ATC90AV) < 发放月 → 已离职, 默认不生成+建议减员;
             # 在系统且在册在职 → 维持 B1/B2 (默认 declare 保留在册)
             # 在系统判定口径: TC90 有无合同为准 (AC01 仅个人基本信息, 不判定系统管理);
             # 同一证件多份合同时以最后一份 (ATC90C 最大) 为准
-            in_system = get_certs_in_system(conn, list(b_certs))
-            salary_ends = get_tc90_salary_end_dates(conn, list(b_certs))
+            in_system = set(tc90_info)
             # 在系统人员展示: 结算单元/最后发薪工资单/工资结束年月/经办人 (2026-09-11 用户需求)
             system_info = get_person_system_info(conn, list(in_system)) if in_system else {}
             y, m = divmod(max(salary_months), 100)
             hire_start = f"{y - 1:04d}-{m:02d}-01"  # 近12个月入职 → B1 新签合同未做工资
             for cert, p in b_certs.items():
-                info = contract_map.get(cert, {})
+                info = tc90_info.get(cert, {})
                 unit = int(info.get("unit_code") or 0)
                 unit_name = str(info.get("unit_name") or "")
                 if unit in excl_codes:
@@ -257,15 +257,14 @@ def build_zero_salary_suggestions(conn, pay_month, combos, roster=None, handler=
                     "salary_months": [],
                     "income_total": 0.0,
                 })
+                end_ym = int(info.get("salary_end_ym") or 0)
                 if cert not in in_system:
                     # 不在系统管理 (人工管理): 默认不生成零申报, 面板体现由用户确认
                     p_entry["category"] = CAT_B_OUTSIDE
-                elif cert in salary_ends and \
-                        salary_ends[cert].year * 100 + salary_ends[cert].month \
-                        < min(salary_months):
+                elif end_ym and end_ym < min(salary_months):
                     # 工资结束年月(ATC90AV)早于所属年月 → 判定已离职: 默认不生成, 建议减员
                     p_entry["category"] = CAT_B_LEFT
-                    p_entry["_end_ym"] = salary_ends[cert].year * 100 + salary_ends[cert].month
+                    p_entry["_end_ym"] = end_ym
                 else:
                     p_entry["category"] = CAT_B_ROSTER
                     p_entry["_is_new"] = is_new
@@ -273,8 +272,6 @@ def build_zero_salary_suggestions(conn, pay_month, combos, roster=None, handler=
                     si = system_info.get(cert, {})
                     u_code = unit or int(si.get("unit_code") or 0)
                     u_name = unit_name or str(si.get("unit_name") or "")
-                    end_ym = salary_ends[cert].year * 100 + salary_ends[cert].month \
-                        if cert in salary_ends else 0
                     handler = (str(si.get("handler") or "")
                                or str(si.get("make_handler") or "")
                                or str((info.get("contract_handlers") or [""])[0] or ""))
