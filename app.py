@@ -579,7 +579,11 @@ def api_generate():
                                             raw_records=raw_records if merge_by_person else None,
                                             merge_mode="pay_month" if merge_by_pay_month else "month",
                                             main_units=main_units,
-                                            annual_avg_wage=annual_avg_wage)
+                                            annual_avg_wage=annual_avg_wage,
+                                            merge_choices=merge_choices if merge_by_person else None,
+                                            zero_choices=zero_choices,
+                                            persist_merge_choices=bool(data.get("persist_merge_choices")),
+                                            persist_zero_choices=bool(data.get("persist_zero_choices")))
             elif tpl == "laborService":
                 lab_records, lab_raw, lab_combos = build_labor_service_records(
                     conn, raw_records, confirmed_combos, month,

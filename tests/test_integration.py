@@ -79,7 +79,8 @@ class TestTemplateGeneration:
         wb = load_workbook(result.file_path)
         ws = wb.active
         assert ws.max_row == len(records) + 1  # 表头 + 数据行
-        assert ws.max_column == 30  # 30 列（含占位列"住房公积金调整"）
+        assert ws.max_column == 31  # 30 列（含占位列"住房公积金调整"）+ 第31列"工号(实际取用ID)"
+        assert ws.cell(row=1, column=31).value == "工号(实际取用ID)"  # 工号列留空, 实际ID单独成列
     
     def test_generate_labor_service(self, conn, output_dir):
         """测试劳务报酬所得模板生成"""
@@ -274,19 +275,23 @@ class TestGenerateEndToEnd:
         wb = load_workbook(result.file_path)
         inc = wb["正常工资薪金收入"]
         vs = wb["验证报告"]
-        # 表头: 收入表30列 + 组合合并列 + 发放经办人 + 原28列 = 60列
-        assert vs.max_column == 60
+        # 表头: 收入表30列 + 工号(实际取用ID) + 组合合并列 + 发放经办人 + 原28列 = 61列
+        assert vs.max_column == 61
         headers = [vs.cell(row=1, column=c).value for c in range(1, vs.max_column + 1)]
         assert "ATC930" in headers
-        assert headers[30] == "结算单元名称-所属月份-批次"
-        assert headers[31] == "发放经办人"
-        assert headers[32] == "ATC930"
-        # 逐行一一对应: 收入表前30列与验证报告同列同值（跳过空列）
+        assert headers[30] == "工号(实际取用ID)"  # 第31列(索引30)为实际ID
+        assert headers[31] == "结算单元名称-所属月份-批次"
+        assert headers[32] == "发放经办人"
+        assert headers[33] == "ATC930"
+        # 逐行一一对应: 收入表前30列与验证报告同列同值（跳过空列）; 工号列数据行均留空, 第31列ID一致
         assert vs.max_row == inc.max_row
         for r in range(1, inc.max_row + 1):
             for c in (1, 2, 3, 4, 5, 7, 8, 9, 10, 18, 30):
                 assert vs.cell(row=r, column=c).value == inc.cell(row=r, column=c).value, \
                     f"row{r} col{c} 不一致"
+            if r > 1:  # 表头行的工号列是标题文本, 只有数据行留空
+                assert inc.cell(row=r, column=1).value in (None, ""), "工号列必须留空"
+            assert vs.cell(row=r, column=31).value == inc.cell(row=r, column=31).value
 
     def test_records_have_tc930_id(self, conn):
         """查询到的每条记录 tc930_id 必须非零"""

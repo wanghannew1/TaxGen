@@ -72,12 +72,19 @@ def generate_normal_salary(records: List[SalaryRecord], title: str, output_dir: 
                            raw_records: Optional[List[SalaryRecord]] = None,
                            merge_mode: str = "month",
                            main_units: Optional[set] = None,
-                           annual_avg_wage: float = 120000) -> GenerateResult:
+                           annual_avg_wage: float = 120000,
+                           merge_choices: Optional[dict] = None,
+                           zero_choices: Optional[dict] = None,
+                           persist_merge_choices: bool = False,
+                           persist_zero_choices: bool = False) -> GenerateResult:
     """生成正常工资薪金所得 Excel 模板
 
     新增 tc93_all: TC93总表(全字段), abnormal: 异常记录, abnormal_reasons: 过滤原因
     merge_mode: "month"=按人+所属月份合并, "pay_month"=按人+发放月份合并(每人一行)
     annual_avg_wage: 年平均工资总额(默认12万)，验证报告按 3 倍判断经济补偿是否达交税标准
+    merge_choices: {证件号: 'double'|'single'|'skip'} 用户确认的三险一金合并方式，写入"合并验证"sheet
+    zero_choices: {证件号: 'declare'|'skip'} 用户确认的零申报选择，写入"零申报验证"sheet
+    persist_merge_choices/persist_zero_choices: 本次是否勾选"记住"（持久化）, 验证 sheet 记录
     """
     os.makedirs(output_dir, exist_ok=True)
     timestamp = datetime.now().strftime("%Y%m%d%H%M%S")
@@ -165,8 +172,8 @@ def generate_normal_salary(records: List[SalaryRecord], title: str, output_dir: 
     ]
     for col, h in enumerate(headers, 1):
         ws.cell(row=1, column=col, value=h)
-    
-    # 写入数据
+    # 工号列留空：人员标识实际取用的职工号(ID)单独列于第31列"工号(实际取用ID)"
+    ws.cell(row=1, column=len(headers) + 1, value="工号(实际取用ID)")
     validations = []
     income_rows = []  # 收入表每行30列值, 供验证报告逐行1:1复制
     for idx, rec in enumerate(records, 1):
@@ -175,7 +182,6 @@ def generate_normal_salary(records: List[SalaryRecord], title: str, output_dir: 
         own_combos, own_combo_full = _row_combos(rec)
         remark_text = build_remark_text(own_combos) or title
 
-        ws.cell(row=row, column=1, value=rec.职工号)
         ws.cell(row=row, column=2, value=rec.姓名)
         ws.cell(row=row, column=3, value="居民身份证")
         ws.cell(row=row, column=4, value=rec.身份证)
@@ -186,11 +192,13 @@ def generate_normal_salary(records: List[SalaryRecord], title: str, output_dir: 
         ws.cell(row=row, column=10, value=rec.公积金个人)
         ws.cell(row=row, column=18, value=0)  # 企业(职业)年金 = 0
         ws.cell(row=row, column=30, value=remark_text)
+        ws.cell(row=row, column=31, value=rec.职工号)
         income_rows.append([
-            rec.职工号, rec.姓名, "居民身份证", rec.身份证, income, None,
+            None, rec.姓名, "居民身份证", rec.身份证, income, None,
             rec.养老个人, rec.医疗个人, rec.失业个人, rec.公积金个人,
             None, None, None, None, None, None, None, 0,
             None, None, None, None, None, None, None, None, None, None, None, remark_text,
+            rec.职工号,
         ])
         
         # 左 = 本期收入 − 养老 − 失业 − 医疗 − 公积金 − 意外险 + 本次免税(ATC936)
@@ -228,7 +236,7 @@ def generate_normal_salary(records: List[SalaryRecord], title: str, output_dir: 
     # 验证报告与收入表逐行一一对应: 收入表30列原样复制 + 新增组合合并列/发放经办人 + 原验算列右移
     vs = wb.create_sheet("验证报告")
     thr = 3 * annual_avg_wage
-    vs_headers = headers + [
+    vs_headers = headers + ["工号(实际取用ID)"] + [
         "结算单元名称-所属月份-批次", "发放经办人",
         "ATC930", "姓名", "结算单元名称", "所属月份", "批次",
         "本次工资总额(ATC93AA)", "本次免税(ATC936)", "大病险（个人承担）(ATC93BD)", "补缴及退款保险差额（个人）(ATC93BE)", "个人交纳现金(ATC93X3)", "本期收入",
@@ -282,34 +290,59 @@ def generate_normal_salary(records: List[SalaryRecord], title: str, output_dir: 
         generate_merge_detail_sheet(wb, raw_records, records, merge_mode)
     generate_formula_explanation_sheet(wb, records)
     generate_field_mapping_sheet(wb)
+    if merge_choices or zero_choices:
+        name_map = _build_person_name_map(records, raw_records, tc93_all, abnormal)
+    if merge_choices:
+        generate_merge_verification_sheet(wb, merge_choices, name_map, persist_merge_choices)
+    if zero_choices:
+        generate_zero_verification_sheet(wb, zero_choices, records, name_map, persist_zero_choices)
     add_explanation_sheet(wb, [
         ("正常工资薪金收入", [
             "30 列个税申报模板（含占位列'住房公积金调整'），一行为一人（按人合并）。",
             "本期收入 = 应发工资 − （独生子女费+采暖费） − 大病险（个人） − 补缴及退款保险差额（个人） + 交纳现金 − 个人欠款。",
             "字段与算法详见 docs/本期收入算法说明.md；ATC 字段注释见 docs/数据表字段注释.md。",
             "五险一金列取个人缴部分，企业(职业)年金恒为 0，备注填该人员归属的结算单元名称（有主结算单元写主单元，否则写当月第一次发薪的结算单元，仅一个名称≤50字符）。",
+            "工号列按需求留空不填；系统实际取用的人员标识（职工号ID）单独列于第31列'工号(实际取用ID)'：",
+            "正常人员=AC01.AAC001 个人编号；名单零申报注入人员（无个人编号、职工号兜底为证件号）则该列=证件号。",
         ]),
         ("验证报告", [
-            "与'正常工资薪金收入'sheet 逐行一一对应：前30列为收入表原样复制，随后为该行人员实际涉及的组合列（结算单元-所属月-批次，不受字数限制，该人员跨多个组合分号连接）与发放经办人，再向右为原验算列。",
+            "与'正常工资薪金收入'sheet 逐行一一对应：前30列为收入表原样复制（工号列同样留空），",
+            "第31列'工号(实际取用ID)'与收入表一致，随后为该行人员实际涉及的组合列（结算单元-所属月-批次，不受字数限制，该人员跨多个组合分号连接）与发放经办人，再向右为原验算列。",
             "左=右校验：左 = 本期收入 − 养老 − 失业 − 医疗 − 公积金 − 意外险 + 本次免税(ATC936)；",
             "右 = (实发 − 经济补偿金) + 税后工会会费 + 个人代理费 + 个税 + 个人其他调整(ATC93AG)；|左−右|<0.01 为通过。",
             "大病险个人(ATC93BD)左右两侧同项销项不单列；经济补偿金(ATC93M)含在实发中但属一次性补偿，",
             "验证时从实发扣回；另按 3×年平均工资判断是否达交税标准。公式推导详见'验算公式说明'sheet。",
         ]),
+        ("合并验证", [
+            "记录本次生成时用户逐人确认的三险一金合并方式（'检查合并规则并确认'弹窗的选择）：",
+            "多月合并(double)：三险一金跨所属月全部合计（默认口径，未在主账弹窗确认的人员按此处理）；",
+            "单月(single)：三险一金只取最近一次三险>0的所属月（发放月有三险则=发放月）；",
+            "不报(skip)：三险一金全按0上报（收入/个税仍正常合计；仅发放月无三险时生效，发放月有三险时自动回落多月合并）。",
+            "'本次已记住'=勾选记住时写入 SQLite merge_override 表，下次确认弹窗默认选中该项。",
+        ]),
+        ("零申报验证", [
+            "记录本次生成时用户对本期收入为0人员是否生成零申报的逐人确认（'检查零申报并确认'弹窗的选择）：",
+            "生成(declare)：保留/注入该人员零申报记录（收入与五险一金全0上报）；",
+            "不生成(skip)：该人员零申报被剔除，不出现在本文件收入表中。",
+            "未在零申报弹窗确认的零收入人员默认保留（生成零申报）；'本次已记住'=写入 SQLite zero_override 表，下次弹窗默认选中。",
+        ]),
         ("TC93总表", [
             "TC93 工资原始全字段，按身份证排序、同证相邻；重复次数=该身份证出现行数。",
+            "无需用户确认，生成时自动从 TC93 查询原始工资记录（只读 SELECT）。",
         ]),
         ("异常记录(已过滤)", [
-            "状态异常被过滤的条目，附过滤原因。",
+            "状态异常被过滤的条目，附过滤原因；无需用户确认，自动过滤。",
         ]),
         ("报税结算单元", [
             "本次生成的结算单元组合（单元+所属月+发放月+批次+人数+合计收入+经办人）。",
+            "由所选批次自动聚合生成，无需用户确认。",
         ]),
         ("原始明细(未合并)", [
-            "合并前的逐条明细，便于追溯合并过程。",
+            "合并前的逐条明细，便于追溯合并过程；自动生成，无需用户确认。",
         ]),
         ("合并明细", [
-            "按人（+所属月或发放月）合并后的汇总与合并痕迹。",
+            "按人（+所属月或发放月）合并后的汇总与合并痕迹；自动生成，无需用户确认。",
+            "用户对合并方式的逐人确认选择记录在'合并验证'sheet。",
         ]),
         ("验算公式说明", [
             "本期收入、左、右公式的详细推导、字段对照与实际示例。",
@@ -736,3 +769,78 @@ def generate_merge_detail_sheet(wb: Workbook, raw_records: List[SalaryRecord],
         for col, val in enumerate(vals, 1):
             ws.cell(row=row, column=col, value=val)
         row += 1
+
+
+def _build_person_name_map(records, raw_records, tc93_all, abnormal) -> dict:
+    """构建 证件号->姓名 映射，供合并/零申报验证 sheet 显示人员姓名。
+
+    合并后记录优先（多来源合并时姓名取合并结果），缺失时从原始记录/TC93总表/异常表补齐。
+    """
+    name_of = {}
+    for r in list(records or []) + list(raw_records or []):
+        cert = str(getattr(r, "身份证", None) or getattr(r, "职工号", None) or "")
+        if cert and cert not in name_of:
+            name_of[cert] = getattr(r, "姓名", None) or ""
+    for d in list(tc93_all or []) + list(abnormal or []):
+        cert = str(d.get("身份证") or d.get("AAC001") or "")
+        if cert and cert not in name_of:
+            name_of[cert] = d.get("姓名") or d.get("AAC003") or ""
+    return name_of
+
+
+def generate_merge_verification_sheet(wb: Workbook, merge_choices: dict,
+                                      name_of: dict, persist: bool = False):
+    """合并验证sheet：记录用户对跨月合并人员三险一金合并方式的逐人确认过程。
+
+    merge_choices: {证件号: 'double'|'single'|'skip'}，来自合并规则确认弹窗。
+    """
+    ws = wb.create_sheet("合并验证")
+    headers = ["证件号码", "姓名", "用户确认方式", "生效口径", "本次已记住"]
+    for col, h in enumerate(headers, 1):
+        ws.cell(row=1, column=col, value=h)
+    mode_label = {
+        "double": "多月合并",
+        "single": "单月",
+        "skip": "不报",
+    }
+    mode_rule = {
+        "double": "三险一金跨所属月全部合计（默认口径）",
+        "single": "三险一金只取最近一次三险>0的所属月（发放月有三险则=发放月）",
+        "skip": "三险一金全按0上报（仅发放月无三险时生效，发放月有三险时自动回落多月合并）",
+    }
+    for idx, (cert, mode) in enumerate(sorted(merge_choices.items()), 2):
+        vals = [cert, name_of.get(cert, ""), mode_label.get(mode, mode),
+                mode_rule.get(mode, ""), "是" if persist else "否"]
+        for col, val in enumerate(vals, 1):
+            ws.cell(row=idx, column=col, value=val)
+    for col, h in enumerate(headers, 1):
+        ws.column_dimensions[get_column_letter(col)].width = max(12, len(str(h)) * 2)
+
+
+def generate_zero_verification_sheet(wb: Workbook, zero_choices: dict,
+                                     records: List[SalaryRecord], name_of: dict,
+                                     persist: bool = False):
+    """零申报验证sheet：记录用户对本期收入为0人员是否生成零申报的逐人确认过程。
+
+    zero_choices: {证件号: 'declare'|'skip'}
+    """
+    ws = wb.create_sheet("零申报验证")
+    headers = ["证件号码", "姓名", "用户确认方式", "实际结果", "本次已记住"]
+    for col, h in enumerate(headers, 1):
+        ws.cell(row=1, column=col, value=h)
+    final_certs = {str(r.身份证 or r.职工号 or "").strip().upper() for r in (records or [])}
+    for idx, (cert, mode) in enumerate(sorted(zero_choices.items()), 2):
+        c = str(cert or "").strip().upper()
+        if mode == "skip":
+            result = "未生成（已跳过，不在本文件收入表中）"
+        elif c in final_certs:
+            result = "已生成（零申报记录保留/注入，含于本文件收入表）"
+        else:
+            result = "未生成（受特殊结算单元排除等规则过滤）"
+        vals = [cert, name_of.get(cert, ""),
+                "生成零申报" if mode == "declare" else "不生成(跳过)",
+                result, "是" if persist else "否"]
+        for col, val in enumerate(vals, 1):
+            ws.cell(row=idx, column=col, value=val)
+    for col, h in enumerate(headers, 1):
+        ws.column_dimensions[get_column_letter(col)].width = max(12, len(str(h)) * 2)
