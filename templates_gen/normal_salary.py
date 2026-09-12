@@ -62,7 +62,16 @@ def _classify_row(rec: SalaryRecord, income, trips, merge_choices,
         if cert in unpaid_certs:
             return "零申报", "A2: 做了工资当月未发放"
         if cert not in raw_certs:
-            return "零申报", "B类: 名单在册无工资（零申报注入）"
+            # B 类 (名单在册零申报注入): 工资所属年月/当月批次 = 该人最后一次真实发放
+            # (tax_zero.build_roster_zero_records 取 TC93.last_pay_ym/last_batch);
+            # 无历史发放 → 注明"当期无未发工资，无历史发放记录"，不臆造所属月给用户错觉
+            last_ym = int(getattr(rec, "工资所属年月", 0) or 0)
+            last_seq = str(getattr(rec, "当月批次", "") or "")
+            if last_ym:
+                note = f"；当期无未发工资，上次发放:{last_ym}" + (f"-批次{last_seq}" if last_seq else "")
+            else:
+                note = "；当期无未发工资，无历史发放记录"
+            return "零申报", "B类: 名单在册无工资（零申报注入）" + note
         return "零申报", "A1: 工资表收入为0"
     if trips and len(trips) > 1:
         months = sorted({t[1] for t in trips})
@@ -371,7 +380,8 @@ def generate_normal_salary(records: List[SalaryRecord], title: str, output_dir: 
             "第32列'申报类别'+第33列'申报类别说明'逐行标注申报类型：",
             "正常申报 = 当月报当月、无合并、无零申报；",
             "合并申报 = 跨多个所属月 / 同月多个批次 / 跨多个结算单元，并以 '；' 列出跨月数、批次数、单元数及三险合并口径（多月合并=默认、单月、不报）；",
-            "零申报 = 本期收入为0；子类 A1=工资表收入为0、A2=做了工资当月未发放（TC8M 未发放月）、B类=名单在册无工资（零申报注入，无 TC93 原始记录）。",
+            "零申报 = 本期收入为0；子类 A1=工资表收入为0、A2=做了工资当月未发放（TC8M 未发放月）、B类=名单在册无工资（零申报注入，无 TC93 原始记录）；",
+             "B 类行'所属月份/批次' = 该人最后一次真实发放的所属月-批次（TC93），无历史发放则所属月为空并注明'当期无未发工资，无历史发放记录'（不臆造所属月）。",
             "随后为该行人员实际涉及的组合列（结算单元-所属月-批次，不受字数限制，该人员跨多个组合分号连接）与发放经办人，再向右为原验算列。",
             "左=右校验：左 = 本期收入 − 养老 − 失业 − 医疗 − 公积金 − 意外险 + 本次免税(ATC936)；",
             "右 = (实发 − 经济补偿金) + 税后工会会费 + 个人代理费 + 个税 + 个人其他调整(ATC93AG)；|左−右|<0.01 为通过。",

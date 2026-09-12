@@ -600,3 +600,93 @@ class TestFilterZero:
             unpaid_pairs={("C1", 202606), ("C2", 202606)},
             paid_units={100})
         assert [r["身份证"] for r in kept] == ["C2"]
+
+
+class TestBuildRosterZeroRecords:
+    """build_roster_zero_records: B 类注入记录取真实 last_pay_ym/last_batch。
+
+    2026-09-12 用户确认: 不再臆造"组合集合最小所属月" (该月该单元未必做了工资表),
+    改取该人最后一次真实发放的所属年月-批次; 从未发过工资 (无 TC93 记录) → 年月=0 批次空。
+    """
+
+    @pytest.fixture(autouse=True)
+    def patch_sources(self, monkeypatch):
+        self.contract_map = {}
+        self.sys_info = {}
+
+        def fake_contract(conn, certs):
+            return dict(self.contract_map)
+
+        def fake_sys_info(conn, certs):
+            return dict(self.sys_info)
+
+        monkeypatch.setattr("queries.get_person_units_contract", fake_contract)
+        monkeypatch.setattr("queries.get_person_system_info", fake_sys_info)
+
+    def _call(self, month=202606, choices=None, roster=None, excl=set(), checked=set()):
+        roster = roster if roster is not None else [_roster(cert="C1")]
+        choices = choices if choices is not None else {"C1": "declare"}
+        return tax_zero.build_roster_zero_records(None, month, roster, choices, excl, checked)
+
+    def test_uses_last_pay_ym_batch(self):
+        # 有历史发放 → 所属月/批次 取 last_pay_ym/last_batch, 非臆造组合最小月
+        self.contract_map = {"C1": {"unit_code": 100, "unit_name": "单元100"}}
+        self.sys_info = {"C1": {"last_pay_ym": 202604, "last_batch": "2"}}
+        rows = self._call()
+        assert len(rows) == 1
+        assert rows[0].工资所属年月 == 202604
+        assert rows[0].当月批次 == "2"
+        assert rows[0].工资总额 == Decimal("0")
+
+    def test_no_history_zero_month(self):
+        # 从未发过工资 (无 TC93 记录) → 年月=0 批次空, 验证报告备注"无历史发放记录"
+        self.contract_map = {"C1": {"unit_code": 100, "unit_name": "单元100"}}
+        self.sys_info = {}
+        rows = self._call()
+        assert len(rows) == 1
+        assert rows[0].工资所属年月 == 0
+        assert rows[0].当月批次 == ""
+
+    def test_last_batch_empty_kept_ym(self):
+        # 有年月但批次为空 → 年月保留, 批次留空
+        self.contract_map = {"C1": {"unit_code": 100, "unit_name": "单元100"}}
+        self.sys_info = {"C1": {"last_pay_ym": 202605, "last_batch": ""}}
+        rows = self._call()
+        assert rows[0].工资所属年月 == 202605
+        assert rows[0].当月批次 == ""
+
+    def test_declare_only_included_others_dropped(self):
+        # 仅 declare 的人进入注入; skip 的不注入
+        self.contract_map = {"C1": {"unit_code": 100, "unit_name": "单元100"},
+                             "C2": {"unit_code": 100, "unit_name": "单元100"}}
+        self.sys_info = {"C1": {"last_pay_ym": 202605, "last_batch": "1"},
+                         "C2": {"last_pay_ym": 202605, "last_batch": "1"}}
+        roster = [_roster(cert="C1"), _roster(cert="C2")]
+        rows = self._call(choices={"C1": "declare", "C2": "skip"}, roster=roster)
+        assert [r.身份证 for r in rows] == ["C1"]
+
+    def test_checked_certs_excluded(self):
+        # checked_certs (已在收入表的人) 不重复注入
+        self.contract_map = {"C1": {"unit_code": 100, "unit_name": "单元100"}}
+        self.sys_info = {"C1": {"last_pay_ym": 202605, "last_batch": "1"}}
+        rows = self._call(checked={"C1"})
+        assert rows == []
+
+    def test_excl_codes_dropped(self):
+        # 合同单元为完全排除单元 → 剔除
+        self.contract_map = {"C1": {"unit_code": 102, "unit_name": "单元102"}}
+        self.sys_info = {"C1": {"last_pay_ym": 202605, "last_batch": "1"}}
+        rows = self._call(excl={102})
+        assert rows == []
+
+    def test_leaved_before_month_end_excluded(self):
+        # 名单离职日期早于月末 → 剔除
+        self.contract_map = {"C1": {"unit_code": 100, "unit_name": "单元100"}}
+        self.sys_info = {"C1": {"last_pay_ym": 202605, "last_batch": "1"}}
+        roster = [_roster(cert="C1", leave="2026-05-10")]
+        rows = self._call(roster=roster)
+        assert rows == []
+
+    def test_no_declare_returns_empty(self):
+        rows = self._call(choices={})
+        assert rows == []

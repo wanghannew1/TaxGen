@@ -354,19 +354,23 @@ def build_zero_salary_suggestions(conn, pay_month, combos, roster=None, handler=
 
 
 def build_roster_zero_records(conn, pay_month, roster, zero_choices, excl_codes,
-                              checked_certs, salary_months=None):
+                              checked_certs):
     """名单在册无工资人员 (B 类) 被确认"生成" → 构造零申报 SalaryRecord 列表。
 
     注入正常工资生成: 收入/五险皆 0, 保留名单身份信息 (姓名/证件/工号),
     结算单元取合同单元 (TC90), 关联不到则 0。
+    工资所属年月/当月批次 (2026-09-12 用户确认): 不再臆造"组合集合中最小的所属月"
+    (该月该单元可能并未做工资表, 给用户错觉); 改取该人员最后一次真实发放的
+    所属年月-批次 (get_person_system_info.last_pay_ym/last_batch, TC93 结算记录)。
+    从未在系统发过工资 (无 TC93 记录) → 年月=0 批次空, 验证报告申报类别说明备注
+    "当期无未发工资，无历史发放记录", 让用户知道真相。
     """
     declare_certs = {str(c).strip().upper() for c, m in (zero_choices or {}).items()
                      if m == "declare"}
     if not declare_certs or not roster:
         return []
-    from queries import get_person_units_contract
+    from queries import get_person_units_contract, get_person_system_info
     month_end = _month_end(pay_month)
-    sm = sorted(salary_months or [pay_month])[0]
     checked = {str(c).strip().upper() for c in (checked_certs or set())}
     candidates = {}
     for p in roster:
@@ -380,20 +384,22 @@ def build_roster_zero_records(conn, pay_month, roster, zero_choices, excl_codes,
     if not candidates:
         return []
     contract_map = get_person_units_contract(conn, list(candidates))
+    sys_info = get_person_system_info(conn, list(candidates))
     rows = []
     for cert, p in candidates.items():
         info = contract_map.get(cert, {})
         unit = int(info.get("unit_code") or 0)
         if unit in excl_codes:
             continue
+        last = sys_info.get(cert, {})
         rows.append(SalaryRecord(
             职工号=str(p.get("emp_no") or "") or cert,
             姓名=str(p.get("name") or ""),
             身份证=cert,
-            工资所属年月=sm,
+            工资所属年月=int(last.get("last_pay_ym") or 0),
             结算单元=unit,
             结算单元名称=str(info.get("unit_name") or ""),
-            当月批次="",
+            当月批次=str(last.get("last_batch") or ""),
             应发工资=Decimal("0"), 实发工资=Decimal("0"), 个人所得税=Decimal("0"),
             工资总额=Decimal("0"), 独生子女费=Decimal("0"), 采暖费=Decimal("0"),
             奖金=Decimal("0"), 养老个人=Decimal("0"), 医疗个人=Decimal("0"),

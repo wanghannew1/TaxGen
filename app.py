@@ -533,8 +533,7 @@ def api_generate():
                             for r in records}
                 _injected = build_roster_zero_records(
                     conn, month, _roster, zero_choices, excl_codes,
-                    checked_certs=_checked,
-                    salary_months=sorted(salary_months if confirmed_combos else {month}))
+                    checked_certs=_checked)
                 if _injected:
                     records = records + _injected
         warnings = []
