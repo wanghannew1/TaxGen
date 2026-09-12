@@ -1169,6 +1169,7 @@
         let lastMergePayMonth = 0;
         let zeroChoices = {};
         let zeroConfirmed = false;  // 本月是否已检查并确认零申报 (2026-09-12: 生成前校验)
+        let zeroExtraCount = 0;  // 零申报确认后较工资表人数的净增: B类+A2 declare − A1 skip (2026-09-12 用户需求)
         let persistZeroChoices = false;
         let zeroUnitsData = [];
         let rosterLoaded = false;
@@ -1249,6 +1250,7 @@
             mergeConfirmedBadge.textContent = '';
             zeroChoices = {};
             zeroConfirmed = false;
+            zeroExtraCount = 0;
             persistZeroChoices = false;
             zeroConfirmedBadge.style.display = 'none';
             zeroConfirmedBadge.textContent = '';
@@ -1803,6 +1805,19 @@
             zeroConfirmed = true;  // 已检查并确认零申报
             zeroConfirmedBadge.textContent = `已确认 ${n} 人零申报`;
             zeroConfirmedBadge.style.display = 'block';
+            // 统计口径统一 (2026-09-13 用户需求): 生成人数 = TC8M 发放人数 + 零申报净增
+            //   B类(名单在册) 无 TC93 记录 → 不在发放人数内, declare 时 +1
+            //   A2(做了未发) 不在 TC8M 发放表 → 不在发放人数内, declare 时 +1
+            //   A1(收入为0) 有 TC93 记录 → 已在发放人数内, skip 时从生成文件剔除 −1
+            zeroExtraCount = 0;
+            zeroUnitsData.forEach(u => {
+                (u.persons || []).forEach(p => {
+                    const choice = zeroChoices[p.cert_no];
+                    if (choice === 'declare' && p.category !== 'a1_income_zero') zeroExtraCount += 1;
+                    else if (choice === 'skip' && p.category === 'a1_income_zero') zeroExtraCount -= 1;
+                });
+            });
+            updateListSummary();
             bootstrap.Modal.getInstance(zeroConfirmModal).hide();
         }
 
@@ -2224,7 +2239,15 @@
 
             const isFiltering = listFilterMonth.value || listFilterUnit.value || listFilterSeq.value;
             const filterInfo = isFiltering ? `（筛选后 ${checkedVisible.length}/${visibleCbs.length} 行被选中）` : '';
-            listSummary.textContent = `已选择 ${totalChecked.length} 个批次，共 ${persons} 人·笔，合计收入 ${formatNum(income)} 元 ${filterInfo}`;
+            // 统计口径统一 (2026-09-13 用户需求): 显示人数 = 工资表人数 + 零申报净增
+            let personText = `共 ${persons} 人`;
+            if (zeroConfirmed && zeroExtraCount !== 0) {
+                const total = persons + zeroExtraCount;
+                personText = zeroExtraCount > 0
+                    ? `共 ${total} 人（含零申报新增 ${zeroExtraCount} 人）`
+                    : `共 ${total} 人（零申报剔除 ${-zeroExtraCount} 人）`;
+            }
+            listSummary.textContent = `已选择 ${totalChecked.length} 个批次，${personText}，合计收入 ${formatNum(income)} 元 ${filterInfo}`;
         }
 
         async function importNames() {
