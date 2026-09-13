@@ -227,20 +227,32 @@ class TestBuildCandidatePayload:
             self._row("A001", "张三"),
             self._row("B002", "李四"),
             self._row("C003", "王五"),
+            self._row("D004", "赵六"),
         ]
         member_sets = {
             "paid": {"A001", "B002"},
             "unpaid": {"B002", "C003"},
-            "contract": {"C003"},
+            "contract": {"C003", "D004"},
         }
         unit_map = {"A001": "结算单元A", "B002": "结算单元B"}
         candidates, counts = build_candidate_payload(add_list, [], [], member_sets, unit_map)
+        # 合同为排他标签 (与 build_verify_row 一致): C003 有未发薪则合同被抑制
         assert candidates["add"] == [
             {"cert_no": "A001", "name": "张三", "unit": "结算单元A", "reason": "发薪"},
             {"cert_no": "B002", "name": "李四", "unit": "结算单元B", "reason": "发薪+未发薪"},
-            {"cert_no": "C003", "name": "王五", "unit": "", "reason": "未发薪+合同"},
+            {"cert_no": "C003", "name": "王五", "unit": "", "reason": "未发薪"},
+            {"cert_no": "D004", "name": "赵六", "unit": "", "reason": "合同"},
         ]
-        assert counts == {"add": 3, "departed": 0, "pending": 0}
+        assert counts == {"add": 4, "departed": 0, "pending": 0}
+
+    def test_reason_contract_exclusive_of_paid(self):
+        # paid+contract 重叠: 合同被发薪抑制, 与 build_verify_row 语义一致
+        add_list = [self._row("E005", "孙七")]
+        member_sets = {"paid": {"E005"}, "unpaid": set(), "contract": {"E005"}}
+        candidates, counts = build_candidate_payload(add_list, [], [], member_sets, {})
+        assert candidates["add"] == [
+            {"cert_no": "E005", "name": "孙七", "unit": "", "reason": "发薪"}]
+        assert counts == {"add": 1, "departed": 0, "pending": 0}
 
     def test_departed_pending_fixed_reason(self):
         departed_list = [self._row("D001", "赵六")]

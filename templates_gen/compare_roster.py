@@ -156,14 +156,19 @@ def apply_compare_choices(add_list: List, departed_list: List, pending_list: Lis
 def _derive_add_reason(cert: str, member_sets: Dict) -> str:
     """增员候选 reason 推导: 按成员身份集合 (发薪/未发薪/合同) 多源 "+" 连接。
 
-    与 build_verify_row 的 reason_str 逻辑一致 (personnel_compare.py:289-296)。
+    与 build_verify_row 的 reason_str 逻辑一致 (personnel_compare.py:289-296):
+    合同为排他标签, 仅当无发薪且无未发薪时标记 (has_contract = contract_start
+    and not has_paid and not has_unpaid)。
     """
+    paid = set(member_sets.get("paid") or set())
+    unpaid = set(member_sets.get("unpaid") or set())
+    contract = set(member_sets.get("contract") or set())
     reasons = []
-    if cert in set(member_sets.get("paid") or set()):
+    if cert in paid:
         reasons.append("发薪")
-    if cert in set(member_sets.get("unpaid") or set()):
+    if cert in unpaid:
         reasons.append("未发薪")
-    if cert in set(member_sets.get("contract") or set()):
+    if cert in contract and cert not in paid and cert not in unpaid:
         reasons.append("合同")
     return "+".join(reasons)
 
