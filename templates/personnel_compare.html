@@ -17,6 +17,9 @@
         .nav-link.active { font-weight: 600; }
         .badge-warn { background: #fff3cd; color: #856404; border: 1px solid #ffeeba; border-radius: 4px; padding: 4px 8px; }
         #errorBox { display: none; }
+        .candidate-group-title { font-size: 0.95rem; font-weight: 600; }
+        .candidate-table th { font-size: 0.85rem; white-space: nowrap; }
+        .candidate-table td { font-size: 0.9rem; }
     </style>
 </head>
 <body>
@@ -41,38 +44,38 @@
         <div class="card">
             <div class="card-header"><strong>增减员比对</strong></div>
         <div class="card-body">
+            <div class="roster-status-panel alert alert-info mb-3 d-flex justify-content-between align-items-center flex-wrap gap-2">
+                <span id="rosterStatusText">名单状态加载中...</span>
+                <a href="/" class="btn btn-sm btn-outline-secondary" id="btnReimport">重新导入名单</a>
+            </div>
             <div class="alert alert-info mb-3" style="font-size: 0.9rem;">
-                上传个税端导出的境内人员信息列表（.xls），显式选择发薪月份时间段（起始~结束）和
+                基于已导入的个税端在册人员名单（境内+境外）进行比对，显式选择发薪月份时间段（起始~结束）和
                 未发薪工资表所属月份时间段（起始~结束），可选按经办时间精确过滤发薪记录。
                 系统按证件号码比对：发薪/未发薪/合同签署名单有但个税端没有的列为<strong>增员</strong>；
                 个税端有但不在上述名单的，进一步查询 TC90 合同终止日期——有离职日期的放入
                 <strong>近期离职人员</strong>，无离职日期的放入<strong>待确认近期离职人员</strong>。
-                生成结果为一个 Excel（三个 Sheet）。
+                生成前将逐人确认增员/离职候选（可排除），生成结果为一个 Excel（三个 Sheet）。
             </div>
             <div class="row g-2 align-items-end">
-                <div class="col-md-4">
-                    <label class="form-label">个税端导出文件（境内人员信息列表 .xls）</label>
-                    <input type="file" id="exportFile" class="form-control" accept=".xls">
-                </div>
-                <div class="col-md-2">
+                <div class="col-md-3">
                     <label class="form-label">发薪月份（起始，必选）</label>
                     <select id="payMonthStart" class="form-select">
                         <option value="">请选择月份</option>
                     </select>
                 </div>
-                <div class="col-md-2">
+                <div class="col-md-3">
                     <label class="form-label">发薪月份（结束）</label>
                     <select id="payMonthEnd" class="form-select">
                         <option value="">同起始</option>
                     </select>
                 </div>
-                <div class="col-md-2">
+                <div class="col-md-3">
                     <label class="form-label">未发薪所属月份（起始）</label>
                     <select id="unpaidMonthStart" class="form-select">
                         <option value="">不使用</option>
                     </select>
                 </div>
-                <div class="col-md-2">
+                <div class="col-md-3">
                     <label class="form-label">未发薪所属月份（结束）</label>
                     <select id="unpaidMonthEnd" class="form-select">
                         <option value="">同起始</option>
@@ -203,9 +206,32 @@
     </div>
 </div>
 
+<!-- 增减员逐人确认 Modal -->
+<div class="modal fade" id="confirmModal" tabindex="-1" aria-labelledby="confirmModalLabel" aria-hidden="true">
+    <div class="modal-dialog modal-dialog-scrollable modal-lg">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h5 class="modal-title" id="confirmModalLabel">增减员确认</h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="关闭"></button>
+            </div>
+            <div class="modal-body">
+                <p class="text-muted small" id="confirmModalSubtitle"></p>
+                <div class="d-flex gap-2 mb-3">
+                    <button type="button" class="btn btn-sm btn-outline-success" id="btnAllConfirm">全部确认</button>
+                    <button type="button" class="btn btn-sm btn-outline-danger" id="btnAllExclude">全部排除</button>
+                    <span class="text-muted small ms-2 align-self-center">排除仅影响增员/离职名单，零申报按零申报逻辑判断</span>
+                </div>
+                <div id="candidateGroups"></div>
+            </div>
+            <div class="modal-footer">
+                <button type="button" class="btn btn-primary" id="btnConfirmGenerate">确认并生成</button>
+            </div>
+        </div>
+    </div>
+</div>
+
 <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
 <script>
-    const exportFile = document.getElementById('exportFile');
     const payMonthStart = document.getElementById('payMonthStart');
     const payMonthEnd = document.getElementById('payMonthEnd');
     const unpaidMonthStart = document.getElementById('unpaidMonthStart');
@@ -248,12 +274,26 @@
     const filteredActiveCount = document.getElementById('filteredActiveCount');
     const filteredPayrollCount = document.getElementById('filteredPayrollCount');
     const fileInfo = document.getElementById('fileInfo');
+    const rosterStatusPanel = document.querySelector('.roster-status-panel');
+    const rosterStatusText = document.getElementById('rosterStatusText');
+    const confirmModal = document.getElementById('confirmModal');
+    const confirmModalSubtitle = document.getElementById('confirmModalSubtitle');
+    const candidateGroups = document.getElementById('candidateGroups');
+    const btnAllConfirm = document.getElementById('btnAllConfirm');
+    const btnAllExclude = document.getElementById('btnAllExclude');
+    const btnConfirmGenerate = document.getElementById('btnConfirmGenerate');
 
     function showError(msg) {
         errorBox.textContent = msg;
         errorBox.style.display = 'block';
     }
     function hideError() { errorBox.style.display = 'none'; }
+
+    function escapeHtml(s) {
+        return String(s ?? '').replace(/[&<>"']/g, m => ({
+            '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'
+        })[m]);
+    }
 
     function formatDate(d) {
         const y = d.getFullYear();
@@ -456,11 +496,167 @@
         hideError();
     });
 
+    // ===== 名单状态面板 =====
+    async function loadRosterStatus() {
+        try {
+            const resp = await fetch('/api/tax-roster/status');
+            if (!resp.ok) throw new Error(`服务器返回错误: ${resp.status}`);
+            const data = await resp.json();
+            if (!data.imported || data.total === 0) {
+                rosterStatusText.textContent = '名单为空，请先导入';
+                rosterStatusPanel.className = 'roster-status-panel alert alert-warning mb-3 d-flex justify-content-between align-items-center flex-wrap gap-2';
+                btnCompare.disabled = true;
+                return;
+            }
+            const parts = Object.entries(data.by_source || {}).map(([k, v]) => `${k} ${v}人`).join(' / ');
+            rosterStatusText.textContent = `个税端在册人员：${parts}，最近导入 ${data.latest_import || ''}`;
+            rosterStatusPanel.className = 'roster-status-panel alert alert-success mb-3 d-flex justify-content-between align-items-center flex-wrap gap-2';
+        } catch (e) {
+            // 获取失败不禁用按钮，用户仍可尝试比对
+            rosterStatusText.textContent = '名单状态获取失败';
+            rosterStatusPanel.className = 'roster-status-panel alert alert-warning mb-3 d-flex justify-content-between align-items-center flex-wrap gap-2';
+        }
+    }
+
+    // ===== 两阶段比对: 第一跳(无 choices) → 候选弹窗 → 第二跳(带 choices) =====
+    function buildFormData() {
+        const form = new FormData();
+        form.append('pay_month_start', payMonthStart.value);
+        form.append('pay_month_end', payMonthEnd.value || payMonthStart.value);
+        if (unpaidMonthStart.value) {
+            form.append('unpaid_month_start', unpaidMonthStart.value);
+            form.append('unpaid_month_end', unpaidMonthEnd.value || unpaidMonthStart.value);
+        }
+        if (contractStartTime.value) form.append('contract_start_time', contractStartTime.value);
+        if (contractEndTime.value) form.append('contract_end_time', contractEndTime.value);
+        form.append('termination_deadline', terminationDeadline.value);
+        if (enablePayTime.checked) {
+            form.append('pay_start_time', payStartTime.value);
+            form.append('pay_end_time', payEndTime.value);
+        }
+        const payHandlers = realVals(payHandlerFilter);
+        // 做工资: 选中"同发薪经办人"则跟随发薪; 否则用手动选择
+        const salaryHandlers = hasMarker(salaryHandlerFilter, SAME_PAY)
+            ? payHandlers : realVals(salaryHandlerFilter);
+        // 合同: 选中"同做工资经办人"则跟随做工资(其本身可能已跟随发薪); 否则用手动选择
+        const contractHandlers = hasMarker(contractHandlerFilter, SAME_SALARY)
+            ? salaryHandlers : realVals(contractHandlerFilter);
+        payHandlers.forEach(h => form.append('handler', h));
+        salaryHandlers.forEach(h => form.append('salary_handler', h));
+        contractHandlers.forEach(h => form.append('contract_handler', h));
+        Array.from(unitFilter.selectedOptions).forEach(o => { if (o.value) form.append('unit', o.value); });
+        Array.from(deptFilter.selectedOptions).forEach(o => { if (o.value) form.append('dept', o.value); });
+        return form;
+    }
+
+    const GROUP_META = [
+        { key: 'add', title: '增员', cls: 'text-success' },
+        { key: 'departed', title: '近期离职', cls: 'text-danger' },
+        { key: 'pending', title: '待确认近期离职', cls: 'text-info' }
+    ];
+
+    function renderCandidateGroups(data) {
+        const counts = data.counts || {};
+        const total = (counts.add || 0) + (counts.departed || 0) + (counts.pending || 0);
+        confirmModalSubtitle.textContent = `共 ${total} 名候选人员，请逐人确认是否增减员（默认确认，可切换排除）。排除仅影响增员/离职名单，零申报按零申报逻辑判断。`;
+        const blocks = [];
+        GROUP_META.forEach(g => {
+            const list = (data.candidates && data.candidates[g.key]) || [];
+            if (list.length === 0) return;
+            const rows = list.map(c => `
+                <tr class="candidate-row">
+                    <td>${escapeHtml(c.name)}</td>
+                    <td>${escapeHtml(c.cert_no)}</td>
+                    <td>${escapeHtml(c.unit)}</td>
+                    <td>${escapeHtml(c.reason)}</td>
+                    <td>
+                        <select class="form-select form-select-sm candidate-action" data-group="${g.key}" data-cert="${escapeHtml(c.cert_no)}">
+                            <option value="confirm" selected>确认</option>
+                            <option value="exclude">排除</option>
+                        </select>
+                    </td>
+                </tr>`).join('');
+            blocks.push(`
+                <div class="mb-3">
+                    <h6 class="candidate-group-title ${g.cls}">${g.title}（${list.length} 人）</h6>
+                    <table class="table table-sm table-bordered align-middle candidate-table">
+                        <thead>
+                            <tr><th>姓名</th><th>证件号</th><th>结算单元</th><th>原因</th><th>操作</th></tr>
+                        </thead>
+                        <tbody>${rows}</tbody>
+                    </table>
+                </div>`);
+        });
+        candidateGroups.innerHTML = blocks.join('');
+    }
+
+    let confirmModalResolve = null;
+    let confirmModalSettled = false;
+
+    function showConfirmModal(data) {
+        return new Promise(resolve => {
+            renderCandidateGroups(data);
+            confirmModalResolve = resolve;
+            confirmModalSettled = false;
+            bootstrap.Modal.getOrCreateInstance(confirmModal).show();
+        });
+    }
+
+    function settleConfirmModal(choices) {
+        if (confirmModalSettled) return;
+        confirmModalSettled = true;
+        const resolve = confirmModalResolve;
+        confirmModalResolve = null;
+        if (resolve) resolve(choices);
+    }
+
+    // 关闭弹窗(点 X/背景) = 取消生成
+    confirmModal.addEventListener('hidden.bs.modal', function() {
+        settleConfirmModal(null);
+    });
+
+    btnConfirmGenerate.addEventListener('click', function() {
+        const choices = [];
+        candidateGroups.querySelectorAll('select.candidate-action').forEach(sel => {
+            choices.push({ group: sel.dataset.group, cert_no: sel.dataset.cert, action: sel.value });
+        });
+        bootstrap.Modal.getInstance(confirmModal).hide();
+        settleConfirmModal(choices);
+    });
+
+    btnAllConfirm.addEventListener('click', function() {
+        candidateGroups.querySelectorAll('select.candidate-action').forEach(sel => { sel.value = 'confirm'; });
+    });
+    btnAllExclude.addEventListener('click', function() {
+        candidateGroups.querySelectorAll('select.candidate-action').forEach(sel => { sel.value = 'exclude'; });
+    });
+
+    function renderResult(data) {
+        const label = payMonthStart.options[payMonthStart.selectedIndex] ? payMonthStart.options[payMonthStart.selectedIndex].text : payMonthStart.value;
+        statMonth.textContent = label;
+        statTaxTotal.textContent = data.tax_total;
+        activeTotal.textContent = data.active_total || 0;
+        statPayrollTotal.textContent = data.payroll_total;
+        unpaidTotal.textContent = data.unpaid_total || 0;
+        contractTotal.textContent = data.contract_total || 0;
+        filteredActiveCount.textContent = data.filtered_active_count || 0;
+        filteredPayrollCount.textContent = data.filtered_payroll_count || 0;
+        statAddCount.textContent = data.add_count;
+        statDepartedCount.textContent = data.departed_count;
+        statPendingCount.textContent = data.pending_count;
+        statZeroCount.textContent = data.zero_count || 0;
+        statZeroPendingCount.textContent = data.zero_pending_count || 0;
+        btnDownload.href = data.download_url;
+        btnDownload.setAttribute('download', data.file_name);
+        const excluded = data.excluded || {};
+        const excludedTotal = (excluded.add || []).length + (excluded.departed || []).length + (excluded.pending || []).length;
+        fileInfo.textContent = `生成文件: ${data.file_name}${excludedTotal > 0 ? `，已排除 ${excludedTotal} 人` : ''}`;
+        resultCard.style.display = 'block';
+    }
+
     btnCompare.addEventListener('click', async function() {
         hideError();
         resultCard.style.display = 'none';
-        const file = exportFile.files[0];
-        if (!file) { showError('请先上传个税端导出文件'); return; }
         if (!payMonthStart.value) { showError('请选择发薪月份(起始)'); return; }
         const deadline = terminationDeadline.value;
         if (!deadline) { showError('请设置离职时间截止日期'); return; }
@@ -468,57 +664,30 @@
         btnCompare.disabled = true;
         loading.style.display = 'block';
         try {
-            const form = new FormData();
-            form.append('file', file);
-            form.append('pay_month_start', payMonthStart.value);
-            form.append('pay_month_end', payMonthEnd.value || payMonthStart.value);
-            if (unpaidMonthStart.value) {
-                form.append('unpaid_month_start', unpaidMonthStart.value);
-                form.append('unpaid_month_end', unpaidMonthEnd.value || unpaidMonthStart.value);
-            }
-            if (contractStartTime.value) form.append('contract_start_time', contractStartTime.value);
-            if (contractEndTime.value) form.append('contract_end_time', contractEndTime.value);
-            form.append('termination_deadline', deadline);
-            if (enablePayTime.checked) {
-                if (!payStartTime.value) { showError('请填写发薪经办时间(起始)'); btnCompare.disabled = false; loading.style.display = 'none'; return; }
-                if (!payEndTime.value) { showError('请填写发薪经办时间(结束)'); btnCompare.disabled = false; loading.style.display = 'none'; return; }
-                form.append('pay_start_time', payStartTime.value);
-                form.append('pay_end_time', payEndTime.value);
-            }
-            const payHandlers = realVals(payHandlerFilter);
-            // 做工资: 选中"同发薪经办人"则跟随发薪; 否则用手动选择
-            const salaryHandlers = hasMarker(salaryHandlerFilter, SAME_PAY)
-                ? payHandlers : realVals(salaryHandlerFilter);
-            // 合同: 选中"同做工资经办人"则跟随做工资(其本身可能已跟随发薪); 否则用手动选择
-            const contractHandlers = hasMarker(contractHandlerFilter, SAME_SALARY)
-                ? salaryHandlers : realVals(contractHandlerFilter);
-            payHandlers.forEach(h => form.append('handler', h));
-            salaryHandlers.forEach(h => form.append('salary_handler', h));
-            contractHandlers.forEach(h => form.append('contract_handler', h));
-            Array.from(unitFilter.selectedOptions).forEach(o => { if (o.value) form.append('unit', o.value); });
-            Array.from(deptFilter.selectedOptions).forEach(o => { if (o.value) form.append('dept', o.value); });
-            const resp = await fetch('/api/personnel-compare/compare', { method: 'POST', body: form });
-            const data = await resp.json();
-            if (!resp.ok || data.error) { showError(data.error || '比对失败，请稍后重试'); return; }
+            // 第一跳: 不携带 choices, 获取候选
+            const resp1 = await fetch('/api/personnel-compare/compare', { method: 'POST', body: buildFormData() });
+            const data1 = await resp1.json();
+            if (!resp1.ok || data1.error) { showError(data1.error || '比对失败，请稍后重试'); return; }
 
-            const label = payMonthStart.options[payMonthStart.selectedIndex] ? payMonthStart.options[payMonthStart.selectedIndex].text : payMonthStart.value;
-            statMonth.textContent = label;
-            statTaxTotal.textContent = data.tax_total;
-            activeTotal.textContent = data.active_total || 0;
-            statPayrollTotal.textContent = data.payroll_total;
-            unpaidTotal.textContent = data.unpaid_total || 0;
-            contractTotal.textContent = data.contract_total || 0;
-            filteredActiveCount.textContent = data.filtered_active_count || 0;
-            filteredPayrollCount.textContent = data.filtered_payroll_count || 0;
-            statAddCount.textContent = data.add_count;
-            statDepartedCount.textContent = data.departed_count;
-            statPendingCount.textContent = data.pending_count;
-            statZeroCount.textContent = data.zero_count || 0;
-            statZeroPendingCount.textContent = data.zero_pending_count || 0;
-            btnDownload.href = data.download_url;
-            btnDownload.setAttribute('download', data.file_name);
-            fileInfo.textContent = `生成文件: ${data.file_name}`;
-            resultCard.style.display = 'block';
+            let choices = [];
+            if (data1.phase === 'confirm') {
+                const counts = data1.counts || {};
+                const total = (counts.add || 0) + (counts.departed || 0) + (counts.pending || 0);
+                if (total > 0) {
+                    const confirmed = await showConfirmModal(data1);
+                    if (!confirmed) return; // 用户关闭弹窗, 取消生成
+                    choices = confirmed;
+                }
+                // total == 0: 无候选, 跳过弹窗, 空 choices 直接生成
+            }
+
+            // 第二跳: 相同表单字段 + choices
+            const form2 = buildFormData();
+            form2.append('choices', JSON.stringify(choices));
+            const resp2 = await fetch('/api/personnel-compare/compare', { method: 'POST', body: form2 });
+            const data2 = await resp2.json();
+            if (!resp2.ok || data2.error) { showError(data2.error || '生成失败，请稍后重试'); return; }
+            renderResult(data2);
         } catch (e) {
             showError(`比对失败: ${e.message}`);
         } finally {
@@ -530,6 +699,7 @@
 document.addEventListener('DOMContentLoaded', function() {
         loadMonths().then(loadDefaultReportMonth);
         loadLatestPayDate();
+        loadRosterStatus();
     });
 </script>
 </body>
