@@ -1217,18 +1217,23 @@ def api_personnel_compare_latest_pay_date():
 
 @app.route("/api/personnel-compare/compare", methods=["POST"])
 def api_personnel_compare():
-    """上传个税端导出文件 + 选择最近1~2次发薪月份 → 增减员比对 → 生成 Excel。
+    """两阶段增减员比对: 名单源为持久化 tax_roster (境内+境外)。
+
+    阶段 A (无 choices 字段): 返回候选 JSON (phase=confirm + candidates/counts/stats),
+    供前端逐人「确认/排除」弹窗渲染, 不执行验证明细查询。
+    阶段 B (带 choices 字段): 应用 choices (排除/确认) 后生成 Excel,
+    排除者从主名单移除, 验证 sheet 标记「用户排除」, 验证明细仍完整。
 
     离职时间截止日期 (termination_deadline, YYYY-MM-DD) 用于过滤 TC90 离职日期:
     超过截止日期的合同终止日期视为未到期, 归入待确认。
 
     参数:
-    - file: 个税端导出文件 (.xls)
     - pay_month_start/pay_month_end: 发薪月份时间段 (显式起止)
     - unpaid_month_start/unpaid_month_end: 未发薪工资表所属月份时间段 (显式起止)
     - pay_start_time/pay_end_time: 可选发薪经办时间 (精确到时分秒, 默认关闭)
     - contract_start_time/contract_end_time: 合同签署时间范围 (精确到时分秒, 可选)
     - termination_deadline: 离职时间截止日期 (默认最近发薪日期)
+    - choices: 阶段 B 的逐人确认 JSON 字符串数组 (可选, 缺省为阶段 A)
     """
     try:
         from queries import (get_payroll_cert_numbers, get_tc90_salary_end_dates,
@@ -1237,11 +1242,7 @@ def api_personnel_compare():
                              get_contract_signed_persons, get_contract_date_range,
                              get_latest_pay_date, get_personnel_by_certs)
         from templates_gen.personnel_compare import compare_personnel, generate_compare_excel
-        from templates_gen.tax_export_parser import parse_tax_export
 
-        file = request.files.get("file")
-        if not file:
-            return jsonify({"error": "请上传个税端导出文件"}), 400
         pay_month_start = int(request.form.get("pay_month_start", 0) or 0)
         if not pay_month_start:
             return jsonify({"error": "请选择发薪月份(起始)"}), 400
@@ -1278,21 +1279,13 @@ def api_personnel_compare():
                 deadline_date = _dt.strptime(deadline, "%Y-%m-%d").date()
             except ValueError:
                 return jsonify({"error": "离职时间截止日期格式错误 (应为 YYYY-MM-DD)"}), 400
-        ext = os.path.splitext(file.filename or "")[1].lower()
-        if ext != ".xls":
-            return jsonify({"error": "仅支持 .xls 格式的个税端导出文件"}), 400
-
-        tmp_path = os.path.join(OUTPUT_DIR, "_compare_tmp" + ext)
-        file.save(tmp_path)
-        try:
-            tax_export_persons = parse_tax_export(tmp_path)
-        except Exception as e:
-            return jsonify({"error": f"解析个税端导出文件失败: {e}"}), 400
-        finally:
-            if os.path.exists(tmp_path):
-                os.remove(tmp_path)
-        if not tax_export_persons:
-            return jsonify({"error": "导出文件中未解析到有效人员记录"}), 400
+        # 名单源: 持久化 SQLite tax_roster (境内+境外), 不再每次上传 .xls
+        from config_db import get_tax_roster
+        from templates_gen.compare_roster import map_tax_roster_to_export
+        roster_rows = get_tax_roster()
+        if not roster_rows:
+            return jsonify({"error": "请先在报税数据生成页导入境内/境外人员名单"}), 400
+        tax_export_persons = [map_tax_roster_to_export(row) for row in roster_rows]
 
         conn = get_connection()
         # 发薪月份范围: 用户显式选择 [起始, 结束]
@@ -1418,11 +1411,8 @@ def api_personnel_compare():
                     add_rows.append(row)
         # 增员名单/验证按备注(结算单元)排序, 相同结算单元相邻
         add_rows.sort(key=lambda r: str(r[25] or ""))
-        # 增员验证 Sheet: 为每个增员人员组装验证行 + TC93/TC8M/TC90 明细
-        from queries import get_salary_details, get_tc8m_records, get_tc90_records
-        from templates_gen.personnel_compare import (IDX_证件号码, build_verify_row,
-                                                     map_personnel_info_to_row as _map_row)
         # 减员名单备注 = 结算单元名称 (与增员名单一致), 并按结算单元排序
+        from templates_gen.personnel_compare import IDX_证件号码
         for row in departed_rows + pending_rows:
             info = person_units.get(str(row[IDX_证件号码] or "").strip().upper())
             if info:
@@ -1433,13 +1423,57 @@ def api_personnel_compare():
                     row[25] = f"单位名称（非结算单元名称）：{info['dept_name']}"
         departed_rows.sort(key=lambda r: str(r[25] or ""))
         pending_rows.sort(key=lambda r: str(r[25] or ""))
-        add_certs_final = {r[IDX_证件号码] for r in add_rows}
+        # ===== 两阶段分流: 无 choices = 候选确认; 带 choices = 应用并生成 =====
+        choices_raw = request.form.get("choices")
+        if not choices_raw:
+            # 阶段 A: 返回候选 JSON (不执行验证明细查询)
+            from templates_gen.compare_roster import build_candidate_payload
+            member_sets = {"paid": payroll_certs, "unpaid": unpaid_persons,
+                           "contract": contract_persons}
+            unit_map = {cert: (info.get("unit_name") or "")
+                        for cert, info in person_units.items()}
+            candidates, counts = build_candidate_payload(
+                add_rows, departed_rows, pending_rows, member_sets, unit_map)
+            return jsonify({
+                "phase": "confirm",
+                "candidates": candidates,
+                "counts": counts,
+                "stats": {
+                    "add_count": stats["add_count"],
+                    "departed_count": stats["departed_count"],
+                    "pending_count": stats["pending_count"],
+                    "tax_total": stats["tax_total"],
+                    "payroll_total": stats["payroll_total"],
+                    "zero_count": stats.get("zero_count", 0),
+                    "zero_pending_count": stats.get("zero_pending_count", 0),
+                    "active_total": stats.get("active_total", 0),
+                    "unpaid_total": stats.get("unpaid_total", 0),
+                    "contract_total": stats.get("contract_total", 0),
+                    "filtered_active_count": stats.get("filtered_active_count", 0),
+                    "filtered_payroll_count": stats.get("filtered_payroll_count", 0),
+                },
+            })
+        # 阶段 B: 应用 choices → 生成 Excel (与合并/零申报 flow 一致: 生成时重算)
+        from templates_gen.compare_roster import validate_choices, apply_compare_choices
+        try:
+            choices = validate_choices(choices_raw)
+        except ValueError as e:
+            return jsonify({"error": str(e)}), 400
+        kept_add, kept_departed, kept_pending, excluded = apply_compare_choices(
+            add_rows, departed_rows, pending_rows, choices)
+        excluded_add_set = set(excluded["add"])
+        excluded_departed_set = set(excluded["departed"])
+        excluded_pending_set = set(excluded["pending"])
+        # 验证明细查询 cert 集合 = kept 各列表 + 被排除人员 (排除者验证行仍完整)
+        add_certs_final = {r[IDX_证件号码] for r in kept_add} | excluded_add_set
         verify_params = {
             "pay_months": pay_months,
             "unpaid_months": unpaid_months,
             "contract_start": contract_start_dt.strftime("%Y-%m-%d %H:%M") if contract_start_dt else "",
             "contract_end": contract_end_dt.strftime("%Y-%m-%d %H:%M") if contract_end_dt else "",
         }
+        from queries import get_salary_details, get_tc8m_records, get_tc90_records
+        from templates_gen.personnel_compare import build_verify_row
         salary_details = get_salary_details(conn, add_certs_final,
                                             sorted(set(pay_months + unpaid_months)))
         tc8m_details = get_tc8m_records(conn, add_certs_final, pay_months)
@@ -1466,8 +1500,10 @@ def api_personnel_compare():
         tc90_by_cert = {}
         for r in tc90_details:
             tc90_by_cert.setdefault(r["cert"], []).append(r)
+        # 增员验证行: kept_add + 被排除增员 (排除者仍生成验证行, 标记用户排除)
         verify_rows = []
-        for r in add_rows:
+        for r in kept_add + [row for row in add_rows
+                             if row[IDX_证件号码] in excluded_add_set]:
             cert = r[IDX_证件号码]
             verify_rows.append(build_verify_row(
                 r, cert, verify_params,
@@ -1475,11 +1511,17 @@ def api_personnel_compare():
                 salary_by_cert.get(cert, []),
                 tc8m_by_cert.get(cert, []),
                 contract_start_map.get(cert),
-                contract_details=tc90_by_cert.get(cert, [])))
+                contract_details=tc90_by_cert.get(cert, []),
+                user_excluded="是" if cert in excluded_add_set else ""))
         # 减员验证 Sheet: 为近期离职/待确认离职人员组装验证行
         from templates_gen.personnel_compare import build_remove_verify_row
         from queries import get_last_pay_records
-        remove_all = [(r, "近期离职") for r in departed_rows] + [(r, "待确认近期离职") for r in pending_rows]
+        remove_all = ([(r, "近期离职") for r in kept_departed]
+                      + [(r, "待确认近期离职") for r in kept_pending]
+                      + [(r, "近期离职") for r in departed_rows
+                         if r[IDX_证件号码] in excluded_departed_set]
+                      + [(r, "待确认近期离职") for r in pending_rows
+                         if r[IDX_证件号码] in excluded_pending_set])
         remove_certs = {r[IDX_证件号码] for r, _ in remove_all}
         remove_verify_rows = []
         if remove_certs:
@@ -1521,6 +1563,8 @@ def api_personnel_compare():
                     remove_contract_end[c] = dt
             for row, rtype in remove_all:
                 cert = row[IDX_证件号码]
+                user_excluded = "是" if cert in (
+                    excluded_departed_set if rtype == "近期离职" else excluded_pending_set) else ""
                 remove_verify_rows.append(build_remove_verify_row(
                     row, cert, rtype, verify_params,
                     [],  # 减员无发薪记录
@@ -1531,7 +1575,8 @@ def api_personnel_compare():
                     contract_end_d90=remove_contract_end_d90.get(cert),
                     contract_details=remove_tc90_by_cert.get(cert, []),
                     tax_person=tax_person_by_cert.get(cert, {}),
-                    last_pay=remove_last_pay.get(cert)))
+                    last_pay=remove_last_pay.get(cert),
+                    user_excluded=user_excluded))
         tc93_all = []
         seen_tc93 = set()
         for r in paid_salary_details + salary_details:
@@ -1592,15 +1637,15 @@ def api_personnel_compare():
                 person["备注"] = remark
             zero_pending_rows.append(build_zero_declare_row(person))
         month_label = f"{pay_month_start}-{pay_month_end}" if pay_month_end != pay_month_start else str(pay_month_start)
-        result = generate_compare_excel(add_rows, departed_rows, pending_rows, stats, OUTPUT_DIR, month_label,
+        result = generate_compare_excel(kept_add, kept_departed, kept_pending, stats, OUTPUT_DIR, month_label,
                                         verify_rows=verify_rows, tc93_rows=tc93_rows,
                                         tc8m_rows=tc8m_rows, tc90_rows=tc90_rows,
                                         remove_verify_rows=remove_verify_rows, zero_rows=zero_rows,
                                         zero_pending_rows=zero_pending_rows)
         return jsonify({
-            "add_count": stats["add_count"],
-            "departed_count": stats["departed_count"],
-            "pending_count": stats["pending_count"],
+            "add_count": len(kept_add),
+            "departed_count": len(kept_departed),
+            "pending_count": len(kept_pending),
             "tax_total": stats["tax_total"],
             "payroll_total": stats["payroll_total"],
             "zero_count": stats.get("zero_count", 0),
@@ -1610,6 +1655,7 @@ def api_personnel_compare():
             "contract_total": stats.get("contract_total", 0),
             "filtered_active_count": stats.get("filtered_active_count", 0),
             "filtered_payroll_count": stats.get("filtered_payroll_count", 0),
+            "excluded": excluded,
             "file_name": os.path.basename(result.file_path),
             "download_url": f"/api/download/{os.path.basename(result.file_path)}",
         })
