@@ -10,7 +10,8 @@
      无离职日期, 且本期无任何 TC93 工资记录 → 新签合同未做工资(B1) / 在册无痕迹(B2)
 - B 类三分类 (2026-09-11 用户确认):
      b_outside  名单在册但系统查无此人 (TC90 无合同, 人工管理) → 默认不生成, 面板体现确认
-     b_left     在系统但工资结束年月 (TC90.ATC90AV) 早于发放月 → 已离职, 默认不生成+建议减员
+     b_left     在系统但工资结束年月 (TC90.ATC90AV) 早于员工所在单位当期工资单
+               所属月份 (单位维度最小所属月) → 已离职, 默认不生成+建议减员
      b_roster   在系统且在册在职 → 维持 B1/B2 (默认 declare 保留在册)
 - 在系统判定 (2026-09-11 用户确认): 以 TC90 有无合同为准 (既有 AC01 仅是个人基本信息,
      如电话等, 只能辅助查询, 不判定系统管理); 同一证件多份合同时以最后一份
@@ -30,7 +31,7 @@ from decimal import Decimal
 from dataclasses import replace
 
 from queries import (get_salary_records_by_combos, get_unpaid_salary_cert_months,
-                     get_paid_units_in_month)
+                     get_paid_units_in_month, get_arrear_batches)
 from config_db import get_zero_overrides, get_zero_salary_unit_codes, get_excluded_unit_codes
 from templates_gen.formulas import calc_本期收入
 from models import SalaryRecord
@@ -40,7 +41,7 @@ CAT_A1_INCOME_ZERO = "a1_income_zero"   # 工资表公式计算本期收入=0
 CAT_A2_UNPAID = "a2_unpaid"             # 做了工资没发 (TC8M 无发放)
 CAT_B_ROSTER = "b_roster"               # 个税端在职无工资 (名单在册, 在职)
 CAT_B_OUTSIDE = "b_outside"             # 名单在册但系统查无此人 (人工管理, 默认不生成)
-CAT_B_LEFT = "b_left"                   # 在系统但工资结束年月早于发放月 (已离职, 默认不生成+建议减员)
+CAT_B_LEFT = "b_left"                   # 在系统但工资结束年月早于当期工资单所属月 (已离职, 默认不生成+建议减员)
 
 # 单元内人员展示排序 (2026-09-11 用户确认): 名单在册最前, 不在系统最后
 _CAT_SORT_ORDER = {
@@ -57,7 +58,7 @@ REASON_A2 = "已做工资但未发放(TC8M无发放)，无纳税义务，默认�
 REASON_B1 = "个税端在职，本期新签合同未做工资，默认生成零申报保留在册"
 REASON_B2 = "个税端在职，本期未做工资未发放未减员，默认生成零申报；若已离职请先办理减员"
 REASON_B_OUTSIDE = "个税端在职但不在系统管理(人工管理)，默认不生成零申报；如需在个税端保留请确认生成"
-REASON_B_LEFT = "工资结束年月{ym}早于所属年月{pay}，判定已离职，默认不生成零申报，建议办理减员"
+REASON_B_LEFT = "工资结束年月{ym}早于当期工资单所属年月{pay}，判定已离职，默认不生成零申报，建议办理减员"
 
 
 def _income_of_dict(d: dict) -> Decimal:
@@ -111,7 +112,8 @@ def build_zero_salary_suggestions(conn, pay_month, combos, roster=None, handler=
     - B  个税端在职无工资: 名单 (config_db.tax_roster, 境内/境外) 在册无离职日期,
          本期无 TC93 工资记录。B 类三分类 (2026-09-11 用户确认):
          b_outside 系统查无此人 (AC01 无, 人工管理) → 默认不生成, 面板体现确认;
-         b_left    在系统但工资结束年月 (TC90.ATC90AV) < 所属年月 → 已离职, 默认不生成+建议减员;
+         b_left    在系统但工资结束年月 (TC90.ATC90AV) < 员工所在单位当期工资单所属月份
+             (单位维度最小所属月) → 已离职, 默认不生成+建议减员;
          b_roster  在系统且在册在职 → 新签合同未做工资(B1) / 在册无痕迹(B2)
 
     Args:
@@ -141,6 +143,20 @@ def build_zero_salary_suggestions(conn, pay_month, combos, roster=None, handler=
     salary_months = sorted({c[1] for c in combo_set})
     if not combo_set or not salary_months:
         return {"pay_month": pay_month, "units": []}
+    # 单位维度所属月 (2026-09-13 用户确认): b_left 判定基准是"该员工所在单位"当期
+    # 发放工资单的所属月集合, 非全局 combos。单位当月发 (39472@202608 发 202608 所属月,
+    # 工资单已无单晓彤) 与单位压月发 (202608 发 202607 所属月) 可并存于 combos,
+    # 全局 min/max 都会被其他单位的压月发/当月发组合污染而误判
+    unit_salary_months = {}
+    for c in combos:
+        unit_salary_months.setdefault(int(c.get("unit", 0) or 0), set()) \
+            .add(int(c.get("salary_month", 0) or 0))
+
+    def _unit_ref_ym(unit: int) -> int:
+        """该员工所在单位当期工资单所属月的最小值; 单位当期无工资单(不在 combos,
+        B 候选仅凭名单/合同无单位工资单证据) 时回退全局最小所属月。"""
+        months = unit_salary_months.get(unit)
+        return min(months) if months else salary_months[0]
 
     records = get_salary_records_by_combos(conn, combos)
     checked = [r for r in records
@@ -219,7 +235,8 @@ def build_zero_salary_suggestions(conn, pay_month, combos, roster=None, handler=
             tc90_info = get_person_tc90_info(conn)
             # B 类三分类 (2026-09-11 用户确认):
             # 不在系统 (TC90 无合同, 人工管理) → 默认不生成, 面板体现让用户确认;
-            # 在系统但工资结束年月 (TC90.ATC90AV) < 发放月 → 已离职, 默认不生成+建议减员;
+            # 在系统但工资结束年月 (TC90.ATC90AV) < 员工所在单位当期工资单所属月份
+            # (单位维度最小所属月) → 已离职, 默认不生成+建议减员;
             # 在系统且在册在职 → 维持 B1/B2 (默认 declare 保留在册)
             # 在系统判定口径: TC90 有无合同为准 (AC01 仅个人基本信息, 不判定系统管理);
             # 同一证件多份合同时以最后一份 (ATC90C 最大) 为准
@@ -261,10 +278,19 @@ def build_zero_salary_suggestions(conn, pay_month, combos, roster=None, handler=
                 if cert not in in_system:
                     # 不在系统管理 (人工管理): 默认不生成零申报, 面板体现由用户确认
                     p_entry["category"] = CAT_B_OUTSIDE
-                elif end_ym and end_ym < min(salary_months):
-                    # 工资结束年月(ATC90AV)早于所属年月 → 判定已离职: 默认不生成, 建议减员
+                elif end_ym and end_ym < _unit_ref_ym(unit):
+                    # 工资结束年月(ATC90AV)早于单位当期工资单所属月最小值 → 已离职:
+                    # 默认不生成, 建议减员 (2026-09-13 用户最终确认判定基准):
+                    # 前提是当期发薪月份工资单没有该员工 (B 类候选已保证当期无工资记录,
+                    # 压月发人员有 TC93 记录被勾选 → checked_certs 正常申报, 不落 B 类);
+                    # 比较基准是"员工所在单位当期发放工资单的所属月份" (单位维度最小
+                    # 所属月), 非全局 combos 的 min/max: 单位当月发 (39472 202608 付
+                    # 202608 所属月, 工资单已无单晓彤) → 202608>202607 判已离职;
+                    # 单位压月发 (202608 付 202607 所属月工资) 时该员工最后一笔工资
+                    # 当期已发 → 必须报税不判离职 (202607>202607 为 False)
                     p_entry["category"] = CAT_B_LEFT
                     p_entry["_end_ym"] = end_ym
+                    p_entry["_ref_ym"] = _unit_ref_ym(unit)
                 else:
                     p_entry["category"] = CAT_B_ROSTER
                     p_entry["_is_new"] = is_new
@@ -299,7 +325,7 @@ def build_zero_salary_suggestions(conn, pay_month, combos, roster=None, handler=
                     suggested, reason = "skip", REASON_B_OUTSIDE
                 elif p["category"] == CAT_B_LEFT:
                     suggested, reason = "skip", REASON_B_LEFT.format(
-                        ym=p["_end_ym"], pay=min(salary_months))
+                        ym=p["_end_ym"], pay=p.get("_ref_ym") or salary_months[0])
                 elif in_config:
                     suggested, reason = "skip", REASON_A1_CONFIG
                 elif p["category"] == CAT_B_ROSTER:
@@ -389,6 +415,11 @@ def build_roster_zero_records(conn, pay_month, roster, zero_choices, excl_codes,
         return []
     contract_map = get_person_units_contract(conn, list(candidates))
     sys_info = get_person_system_info(conn, list(candidates))
+    # 欠费未发批次 (2026-09-13 用户需求): TB96.ATB96Z='1' 的 (结算单元, 所属月, 批次),
+    # 供验证报告 AH 列/申报类别说明标注"（欠费未发）", 与"次月发放"区分
+    proxy_months = sorted({int(s.get("last_pay_ym") or 0) for s in sys_info.values()
+                           if int(s.get("last_pay_ym") or 0)})
+    arrear_batches = get_arrear_batches(conn, proxy_months) if proxy_months else set()
     rows = []
     for cert, p in candidates.items():
         info = contract_map.get(cert, {})
@@ -419,6 +450,10 @@ def build_roster_zero_records(conn, pay_month, roster, zero_choices, excl_codes,
         if _发放月 := int(last.get("pay_month") or 0):
             if _发放月 != int(last.get("last_pay_ym") or 0):
                 rec.发放月 = _发放月
+        # 欠费未发 (TB96.ATB96Z='1'): 动态属性, 挂 (结算单元, 最后所属月, 最后批次) 命中
+        if (unit, int(last.get("last_pay_ym") or 0), str(last.get("last_batch") or "")) \
+                in arrear_batches:
+            rec.欠费未发 = True
         rows.append(rec)
     return rows
 

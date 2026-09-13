@@ -322,6 +322,41 @@ class TestBuildSuggestions:
         assert p["suggested"] == "declare"
         assert "未减员" in p["reason"]
 
+    def test_roster_left_scope_unit_own_month_arrear(self, monkeypatch):
+        # b_left 基准 = 员工所在单位当期工资单所属月最小值 (2026-09-13 用户确认):
+        # 单位 39472 当月发 (202608 付 202608 所属月, 工资单已无该员工) → 单位维度
+        # 最小所属月 202608 > 结束月 202607 → 判已离职; 即使其他单位压月发组合
+        # (202607-1) 使全局 min 更小, 也不能用全局 min/max 替代单位维度
+        self.records = []
+        combos = [{"unit": 100, "salary_month": 202607, "seq": "1"},
+                  {"unit": 200, "salary_month": 202608, "seq": "1"}]
+        roster = [_roster(cert="C1", hire="2020-01-01")]
+        self.tc90_info = {"C1": {"unit_code": 200, "unit_name": "单元200",
+                                 "contract_handlers": [], "salary_end_ym": 202607}}
+        res = tax_zero.build_zero_salary_suggestions(None, 202608, combos,
+                                                     roster=roster)
+        p = res["units"][0]["persons"][0]
+        assert p["category"] == tax_zero.CAT_B_LEFT
+        assert p["suggested"] == "skip"
+        assert "已离职" in p["reason"] and "减员" in p["reason"]
+        assert "202608" in p["reason"]  # 理由展示单位维度所属月, 非全局 max
+
+    def test_roster_left_scope_unit_own_month_in_config(self, monkeypatch):
+        # 单位维度判定: 员工单位压月发 (202608 付 202607 所属月) → 员工结束月 202607
+        # 当期被付最后一笔工资 → 必须报税, 不判已离职 (全局含 202608 亦不误判)
+        self.records = []
+        combos = [{"unit": 100, "salary_month": 202607, "seq": "1"},
+                  {"unit": 200, "salary_month": 202608, "seq": "1"}]
+        roster = [_roster(cert="C1", hire="2020-01-01")]
+        self.tc90_info = {"C1": {"unit_code": 100, "unit_name": "单元100",
+                                 "contract_handlers": [], "salary_end_ym": 202607}}
+        res = tax_zero.build_zero_salary_suggestions(None, 202608, combos,
+                                                     roster=roster)
+        p = res["units"][0]["persons"][0]
+        assert p["category"] == tax_zero.CAT_B_ROSTER
+        assert p["suggested"] == "declare"
+        assert "未减员" in p["reason"]
+
     def test_roster_sys_info_full_display(self, monkeypatch):
         self.records = []
         roster = [_roster(cert="C1", hire="2020-01-01")]
@@ -613,6 +648,7 @@ class TestBuildRosterZeroRecords:
     def patch_sources(self, monkeypatch):
         self.contract_map = {}
         self.sys_info = {}
+        self.arrear_batches = set()
 
         def fake_contract(conn, certs):
             return dict(self.contract_map)
@@ -622,6 +658,10 @@ class TestBuildRosterZeroRecords:
 
         monkeypatch.setattr("queries.get_person_units_contract", fake_contract)
         monkeypatch.setattr("queries.get_person_system_info", fake_sys_info)
+        # 欠费未发批次 (2026-09-13): TB96.ATB96Z='1' 的 (结算单元, 所属月, 批次) 集合
+        # 注意: tax_zero 顶层 import get_arrear_batches → 打补丁须指向 tax_zero
+        monkeypatch.setattr(tax_zero, "get_arrear_batches",
+                            lambda conn, months: set(self.arrear_batches))
 
     def _call(self, month=202606, choices=None, roster=None, excl=set(), checked=set()):
         roster = roster if roster is not None else [_roster(cert="C1")]
@@ -669,6 +709,22 @@ class TestBuildRosterZeroRecords:
         rows = self._call()
         assert getattr(rows[0], "发放月", 0) == 0
 
+    def test_arrear_batch_hit_attached(self):
+        # 最后发薪批次在欠费未发表 (TB96.ATB96Z='1') → 挂载 欠费未发 True
+        self.contract_map = {"C1": {"unit_code": 100, "unit_name": "单元100"}}
+        self.sys_info = {"C1": {"last_pay_ym": 202608, "last_batch": "1"}}
+        self.arrear_batches = {(100, 202608, "1")}
+        rows = self._call()
+        assert getattr(rows[0], "欠费未发", False) is True
+
+    def test_arrear_batch_miss_not_attached(self):
+        # 最后发薪批次不在欠费未发表 → 不挂载
+        self.contract_map = {"C1": {"unit_code": 100, "unit_name": "单元100"}}
+        self.sys_info = {"C1": {"last_pay_ym": 202608, "last_batch": "1"}}
+        self.arrear_batches = {(100, 202607, "1")}  # 所属月不匹配
+        rows = self._call()
+        assert getattr(rows[0], "欠费未发", False) is False
+
     def test_no_pay_month_not_attached(self):
         # sys_info 无 pay_month (无 TC8M 批次映射) → 不挂载
         self.contract_map = {"C1": {"unit_code": 100, "unit_name": "单元100"}}
@@ -714,10 +770,12 @@ class TestBuildRosterZeroRecords:
 
 
 class TestClassifyRowZeroSubcategories:
-    """_classify_row 零申报子类标注: A2/A1/B类/B类-次月发放。
+    """_classify_row 零申报子类标注: A2/A1/B类/B类-次月发放/B类-欠费未发。
 
     B类-次月发放 (2026-09-12 用户确认): 发放月≠所属月 (如 9月1日才发8月工资) 时,
     单独小类并标注"所属月-批次（发放月发）", 避免"上次发放:202608"误导。
+    B类-欠费未发 (2026-09-13 用户需求): 最后发薪批次在欠费未发表 (TB96.ATB96Z='1')
+    时标注"（欠费未发）", 与"次月发放"互斥。
     """
 
     def _call(self, rec, income=0, raw_certs=set(), unpaid_certs=set()):
@@ -739,13 +797,22 @@ class TestClassifyRowZeroSubcategories:
                            工资所属年月=202608, 当月批次="1")
         rec.发放月 = 202608
         cat, detail = self._call(rec)
-        assert detail == "B类: 名单在册无工资（零申报注入）；当期无未发工资，上次发放:202608-批次1"
+        assert detail == "B类: 名单在册无工资（零申报注入）；当期无未发工资，最近一次发放:202608-批次1"
 
     def test_b_no_pay_month_keeps_previous_note(self):
         rec = SalaryRecord(身份证="C1", 结算单元名称="单元100",
                            工资所属年月=202608, 当月批次="1")
         cat, detail = self._call(rec)
-        assert detail == "B类: 名单在册无工资（零申报注入）；当期无未发工资，上次发放:202608-批次1"
+        assert detail == "B类: 名单在册无工资（零申报注入）；当期无未发工资，最近一次发放:202608-批次1"
+
+    def test_b_arrear_unpaid_note(self):
+        # 欠费未发 (TB96.ATB96Z='1'): 最后发薪批次在欠费未发表 → 单独小类"（欠费未发）",
+        # 与"次月发放"互斥 (2026-09-13 用户需求)
+        rec = SalaryRecord(身份证="C1", 结算单元名称="单元100",
+                           工资所属年月=202608, 当月批次="1")
+        rec.欠费未发 = True
+        cat, detail = self._call(rec)
+        assert detail == "B类: 名单在册无工资（零申报注入）；当期无未发工资，最近一次发放:202608-批次1（欠费未发）"
 
     def test_b_no_history_note(self):
         rec = SalaryRecord(身份证="C1", 结算单元名称="单元100",

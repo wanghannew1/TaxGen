@@ -992,6 +992,39 @@ def get_unpaid_salary_cert_months(conn, salary_months) -> Set[Tuple[str, int]]:
     return pairs
 
 
+def get_arrear_batches(conn, salary_months) -> Set[Tuple[int, int, str]]:
+    """查询欠费未发放批次集合: (结算单元, 所属月, 批次) 且 TB96.ATB96Z='1'。
+
+    2026-09-13 用户需求: 正常薪资生成文件 AH 列/申报类别说明为欠费批次标注
+    "（欠费未发）"。TB96 (V_TB96 基表) 为费用清单, ATB96Z='1' 标记欠费,
+    AAE002=费用清单所属月, ATC937=批次; 返回三元组与零申报 B 类注入记录
+    (结算单元, last_pay_ym, last_batch) 匹配。
+    纯只读 SELECT, 绑定变量分批 (Oracle 11g IN 上限 1000)。
+    """
+    if not salary_months:
+        return set()
+    batches = set()
+    sql = """
+        SELECT ATB930, AAE002, ATC937 FROM TB96
+        WHERE ATB96Z = '1'
+          AND AAE002 IN ({placeholders})
+    """
+    months = sorted(set(salary_months))
+    with conn.cursor() as cursor:
+        for start in range(0, len(months), _IN_BATCH_SIZE):
+            chunk = months[start:start + _IN_BATCH_SIZE]
+            placeholders = ", ".join(f":m{i}" for i in range(len(chunk)))
+            binds = {f"m{i}": m for i, m in enumerate(chunk)}
+            cursor.execute(sql.format(placeholders=placeholders), binds)
+            for row in cursor.fetchall():
+                unit = int(row[0] or 0)
+                month = int(row[1] or 0)
+                seq = str(row[2] or "")
+                if unit and month:
+                    batches.add((unit, month, seq))
+    return batches
+
+
 def get_paid_units_in_month(conn, pay_month) -> Set[int]:
     """查询发放月(pay_month, TC8M.ATC8G7)有已发记录(ATC8M3=2)的结算单元集合。
 
