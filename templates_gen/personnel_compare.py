@@ -192,6 +192,8 @@ VERIFY_HEADERS = [
     "合同经办人",
     # 公共
     "是否零申报",
+    # 用户排除 (T4 在调用处传 "是"/"")
+    "用户排除",
 ]
 
 # 减员验证附加列 (51 列之后追加)
@@ -226,6 +228,8 @@ REMOVE_VERIFY_HEADERS = [
     "合同终止日期（ATC90D）",
     "工资结束年月（ATC90AV）",
     "合同经办人",
+    # 用户排除 (T4 在调用处传 "是"/"")
+    "用户排除",
 ]
 
 # 明细 Sheet 列头
@@ -235,7 +239,7 @@ TC8M_HEADERS = ["证件号码", "姓名", "结算单元代码", "结算单元名
 TC90_HEADERS = ["证件号码", "姓名", "结算单元代码", "结算单元名称", "合同开始日期", "合同终止日期", "单位名称", "经办人"]
 
 
-def build_verify_row(add_row, cert, params, paid_salary_details, unpaid_salary_details, tc8m_details, contract_start, contract_details=None):
+def build_verify_row(add_row, cert, params, paid_salary_details, unpaid_salary_details, tc8m_details, contract_start, contract_details=None, user_excluded: str = ""):
     """为单个增员人员组装增员验证行。
 
     Args:
@@ -247,9 +251,10 @@ def build_verify_row(add_row, cert, params, paid_salary_details, unpaid_salary_d
         tc8m_details: 该人 TC8M 发放记录列表 (发薪月份范围)
         contract_start: 该人合同开始日期 (或 None)
         contract_details: 该人 TC90 合同记录列表 (取经办人)
+        user_excluded: 用户排除标记 ("是"/"", 默认空串, T4 在调用处传入)
 
     Returns:
-        51 + len(VERIFY_HEADERS) 列的行数据
+        51 + len(VERIFY_HEADERS) 列的行数据 (末列为用户排除)
     """
     contract_details = contract_details or []
     # 发薪: 发薪月份范围有 TC8M 已发记录 (按 所属月-批次 去重)
@@ -336,6 +341,8 @@ def build_verify_row(add_row, cert, params, paid_salary_details, unpaid_salary_d
         contract_handlers,
         # 公共
         "是" if zero else "否",
+        # 用户排除
+        user_excluded,
     ]
 
 
@@ -343,7 +350,7 @@ def build_remove_verify_row(remove_row, cert, remove_type, params,
                             paid_salary_details, unpaid_salary_details, tc8m_details,
                             contract_start, contract_end_dt, contract_end_d90=None,
                             contract_details=None,
-                            tax_person=None, last_pay=None):
+                            tax_person=None, last_pay=None, user_excluded: str = ""):
     """为单个减员人员组装减员验证行。
 
     减员人员应不在发薪/未发薪/当期合同签署名单中, 各来源块验证列应为否/空,
@@ -363,9 +370,10 @@ def build_remove_verify_row(remove_row, cert, remove_type, params,
         contract_details: 该人 TC90 合同记录列表 (取经办人)
         tax_person: 个税端导出原始记录 dict (报送状态/身份验证/任职/更新时间等)
         last_pay: 该人最近一次发薪记录 dict {unit_name, salary_month, seq, pay_month}
+        user_excluded: 用户排除标记 ("是"/"", 默认空串, T4 在调用处传入)
 
     Returns:
-        51 + len(REMOVE_VERIFY_HEADERS) 列的行数据
+        51 + len(REMOVE_VERIFY_HEADERS) 列的行数据 (末列为用户排除)
     """
     contract_details = contract_details or []
     tax_person = tax_person or {}
@@ -418,6 +426,8 @@ def build_remove_verify_row(remove_row, cert, remove_type, params,
         contract_end_d90.strftime("%Y-%m-%d") if hasattr(contract_end_d90, "strftime") else (contract_end_d90 or ""),
         contract_end_dt.strftime("%Y-%m-%d") if hasattr(contract_end_dt, "strftime") else (contract_end_dt or ""),
         contract_handlers,
+        # 用户排除
+        user_excluded,
     ]
 
 

@@ -1,7 +1,13 @@
 """compare_personnel 纯逻辑单元测试 (无需 Oracle 连接)"""
 from datetime import datetime
 
-from templates_gen.personnel_compare import compare_personnel
+from templates_gen.personnel_compare import (
+    REMOVE_VERIFY_HEADERS,
+    VERIFY_HEADERS,
+    build_remove_verify_row,
+    build_verify_row,
+    compare_personnel,
+)
 
 
 def _persons(specs):
@@ -128,3 +134,57 @@ class TestDeferredPayZeroDeclare:
         assert stats["departed_count"] == 1
         assert "E005" not in stats["zero_certs"]
         assert len(departed_rows) == 1
+
+
+class TestUserExcludedColumn:
+    """验证 sheet 末尾「用户排除」列 (默认空串, 传值仅改末列)"""
+
+    _PARAMS = {
+        "pay_months": [202608],
+        "unpaid_months": [202607],
+        "contract_start": "",
+        "contract_end": "",
+    }
+
+    def _verify_row(self, user_excluded=None):
+        add_row = [""] * 51
+        kwargs = {} if user_excluded is None else {"user_excluded": user_excluded}
+        return build_verify_row(
+            add_row, "X001", self._PARAMS, [], [], [], None, **kwargs)
+
+    def _remove_row(self, user_excluded=None):
+        remove_row = [""] * 51
+        kwargs = {} if user_excluded is None else {"user_excluded": user_excluded}
+        return build_remove_verify_row(
+            remove_row, "X001", "近期离职", self._PARAMS,
+            [], [], [], None, None, **kwargs)
+
+    def test_verify_headers_trailing_user_excluded(self):
+        assert VERIFY_HEADERS[-1] == "用户排除"
+
+    def test_remove_verify_headers_trailing_user_excluded(self):
+        assert REMOVE_VERIFY_HEADERS[-1] == "用户排除"
+
+    def test_verify_row_default_last_col_empty(self):
+        row = self._verify_row()
+        assert row[-1] == ""
+        assert len(row) == 51 + len(VERIFY_HEADERS)
+
+    def test_verify_row_flagged_only_last_col_differs(self):
+        default_row = self._verify_row()
+        flagged_row = self._verify_row(user_excluded="是")
+        assert flagged_row[-1] == "是"
+        assert len(flagged_row) == 51 + len(VERIFY_HEADERS)
+        assert flagged_row[:-1] == default_row[:-1]
+
+    def test_remove_verify_row_default_last_col_empty(self):
+        row = self._remove_row()
+        assert row[-1] == ""
+        assert len(row) == 51 + len(REMOVE_VERIFY_HEADERS)
+
+    def test_remove_verify_row_flagged_only_last_col_differs(self):
+        default_row = self._remove_row()
+        flagged_row = self._remove_row(user_excluded="是")
+        assert flagged_row[-1] == "是"
+        assert len(flagged_row) == 51 + len(REMOVE_VERIFY_HEADERS)
+        assert flagged_row[:-1] == default_row[:-1]
