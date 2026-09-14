@@ -920,23 +920,31 @@ def get_payroll_personnel(conn, pay_month: int, start_time=None, end_time=None) 
 def get_unpaid_salary_persons(conn, salary_months) -> Set[str]:
     """查询指定所属月份范围内"已做工资单但未发薪"的人员证件号集合。
 
-    口径: TC93 有工资记录, 但 TC8M 无对应已发记录 (ATC8M3=2) 的人员。
+    口径: TC93 有工资记录, 但该 (cert, 所属月) 所有批次均无 TC8M 已发记录
+    (ATC8M3=2) 的人员 (2026-09-14 修复批次传染)。
     返回统一大写的证件号码集合, 用于减员排除/增员判断。
     """
     if not salary_months:
         return set()
     certs = set()
+    # 仅当该 (cert, 所属月) 所有批次均无已发匹配才标记 (修复平高华生 39474 整组丢失)
     sql = """
         SELECT DISTINCT ac01.AAC002
         FROM TC93 t93
-        LEFT JOIN TC8M m ON m.ATB930 = t93.ATB930
-                        AND m.ATC931 = t93.ATC931
-                        AND m.ATC937 = t93.ATC937
-                        AND m.ATC8M3 = 2
-        LEFT JOIN AC01 ac01 ON t93.AAC001 = ac01.AAC001
+        JOIN AC01 ac01 ON t93.AAC001 = ac01.AAC001
         WHERE t93.ATC931 IN ({placeholders})
           AND t93.ATC93G = '1'
-          AND m.ATB930 IS NULL
+          AND ac01.AAC002 IS NOT NULL
+        MINUS
+        SELECT DISTINCT ac01.AAC002
+        FROM TC93 t93
+        JOIN TC8M m ON m.ATB930 = t93.ATB930
+                   AND m.ATC931 = t93.ATC931
+                   AND m.ATC937 = t93.ATC937
+                   AND m.ATC8M3 = 2
+        JOIN AC01 ac01 ON t93.AAC001 = ac01.AAC001
+        WHERE t93.ATC931 IN ({placeholders})
+          AND t93.ATC93G = '1'
           AND ac01.AAC002 IS NOT NULL
     """
     months = sorted(set(salary_months))
@@ -956,25 +964,33 @@ def get_unpaid_salary_persons(conn, salary_months) -> Set[str]:
 def get_unpaid_salary_cert_months(conn, salary_months) -> Set[Tuple[str, int]]:
     """查询"已做工资单但未发薪"人员的 (证件号, 所属年月) 精确对集合。
 
-    与 get_unpaid_salary_persons 同口径 (TC93 有记录, 但 TC8M 无对应
-    ATC8M3=2 已发记录), 但精确到 (人, 所属月): 同一人 6 月已发、7 月未发时,
-    仅 (cert, 202607) 在集合中, 202606 已发记录不受牵连。
-    返回统一大写的证件号 + 所属年月 int 对。用于零申报候选与生成过滤。
+    与 get_unpaid_salary_persons 同口径 (仅当该 (cert, 所属月) 所有批次均无
+    TC8M ATC8M3=2 已发匹配才标记未发, 2026-09-14 修复), 但精确到 (人, 所属月):
+    同一人 6 月已发、7 月未发时, 仅 (cert, 202607) 在集合中, 202606 已发记录
+    不受牵连。返回统一大写的证件号 + 所属年月 int 对。用于零申报候选与生成过滤。
     """
     if not salary_months:
         return set()
     pairs = set()
+    # 原 LEFT JOIN 逐批次判"本批无已发"即标记, 同月多批次时未发批次会传染已发批次;
+    # 修正: 全部已做记录 MINUS 至少一批已发记录 (批次粒度不再串联)
     sql = """
         SELECT DISTINCT ac01.AAC002, t93.ATC931
         FROM TC93 t93
-        LEFT JOIN TC8M m ON m.ATB930 = t93.ATB930
-                        AND m.ATC931 = t93.ATC931
-                        AND m.ATC937 = t93.ATC937
-                        AND m.ATC8M3 = 2
-        LEFT JOIN AC01 ac01 ON t93.AAC001 = ac01.AAC001
+        JOIN AC01 ac01 ON t93.AAC001 = ac01.AAC001
         WHERE t93.ATC931 IN ({placeholders})
           AND t93.ATC93G = '1'
-          AND m.ATB930 IS NULL
+          AND ac01.AAC002 IS NOT NULL
+        MINUS
+        SELECT DISTINCT ac01.AAC002, t93.ATC931
+        FROM TC93 t93
+        JOIN TC8M m ON m.ATB930 = t93.ATB930
+                   AND m.ATC931 = t93.ATC931
+                   AND m.ATC937 = t93.ATC937
+                   AND m.ATC8M3 = 2
+        JOIN AC01 ac01 ON t93.AAC001 = ac01.AAC001
+        WHERE t93.ATC931 IN ({placeholders})
+          AND t93.ATC93G = '1'
           AND ac01.AAC002 IS NOT NULL
     """
     months = sorted(set(salary_months))
