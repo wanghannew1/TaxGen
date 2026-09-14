@@ -526,7 +526,7 @@ def api_generate():
                          for p in _roster or []}
         unpaid_certs = None
         if zero_choices:
-            from tax_zero import build_roster_zero_records
+            from tax_zero import build_roster_zero_records, build_contract_zero_records
             unpaid_certs = {c for c, _m in _unpaid_pairs}
             if _roster:
                 _checked = {str(r.身份证 or r.职工号 or "").strip().upper()
@@ -536,6 +536,17 @@ def api_generate():
                     checked_certs=_checked)
                 if _injected:
                     records = records + _injected
+            # C 类合同新入职注入 (2026-09-14): 合同开始月==申报月 未做工资人员
+            # 默认生成零申报保留在册。独立于名单运行 (名单未导入也生效, 王瑞烽
+            # 202608 即不在名单); 排除名单在册 (B 类已覆盖防重复) 与当期有工资
+            # 记录 (checked 含 B 注入后, 防 C 与 B 双重注入同人)。
+            _c_checked = {str(r.身份证 or r.职工号 or "").strip().upper()
+                          for r in records}
+            _c_injected = build_contract_zero_records(
+                conn, month, zero_choices, excl_codes,
+                checked_certs=_c_checked, roster=_roster)
+            if _c_injected:
+                records = records + _c_injected
         warnings = []
         if confirmed_combos and merge_by_person:
             persons = list({r.职工号 for r in raw_records})

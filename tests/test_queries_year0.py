@@ -48,7 +48,8 @@ def _clear_tc90_cache():
 
 
 def _tc90_rows(*rows):
-    # 行结构: (AAC002, ATB930, ATC90X, AAB004, AAE019, ATC90AV, ATC90C)
+    # 行结构: (AAC002, ATB930, ATC90X, AAB004, AAE019, ATC90AV, ATC90C[, AAC003])
+    # 第 8 列 AAC003 (姓名) 为 2026-09-14 新增; 旧 7 元组断言时保持兼容 (len(r)>7 守卫)
     return list(rows)
 
 
@@ -61,6 +62,33 @@ class TestPersonTc90Info:
         assert info["C1"]["salary_end_ym"] == 202605
         assert info["C1"]["unit_code"] == 100
         assert info["C1"]["contract_handlers"] == ["经办A"]
+
+    def test_name_and_contract_start_from_8th_column(self):
+        # 2026-09-14 新增 (C 类合同新入职零申报): SELECT 增加 AAC003 姓名列,
+        # contract_start 取最后一份合同 (ATC90C 最大) 的 ATC90C 值
+        conn = FakeConn(_tc90_rows(
+            ("C1", 100, "单元100", "单位甲", "经办A", 202605, 20200101, "王五"),
+        ))
+        info = queries.get_person_tc90_info(conn)
+        assert info["C1"]["name"] == "王五"
+        assert info["C1"]["contract_start"] == "2020-01-01"
+
+    def test_name_missing_legacy_7_tuple_rows(self):
+        # 旧 7 元组 (无 AAC003): len(r) > 7 守卫 → name 为空不崩溃
+        conn = FakeConn(_tc90_rows(
+            ("C1", 100, "单元100", "单位甲", "经办A", 202605, 20200101),
+        ))
+        info = queries.get_person_tc90_info(conn)
+        assert info["C1"]["name"] == ""
+        assert info["C1"]["contract_start"] == "2020-01-01"
+
+    def test_contract_start_null_safe(self):
+        # ATC90C 为空: contract_start 回落空串 (无合同起始日期的行不入 rk=1)
+        conn = FakeConn(_tc90_rows(
+            ("C1", 100, "单元100", "单位甲", "经办A", 202605, None),
+        ))
+        info = queries.get_person_tc90_info(conn)
+        assert info["C1"]["contract_start"] == ""
 
     def test_dirty_av_year_zero_no_crash(self):
         # 2026-09-11 实测脏数据: ATC90AV=6 → divmod → y=0, 曾经 datetime(year=0) 崩溃

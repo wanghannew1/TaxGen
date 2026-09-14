@@ -94,6 +94,31 @@ def _cache_set(cache: dict, data):
     cache["ts"] = time.time()
 
 
+def _fmt_ymd(v) -> str:
+    """合同开始日期 (ATC90C, Oracle DATE) 格式化 "YYYY-MM-DD"。
+
+    ATC90C 经 cx_Oracle 取回可能是 datetime/date/str; 统一转 ISO 字符串。
+    无效值 (None/空) 返回空串 (零申报 C 类判定时视为无开始日期)。
+    """
+    if v is None:
+        return ""
+    if isinstance(v, str):
+        s = v.strip()
+        if len(s) >= 10 and s[4] == "-":
+            return s[:10]
+        if len(s) == 8 and s.isdigit():
+            return f"{s[:4]}-{s[4:6]}-{s[6:8]}"
+        return ""
+    if isinstance(v, int):
+        s = str(v)
+        if len(s) == 8:
+            return f"{s[:4]}-{s[4:6]}-{s[6:8]}"
+        return ""
+    if hasattr(v, "strftime"):
+        return v.strftime("%Y-%m-%d")
+    return ""
+
+
 @dataclass
 class DeductionInfo:
     """TC94 扣款明细 - 按 ATC930 (TC93 主键) 关联的工资扣款分解。
@@ -961,6 +986,34 @@ def get_unpaid_salary_persons(conn, salary_months) -> Set[str]:
     return certs
 
 
+def get_month_salary_certs(conn, pay_month) -> Set[str]:
+    """查询当期申报月 (TC93.ATC931=pay_month) 有工资记录 (ATC93G='1') 的全量证号集合。
+
+    C 类合同新入职候选排除使用 (2026-09-14): C 类定义为"当期未做工资",
+    排除须按"当期 TC93 有无记录"判定而非仅已确认组合 (checked_certs):
+    做工资未发 (TC8M 无发放) / 次月发放 (ATC8G7>当期) 人员其组合未获确认时
+    同样有当期工资单, 不属于"未做工资"。真实数据 202608 发现 51 人 (如
+    41199/41100/39958/38085 单元批1) 因组合未确认漏入 checked_certs 而被
+    C 类误收, 2026-09-14 修复为按当期全量排除。返回统一大写的证件号集合。
+    """
+    sql = """
+        SELECT DISTINCT ac01.AAC002
+        FROM TC93 t93
+        JOIN AC01 ac01 ON t93.AAC001 = ac01.AAC001
+        WHERE t93.ATC931 = :pay_month
+          AND t93.ATC93G = '1'
+          AND ac01.AAC002 IS NOT NULL
+    """
+    certs = set()
+    with conn.cursor() as cursor:
+        cursor.execute(sql, {"pay_month": pay_month})
+        for row in cursor.fetchall():
+            cert = str(row[0] or "").strip().upper()
+            if cert:
+                certs.add(cert)
+    return certs
+
+
 def get_unpaid_salary_cert_months(conn, salary_months) -> Set[Tuple[str, int]]:
     """查询"已做工资单但未发薪"人员的 (证件号, 所属年月) 精确对集合。
 
@@ -1747,16 +1800,19 @@ def get_person_tc90_info(conn) -> Dict[str, dict]:
     - 单位/经办人: 最后一份合同 (ATC90C 最大, 同日多份全保留经办人);
     - 工资结束: 最后合同行的 MAX(ATC90AV), 脏数据 (year<1900 等) 视为无。
     模块级 TTL 缓存 5 分钟。
-    返回 {证件号(大写): {"unit_code", "unit_name", "dept_name",
-                          "contract_handlers": [经办人...], "salary_end_ym": int}}。
+    返回 {证件号(大写): {"unit_code", "unit_name", "dept_name", "name",
+                          "contract_handlers": [经办人...], "salary_end_ym": int,
+                          "contract_start": str}}。
     salary_end_ym 为工资结束年月 YYYYMM (与 get_tc90_salary_end_dates 换算结果一致),
     0 表示无有效值 (未设/脏数据)。
+    contract_start 为最后一份合同 (ATC90C 最大) 的开始日期 "YYYY-MM-DD" (零申报 C
+    类"合同开始月==申报月"判定用, 2026-09-14 用户确认), 无有效日期为空串。
     """
     cached = _cache_get(_TC90_INFO_CACHE, _TC90_INFO_TTL)
     if cached is not None:
         return cached
     sql = """
-        SELECT AAC002, ATB930, ATC90X, AAB004, AAE019, ATC90AV, ATC90C
+        SELECT AAC002, ATB930, ATC90X, AAB004, AAE019, ATC90AV, ATC90C, AAC003
         FROM TC90
         WHERE AAC002 IS NOT NULL
     """
@@ -1776,6 +1832,7 @@ def get_person_tc90_info(conn) -> Dict[str, dict]:
         unit_code = 0
         unit_name = ""
         dept_name = ""
+        name = ""
         handlers: List[str] = []
         for r in last:
             unit_code = max(unit_code, int(r[1] or 0))
@@ -1783,6 +1840,8 @@ def get_person_tc90_info(conn) -> Dict[str, dict]:
             dept_name = max(dept_name, str(r[3] or ""))
             if r[4]:
                 handlers.append(str(r[4]))
+            if len(r) > 7:
+                name = max(name, str(r[7] or ""))
         salary_end_ym = 0
         avail = []
         for r in last:
@@ -1803,8 +1862,10 @@ def get_person_tc90_info(conn) -> Dict[str, dict]:
             "unit_code": unit_code,
             "unit_name": unit_name,
             "dept_name": dept_name,
+            "name": name,
             "contract_handlers": list(dict.fromkeys(handlers)),
             "salary_end_ym": salary_end_ym,
+            "contract_start": _fmt_ymd(max_c),
         }
     _cache_set(_TC90_INFO_CACHE, result)
     return result

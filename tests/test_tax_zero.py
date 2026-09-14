@@ -83,6 +83,10 @@ class TestBuildSuggestions:
         # 在册信息 (2026-09-11): 默认无 TC93 记录
         monkeypatch.setattr("queries.get_person_system_info",
                             lambda conn, certs: {})
+        # 当期申报月 TC93 全量有记录证号 (2026-09-14 C 类排除): 默认无记录
+        self.month_salary_certs = set()
+        monkeypatch.setattr("queries.get_month_salary_certs",
+                            lambda conn, pay_month: set(self.month_salary_certs))
 
     def test_zero_income_record_is_candidate(self):
         self.records = [_rec(cert="C1", unit=100, income=Decimal("0"))]
@@ -530,6 +534,116 @@ class TestBuildSuggestions:
         assert order[0][0] == "B1" and order[0][1] == tax_zero.CAT_B_ROSTER
         assert [c[0] for c in order[1:]] == ["B3", "A1", "A2"]
 
+    def _c_tc90(self, cert="C1", start="2026-06-15", end_ym=0, unit=100,
+                name="合同人", handler=""):
+        # C 类 TC90 最小结构: 合同开始日期 (ATC90C) + 工资结束年月 (ATC90AV)
+        return {"unit_code": unit, "unit_name": f"单元{unit}",
+                "contract_handlers": [handler] if handler else [],
+                "salary_end_ym": end_ym, "name": name,
+                "contract_start": start}
+
+    def test_contract_new_hire_in_window_candidate(self, monkeypatch):
+        # C 类 (2026-09-14 新增, 独立于名单): 合同开始月==申报月 (窗口内 2026-06-01~30),
+        # 当期无 TC93 记录, 不在名单 → 候选, 默认 declare + 理由带合同日期
+        self.records = []
+        self.tc90_info = {"C1": self._c_tc90(start="2026-06-15")}
+        res = tax_zero.build_zero_salary_suggestions(None, 202606, self.COMBOS)
+        u = res["units"][0]
+        assert u["unit"] == 100
+        assert u["suggested"] == "declare"
+        p = u["persons"][0]
+        assert p["cert_no"] == "C1"
+        assert p["name"] == "合同人"
+        assert p["category"] == tax_zero.CAT_C_CONTRACT
+        assert p["suggested"] == "declare"
+        assert p["default_chosen"] == "declare"
+        assert "2026-06-15" in p["reason"]
+        assert "合同开始:2026-06-15" in p["sys_info"]
+
+    def test_contract_start_before_window_excluded(self, monkeypatch):
+        # 合同开始早于申报月窗口 (2026-05-20) → 非"本月新入职", 不进候选
+        self.records = []
+        self.tc90_info = {"C1": self._c_tc90(start="2026-05-20")}
+        res = tax_zero.build_zero_salary_suggestions(None, 202606, self.COMBOS)
+        assert res["units"] == []
+
+    def test_contract_start_after_window_excluded(self, monkeypatch):
+        # 合同开始晚于申报月窗口 (2026-07-01) → 未入职, 不进候选
+        self.records = []
+        self.tc90_info = {"C1": self._c_tc90(start="2026-07-01")}
+        res = tax_zero.build_zero_salary_suggestions(None, 202606, self.COMBOS)
+        assert res["units"] == []
+
+    def test_contract_already_checked_excluded(self, monkeypatch):
+        # 当期有 TC93 记录 (checked_certs) → 正常申报, 不落 C 类
+        self.records = [_rec(cert="C1", unit=100, income=Decimal("5000"))]
+        self.tc90_info = {"C1": self._c_tc90(start="2026-06-15")}
+        res = tax_zero.build_zero_salary_suggestions(None, 202606, self.COMBOS)
+        assert res["units"] == []
+
+    def test_contract_month_salary_unconfirmed_excluded(self, monkeypatch):
+        # 当期 (202606) 有 TC93 工资记录但组合未入选/未确认 (做了没发/次月发)
+        # → 不属于"未做工资", 不落 C 类 (2026-09-14 修复, 按当期全量 TC93 排除)
+        self.records = []
+        self.month_salary_certs = {"C1"}
+        self.tc90_info = {"C1": self._c_tc90(start="2026-06-15")}
+        res = tax_zero.build_zero_salary_suggestions(None, 202606, self.COMBOS)
+        assert res["units"] == []
+
+    def test_contract_in_roster_excluded_from_c(self, monkeypatch):
+        # 名单在册人员走 B 类, C 类排除 (避免重复候选)
+        self.records = []
+        roster = [_roster(cert="C1", hire="2020-01-01")]
+        self.tc90_info = {"C1": self._c_tc90(start="2026-06-15")}
+        res = tax_zero.build_zero_salary_suggestions(None, 202606, self.COMBOS,
+                                                     roster=roster)
+        p = res["units"][0]["persons"][0]
+        assert p["category"] == tax_zero.CAT_B_ROSTER  # 名单优先, 非 C 类
+        assert p["category"] != tax_zero.CAT_C_CONTRACT
+
+    def test_contract_excl_unit_excluded(self, monkeypatch):
+        # 合同单元为完全排除单元(102) → 不进候选
+        self.records = []
+        self.tc90_info = {"C1": self._c_tc90(start="2026-06-15", unit=102)}
+        res = tax_zero.build_zero_salary_suggestions(None, 202606, self.COMBOS)
+        assert res["units"] == []
+
+    def test_contract_salary_end_le_pay_month_excluded(self, monkeypatch):
+        # 工资结束年月(ATC90AV) <= 申报月 → 已离职, 不进候选
+        self.records = []
+        self.tc90_info = {"C1": self._c_tc90(start="2026-06-15", end_ym=202605)}
+        res = tax_zero.build_zero_salary_suggestions(None, 202606, self.COMBOS)
+        assert res["units"] == []
+
+    def test_contract_salary_end_gt_pay_month_kept(self, monkeypatch):
+        # 工资结束年月 > 申报月 → 在职, 保留候选
+        self.records = []
+        self.tc90_info = {"C1": self._c_tc90(start="2026-06-15", end_ym=202607)}
+        res = tax_zero.build_zero_salary_suggestions(None, 202606, self.COMBOS)
+        p = res["units"][0]["persons"][0]
+        assert p["category"] == tax_zero.CAT_C_CONTRACT
+
+    def test_contract_handler_filter(self, monkeypatch):
+        # 经办人过滤: C 类仅取合同经办人
+        self.records = []
+        self.tc90_info = {"C1": self._c_tc90(start="2026-06-15", handler="梁光伟")}
+        res = tax_zero.build_zero_salary_suggestions(None, 202606, self.COMBOS,
+                                                     handler="梁光伟")
+        assert [p["cert_no"] for p in res["units"][0]["persons"]] == ["C1"]
+        res2 = tax_zero.build_zero_salary_suggestions(None, 202606, self.COMBOS,
+                                                      handler="白云")
+        assert res2["units"] == []
+
+    def test_contract_config_unit_suggested_skip(self, monkeypatch):
+        # C 类落在配置"工资为0不增员不报税"单元(101) → 建议 skip
+        self.records = []
+        self.tc90_info = {"C1": self._c_tc90(start="2026-06-15", unit=101)}
+        res = tax_zero.build_zero_salary_suggestions(None, 202606, self.COMBOS)
+        p = res["units"][0]["persons"][0]
+        assert p["category"] == tax_zero.CAT_C_CONTRACT
+        assert p["suggested"] == "skip"
+        assert "不增员不报税" in p["reason"]
+
 
 class TestFilterZero:
     def test_skip_drops_zero_income_records_only(self):
@@ -767,6 +881,126 @@ class TestBuildRosterZeroRecords:
     def test_no_declare_returns_empty(self):
         rows = self._call(choices={})
         assert rows == []
+
+
+class TestBuildContractZeroRecords:
+    """build_contract_zero_records: C 类合同新入职注入 (2026-09-14)。
+
+    候选判定与 build_zero_salary_suggestions 的 C 类完全一致: 合同开始日期
+    (TC90.ATC90C) 落在申报月当月窗口, 工资结束年月 (ATC90AV) 空或 > 当期 (在职);
+    排除名单在册 (B 类覆盖)、当期有工资记录 (checked_certs) 与完全排除单元。
+    注入记录: 收入/五险皆 0, 姓名取 TC90.AAC003, 结算单元取合同单元 (TC90);
+    工资所属年月/当月批次取最后真实结算 (get_person_system_info), 无记录→0/空。
+    """
+
+    @pytest.fixture(autouse=True)
+    def patch_sources(self, monkeypatch):
+        self.tc90_info = {}
+        self.sys_info = {}
+        self.arrear_batches = set()
+
+        def fake_tc90(conn):
+            return dict(self.tc90_info)
+
+        monkeypatch.setattr("queries.get_person_tc90_info", fake_tc90)
+        monkeypatch.setattr("queries.get_person_system_info",
+                            lambda conn, certs: dict(self.sys_info))
+        monkeypatch.setattr(tax_zero, "get_arrear_batches",
+                            lambda conn, months: set(self.arrear_batches))
+        # 当期申报月 TC93 全量有记录证号 (2026-09-14 C 类排除): 默认无记录
+        self.month_salary_certs = set()
+        monkeypatch.setattr("queries.get_month_salary_certs",
+                            lambda conn, pay_month: set(self.month_salary_certs))
+
+    def _c_info(self, start="2026-06-15", end_ym=0, unit=100, name="合同人"):
+        return {"unit_code": unit, "unit_name": f"单元{unit}",
+                "contract_handlers": [], "salary_end_ym": end_ym,
+                "name": name, "contract_start": start}
+
+    def _call(self, month=202606, choices=None, excl=set(), checked=set(), roster=None):
+        choices = choices if choices is not None else {"C1": "declare"}
+        return tax_zero.build_contract_zero_records(None, month, choices, excl,
+                                                    checked, roster)
+
+    def test_declare_new_hire_injected_zero_record(self):
+        self.tc90_info = {"C1": self._c_info(start="2026-06-15")}
+        rows = self._call()
+        assert len(rows) == 1
+        rec = rows[0]
+        assert rec.身份证 == "C1"
+        assert rec.姓名 == "合同人"
+        assert rec.职工号 == "C1"
+        assert rec.工资所属年月 == 0          # 无历史结算记录 → 0
+        assert rec.结算单元 == 100
+        assert rec.结算单元名称 == "单元100"
+        assert rec.当月批次 == ""
+        assert rec.工资总额 == Decimal("0")
+        assert rec.应发工资 == Decimal("0")
+
+    def test_window_miss_not_injected(self):
+        # 合同开始 2026-05-20 (窗口外) → 不注入
+        self.tc90_info = {"C1": self._c_info(start="2026-05-20")}
+        assert self._call() == []
+
+    def test_salary_end_le_pay_month_not_injected(self):
+        # ATC90AV <= 当期 → 已离职, 不注入
+        self.tc90_info = {"C1": self._c_info(start="2026-06-15", end_ym=202605)}
+        assert self._call() == []
+
+    def test_checked_certs_excluded(self):
+        # 当期有工资记录 → 不注入
+        self.tc90_info = {"C1": self._c_info(start="2026-06-15")}
+        assert self._call(checked={"C1"}) == []
+
+    def test_month_salary_unconfirmed_excluded(self):
+        # 当期 (202606) 有 TC93 工资记录但组合未确认 (做了没发/次月发)
+        # → 不属于"未做工资", 不注入 (2026-09-14 修复, 与建议侧同口径)
+        self.tc90_info = {"C1": self._c_info(start="2026-06-15")}
+        self.month_salary_certs = {"C1"}
+        assert self._call() == []
+
+    def test_roster_certs_excluded(self):
+        # 名单在册 (B 类覆盖) → 不注入, 防 C/B 双重注入
+        self.tc90_info = {"C1": self._c_info(start="2026-06-15")}
+        roster = [_roster(cert="C1")]
+        assert self._call(roster=roster) == []
+
+    def test_excl_codes_dropped(self):
+        # 合同单元为完全排除单元 → 不注入
+        self.tc90_info = {"C1": self._c_info(start="2026-06-15", unit=102)}
+        assert self._call(excl={102}) == []
+
+    def test_declare_only_others_skip_not_injected(self):
+        self.tc90_info = {"C1": self._c_info(start="2026-06-15"),
+                          "C2": self._c_info(start="2026-06-15")}
+        rows = self._call(choices={"C1": "declare", "C2": "skip"})
+        assert [r.身份证 for r in rows] == ["C1"]
+
+    def test_sys_info_last_pay_attached(self):
+        # 有历史结算 → 工资所属年月/批次取最后一次真实结算
+        self.tc90_info = {"C1": self._c_info(start="2026-06-15")}
+        self.sys_info = {"C1": {"last_pay_ym": 202604, "last_batch": "2"}}
+        rows = self._call()
+        assert rows[0].工资所属年月 == 202604
+        assert rows[0].当月批次 == "2"
+
+    def test_arrear_batch_attached(self):
+        # 最后发薪批次欠费未发 (TB96.ATB96Z='1') → 挂载欠费未发
+        self.tc90_info = {"C1": self._c_info(start="2026-06-15")}
+        self.sys_info = {"C1": {"last_pay_ym": 202604, "last_batch": "1"}}
+        self.arrear_batches = {(100, 202604, "1")}
+        rows = self._call()
+        assert getattr(rows[0], "欠费未发", False) is True
+
+    def test_pay_month_differs_attached(self):
+        self.tc90_info = {"C1": self._c_info(start="2026-06-15")}
+        self.sys_info = {"C1": {"last_pay_ym": 202605, "last_batch": "1",
+                                "pay_month": 202606}}
+        rows = self._call()
+        assert getattr(rows[0], "发放月", 0) == 202606
+
+    def test_no_declare_returns_empty(self):
+        assert self._call(choices={}) == []
 
 
 class TestClassifyRowZeroSubcategories:

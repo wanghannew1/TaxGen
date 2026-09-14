@@ -42,10 +42,12 @@ CAT_A2_UNPAID = "a2_unpaid"             # 做了工资没发 (TC8M 无发放)
 CAT_B_ROSTER = "b_roster"               # 个税端在职无工资 (名单在册, 在职)
 CAT_B_OUTSIDE = "b_outside"             # 名单在册但系统查无此人 (人工管理, 默认不生成)
 CAT_B_LEFT = "b_left"                   # 在系统但工资结束年月早于当期工资单所属月 (已离职, 默认不生成+建议减员)
+CAT_C_CONTRACT = "c_contract"           # 合同开始月==申报月 新入职未做工资 (不在名单, 默认生成零申报)
 
 # 单元内人员展示排序 (2026-09-11 用户确认): 名单在册最前, 不在系统最后
 _CAT_SORT_ORDER = {
-    CAT_B_ROSTER: 0,          # 名单在册 (在职) → 最前
+    CAT_C_CONTRACT: -1,       # 合同新入职未做工资 → 最前 (2026-09-14 新入职漏报待补)
+    CAT_B_ROSTER: 0,          # 名单在册 (在职) → 次前
     CAT_B_LEFT: 1,            # 名单在册·已离职
     CAT_A1_INCOME_ZERO: 2,    # 工资单收入=0
     CAT_A2_UNPAID: 3,         # 做了工资没发
@@ -59,6 +61,7 @@ REASON_B1 = "个税端在职，本期新签合同未做工资，默认生成零�
 REASON_B2 = "个税端在职，本期未做工资未发放未减员，默认生成零申报；若已离职请先办理减员"
 REASON_B_OUTSIDE = "个税端在职但不在系统管理(人工管理)，默认不生成零申报；如需在个税端保留请确认生成"
 REASON_B_LEFT = "工资结束年月{ym}早于当期工资单所属年月{pay}，判定已离职，默认不生成零申报，建议办理减员"
+REASON_C = "合同开始日期{date}（本月新入职），当期未做工资未发放，默认生成零申报保留在册；若当期已做工资请走正常申报"
 
 
 def _income_of_dict(d: dict) -> Decimal:
@@ -217,6 +220,16 @@ def build_zero_salary_suggestions(conn, pay_month, combos, roster=None, handler=
         p["income_total"] += float(income)
         p["category"] = category
 
+    # TC90 一次全表合并: 在系统判定 + 合同单元/经办人 + 工资结束年月 + 合同开始日期
+    # (2026-09-12 性能优化: 原 3 个分批 IN 查询合并为单次全表 ~1.4s + 5 分钟缓存)
+    # C 类合同新入职 (2026-09-14) 独立于名单运行: 名单未导入 (roster=None) 也要查
+    from queries import get_person_tc90_info
+    tc90_info = get_person_tc90_info(conn)
+    in_system = set(tc90_info)
+    # 名单在册证号集合 (C 类排除, 名单人员走 B 类避免与 B 类重复)
+    roster_certs = {str(p.get("cert_no") or "").strip().upper()
+                    for p in (roster or []) if str(p.get("cert_no") or "").strip()}
+
     if roster:
         month_end = _month_end(pay_month)
         b_certs = {}
@@ -229,10 +242,6 @@ def build_zero_salary_suggestions(conn, pay_month, combos, roster=None, handler=
                 continue
             b_certs[cert] = p
         if b_certs:
-            from queries import get_person_tc90_info, get_person_system_info
-            # TC90 一次全表合并: 在系统判定 + 合同单元/经办人 + 工资结束年月
-            # (2026-09-12 性能优化: 原 3 个分批 IN 查询合并为单次全表 ~1.4s + 5 分钟缓存)
-            tc90_info = get_person_tc90_info(conn)
             # B 类三分类 (2026-09-11 用户确认):
             # 不在系统 (TC90 无合同, 人工管理) → 默认不生成, 面板体现让用户确认;
             # 在系统但工资结束年月 (TC90.ATC90AV) < 员工所在单位当期工资单所属月份
@@ -240,8 +249,8 @@ def build_zero_salary_suggestions(conn, pay_month, combos, roster=None, handler=
             # 在系统且在册在职 → 维持 B1/B2 (默认 declare 保留在册)
             # 在系统判定口径: TC90 有无合同为准 (AC01 仅个人基本信息, 不判定系统管理);
             # 同一证件多份合同时以最后一份 (ATC90C 最大) 为准
-            in_system = set(tc90_info)
             # 在系统人员展示: 结算单元/最后发薪工资单/工资结束年月/经办人 (2026-09-11 用户需求)
+            from queries import get_person_system_info
             system_info = get_person_system_info(conn, list(in_system)) if in_system else {}
             y, m = divmod(max(salary_months), 100)
             hire_start = f"{y - 1:04d}-{m:02d}-01"  # 近12个月入职 → B1 新签合同未做工资
@@ -310,6 +319,63 @@ def build_zero_salary_suggestions(conn, pay_month, combos, roster=None, handler=
                         "handler": handler,
                     }
 
+    # C 类: 合同开始月==申报月 新入职未做工资 (2026-09-14 用户确认新增, 独立于名单)
+    # 候选判定 (方案 A 谨慎): 合同开始日期 (TC90.ATC90C) 落在申报月当月窗口
+    # [当月1日, 月末] → 本月新入职需报税, 当期未做工资 → 零申报候选;
+    # 工资结束年月 (ATC90AV) 空 或 > 当期 → 在职 (≤当期判已离职排除);
+    # ATC90D 离职日期不参与过滤 (离职日期随意填, 无人维护);
+    # 排除名单在册 (B 类已覆盖)、当期有工资记录、完全排除单元;
+    # 当期有工资记录判定 (2026-09-14 修复): 按当期申报月 TC93 全量记录
+    # (get_month_salary_certs) 排除, 而非仅已确认组合 (checked_certs):
+    # "做了工资未发放/次月发放"人员其组合未被选中时同样有当期工资单,
+    # 不属于"未做工资"; 真实数据 202608 发现 51 人误入 C 类 (如 41199/
+    # 41100/39958/38085 单元批1有 ATC931=202608 记录但未入选发放组合),
+    # 2026-09-14 修复为按当期全量 TC93 记录排除;
+    # 经办人过滤仅取合同经办人 (C 类无 TC8M/TC93 记录);
+    # 默认生成零申报保留在册 (新入职当月无工资也应在个税端在册)
+    from queries import get_month_salary_certs
+    c_y, c_m = divmod(pay_month, 100)
+    c_win_start = f"{c_y:04d}-{c_m:02d}-01"
+    c_win_end = _month_end(pay_month)
+    month_salary_certs = get_month_salary_certs(conn, pay_month)
+    for cert, info in tc90_info.items():
+        if cert in checked_certs or cert in month_salary_certs or cert in roster_certs:
+            continue
+        start = str(info.get("contract_start") or "")
+        if not start or not (c_win_start <= start <= c_win_end):
+            continue
+        unit = int(info.get("unit_code") or 0)
+        if unit in excl_codes:
+            continue
+        end_ym = int(info.get("salary_end_ym") or 0)
+        if end_ym and end_ym <= pay_month:
+            continue
+        if handler_filter:
+            h = str((info.get("contract_handlers") or [""])[0] or "")
+            if handler_filter not in h:
+                continue
+        unit_name = str(info.get("unit_name") or "")
+        u = _ensure_unit(unit, unit_name or "未关联结算单元",
+                         "zero_salary_no_add" if unit in zero_codes else "normal",
+                         "skip" if unit in zero_codes else "declare")
+        u["count"] += 1
+        p_entry = u["persons"].setdefault(cert, {
+            "cert_no": cert,
+            "name": str(info.get("name") or ""),
+            "emp_no": "",
+            "salary_months": [],
+            "income_total": 0.0,
+        })
+        p_entry["category"] = CAT_C_CONTRACT
+        p_entry["_contract_start"] = start
+        p_entry["_sys_info"] = {
+            "unit_code": unit, "unit_name": unit_name,
+            "last_pay_ym": 0, "pay_month": 0, "batch": "",
+            "end_ym": end_ym,
+            "handler": str((info.get("contract_handlers") or [""])[0] or ""),
+            "contract_start": start,
+        }
+
     if not units:
         return {"pay_month": pay_month, "units": []}
 
@@ -328,6 +394,8 @@ def build_zero_salary_suggestions(conn, pay_month, combos, roster=None, handler=
                         ym=p["_end_ym"], pay=p.get("_ref_ym") or salary_months[0])
                 elif in_config:
                     suggested, reason = "skip", REASON_A1_CONFIG
+                elif p["category"] == CAT_C_CONTRACT:
+                    suggested, reason = "declare", REASON_C.format(date=p["_contract_start"])
                 elif p["category"] == CAT_B_ROSTER:
                     if p.pop("_is_new", False):
                         suggested, reason = "declare", REASON_B1
@@ -361,6 +429,8 @@ def build_zero_salary_suggestions(conn, pay_month, combos, roster=None, handler=
                     parts.append(f"最后发薪:{si['last_pay_ym']}{batch}{pay_note}")
                 if si["end_ym"]:
                     parts.append(f"工资结束:{si['end_ym']}")
+                if si.get("contract_start"):
+                    parts.append(f"合同开始:{si['contract_start']}")
                 if si["handler"]:
                     parts.append(f"经办人:{si['handler']}")
                 p["sys_info"] = "；".join(parts) if parts else "系统内无合同/工资记录"
@@ -454,6 +524,92 @@ def build_roster_zero_records(conn, pay_month, roster, zero_choices, excl_codes,
         if (unit, int(last.get("last_pay_ym") or 0), str(last.get("last_batch") or "")) \
                 in arrear_batches:
             rec.欠费未发 = True
+        rows.append(rec)
+    return rows
+
+
+def build_contract_zero_records(conn, pay_month, zero_choices, excl_codes,
+                                checked_certs, roster=None):
+    """合同新入职 (C 类) 被确认"生成" → 构造零申报 SalaryRecord 列表。
+
+    与 build_roster_zero_records 同构: 收入/五险皆 0, 保留 TC90 合同身份信息
+    (姓名 AAC003/证件 AAC002), 结算单元取合同单元 (TC90.ATB930/ATC90X),
+    关联不到则 0。
+    工资所属年月/当月批次: 与 B 类同口径取该人员最后一次真实结算
+    (get_person_system_info.last_pay_ym/last_batch), 无结算记录 → 年月=0 批次空,
+    验证报告备注"当期无未发工资，无历史发放记录"。
+    候选判定与 build_zero_salary_suggestions 的 C 类完全一致: 合同开始日期
+    (ATC90C) 落在申报月当月窗口 [当月1日, 月末] → 本月新入职; 工资结束年月
+    (ATC90AV) 空 或 > pay_month → 在职; 排除名单在册 (B 类已覆盖)、当期有
+    工资记录与完全排除单元 (excl_codes)。当期有工资记录按申报月 TC93 全量
+    (get_month_salary_certs) 判定, 与建议侧同口径 (2026-09-14 修复)。
+    """
+    declare_certs = {str(c).strip().upper() for c, m in (zero_choices or {}).items()
+                     if m == "declare"}
+    if not declare_certs:
+        return []
+    from queries import get_person_tc90_info, get_person_system_info, get_month_salary_certs
+    checked = {str(c).strip().upper() for c in (checked_certs or set())}
+    roster_certs = {str(p.get("cert_no") or "").strip().upper()
+                    for p in (roster or []) if str(p.get("cert_no") or "").strip()}
+    c_y, c_m = divmod(pay_month, 100)
+    c_win_start = f"{c_y:04d}-{c_m:02d}-01"
+    c_win_end = _month_end(pay_month)
+    month_salary_certs = get_month_salary_certs(conn, pay_month)
+    contract_map = get_person_tc90_info(conn)
+    candidates = set()
+    for cert, info in contract_map.items():
+        if cert not in declare_certs or cert in checked or cert in month_salary_certs \
+                or cert in roster_certs:
+            continue
+        start = str(info.get("contract_start") or "")
+        if not start or not (c_win_start <= start <= c_win_end):
+            continue
+        end_ym = int(info.get("salary_end_ym") or 0)
+        if end_ym and end_ym <= pay_month:
+            continue
+        unit = int(info.get("unit_code") or 0)
+        if unit in excl_codes:
+            continue
+        candidates.add(cert)
+    if not candidates:
+        return []
+    sys_info = get_person_system_info(conn, sorted(candidates))
+    proxy_months = sorted({int(s.get("last_pay_ym") or 0) for s in sys_info.values()
+                           if int(s.get("last_pay_ym") or 0)})
+    arrear_batches = get_arrear_batches(conn, proxy_months) if proxy_months else set()
+    rows = []
+    for cert in sorted(candidates):
+        info = contract_map[cert]
+        unit = int(info.get("unit_code") or 0)
+        last = sys_info.get(cert, {})
+        rec = SalaryRecord(
+            职工号=cert,
+            姓名=str(info.get("name") or ""),
+            身份证=cert,
+            工资所属年月=int(last.get("last_pay_ym") or 0),
+            结算单元=unit,
+            结算单元名称=str(info.get("unit_name") or ""),
+            当月批次=str(last.get("last_batch") or ""),
+            应发工资=Decimal("0"), 实发工资=Decimal("0"), 个人所得税=Decimal("0"),
+            工资总额=Decimal("0"), 独生子女费=Decimal("0"), 采暖费=Decimal("0"),
+            奖金=Decimal("0"), 养老个人=Decimal("0"), 医疗个人=Decimal("0"),
+            失业个人=Decimal("0"), 公积金个人=Decimal("0"),
+            补缴及退款保险金额个人=Decimal("0"), 大病险个人=Decimal("0"),
+            补发3=Decimal("0"), 个人交纳现金=Decimal("0"),
+            个人其他调整=Decimal("0"), 个人欠款=Decimal("0"),
+            扣款大病险=Decimal("0"), 税后工会会费=Decimal("0"),
+            个人代理费=Decimal("0"), 意外险个人=Decimal("0"), 经济补偿金=Decimal("0"),
+        )
+        if _发放月 := int(last.get("pay_month") or 0):
+            if _发放月 != int(last.get("last_pay_ym") or 0):
+                rec.发放月 = _发放月
+        if (unit, int(last.get("last_pay_ym") or 0), str(last.get("last_batch") or "")) \
+                in arrear_batches:
+            rec.欠费未发 = True
+        # 合同新入职标记: 动态属性, 供 _classify_row 区分 C 类 (合同新入职零申报注入)
+        # 与 B 类 (名单在册零申报注入), 避免 C 类记录被误标为"名单在册"
+        rec.合同新入职 = True
         rows.append(rec)
     return rows
 
