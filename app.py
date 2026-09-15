@@ -1,12 +1,16 @@
 """Flask 主应用 - 个税模板填表工具"""
 import atexit
+import hashlib
+import json
 import logging
 import os
+import time
+from calendar import monthrange
 from datetime import datetime
 from logging.handlers import RotatingFileHandler
 from flask import Flask, render_template, request, jsonify, send_file
 from db import init_db, get_connection, close_db
-from queries import get_available_months, get_salary_records, get_personnel_info, get_suggestions, search_tc8m, get_abnormal_records, get_tc93_all_fields, get_tc93_field_comments, get_merge_warnings, get_pay_months, get_payroll_cert_numbers, get_tc90_salary_end_dates, get_payroll_personnel, get_labor_service_cert_numbers
+from queries import get_available_months, get_salary_records, get_personnel_info, get_suggestions, search_tc8m, get_abnormal_records, get_tc93_all_fields, get_tc93_field_comments, get_merge_warnings, get_pay_months, get_payroll_cert_numbers, get_payroll_personnel, get_labor_service_cert_numbers
 from templates_gen.normal_salary import generate_normal_salary, generate_tc93_full_sheet, generate_abnormal_sheet
 from templates_gen.labor_service import generate_labor_service
 from templates_gen.annual_bonus import generate_annual_bonus
@@ -40,6 +44,34 @@ def _log_api_error(e):
     """记录 API 异常堆栈到日志文件并返回统一错误响应。"""
     logging.getLogger(__name__).exception("API error: %s", e)
     return jsonify({"error": f"处理失败: {e}"}), 500
+
+
+# 增减员比对阶段 A 响应缓存 (2026-09-15 性能优化): 同一参数组合
+# 5 分钟内重复"开始比对"直接命中, 避免全量重运算 (两阶段第一次调用/重试)
+_PHASE_A_CACHE: dict = {}
+_PHASE_A_TTL = 300.0
+
+
+def _phase_a_cache_key(form_args):
+    """阶段 A 缓存键: 全部表单参数排序后 md5 (排除 choices 大字段)。"""
+    items = sorted((k, v) for k, v in form_args.items() if k != "choices")
+    return hashlib.md5(json.dumps(items, ensure_ascii=False).encode("utf-8")).hexdigest()
+
+
+def _phase_a_cache_get(key):
+    entry = _PHASE_A_CACHE.get(key)
+    if entry and time.time() - entry[0] < _PHASE_A_TTL:
+        return entry[1]
+    if entry:
+        _PHASE_A_CACHE.pop(key, None)
+    return None
+
+
+def _phase_a_cache_set(key, payload):
+    if len(_PHASE_A_CACHE) >= 64:
+        for old_key in list(_PHASE_A_CACHE)[: len(_PHASE_A_CACHE) // 2]:
+            _PHASE_A_CACHE.pop(old_key, None)
+    _PHASE_A_CACHE[key] = (time.time(), payload)
 
 
 def _apply_scope_filter(combo_set, scope_map):
@@ -1247,7 +1279,7 @@ def api_personnel_compare():
     - choices: 阶段 B 的逐人确认 JSON 字符串数组 (可选, 缺省为阶段 A)
     """
     try:
-        from queries import (get_payroll_cert_numbers, get_tc90_salary_end_dates,
+        from queries import (get_payroll_cert_numbers, get_person_tc90_info,
                              get_payroll_personnel, get_unpaid_salary_persons,
                              get_pay_month_range, get_unpaid_month_range,
                              get_contract_signed_persons, get_contract_date_range,
@@ -1290,6 +1322,14 @@ def api_personnel_compare():
                 deadline_date = _dt.strptime(deadline, "%Y-%m-%d").date()
             except ValueError:
                 return jsonify({"error": "离职时间截止日期格式错误 (应为 YYYY-MM-DD)"}), 400
+        # 阶段 A 响应缓存 (5 分钟 TTL): 同一参数组合重复"开始比对"直接命中,
+        # 跳过名单加载 + 全部重查询 (两阶段第一次调用/重试场景)
+        phase_a_cache_key = None
+        if not request.form.get("choices"):
+            phase_a_cache_key = _phase_a_cache_key(request.form)
+            cached_payload = _phase_a_cache_get(phase_a_cache_key)
+            if cached_payload is not None:
+                return jsonify(cached_payload)
         # 名单源: 持久化 SQLite tax_roster (境内+境外), 不再每次上传 .xls
         from config_db import get_tax_roster
         from templates_gen.compare_roster import map_tax_roster_to_export
@@ -1335,7 +1375,17 @@ def api_personnel_compare():
         from queries import get_latest_unpaid_persons
         unpaid_latest = get_latest_unpaid_persons(conn, suspect_certs)
         suspect_certs -= unpaid_latest
-        salary_end_dates = get_tc90_salary_end_dates(conn, suspect_certs)
+        # 工资结束年月 + 最后合同信息: 复用已缓存的全表 get_person_tc90_info (5 分钟
+        # TTL), 替代 get_tc90_salary_end_dates + get_person_units_contract 两个分批 IN 查询
+        tc90_info = get_person_tc90_info(conn)
+        salary_end_dates = {}
+        for c in suspect_certs:
+            sym = (tc90_info.get(c) or {}).get("salary_end_ym") or 0
+            if not sym:
+                continue
+            y, m = divmod(sym, 100)
+            if y and 1 <= m <= 12:
+                salary_end_dates[c] = datetime(y, m, monthrange(y, m)[1])
         # 离职日期超过截止日期的视为合同未到期, 不列为已离职
         if deadline_date:
             salary_end_dates = {
@@ -1380,8 +1430,12 @@ def api_personnel_compare():
             unit_query_certs |= suspect_certs
         person_units = get_person_units(conn, unit_query_certs, pay_months, unpaid_months)
         # 合并最后一份合同信息 (合同经办人 + 无工资记录人员补充单位名称)
-        from queries import get_person_units_contract, get_last_pay_handlers, get_last_salary_handlers
-        for cert, info in get_person_units_contract(conn, unit_query_certs).items():
+        # 数据复用已缓存的 tc90_info (get_person_tc90_info, 5 分钟 TTL)
+        from queries import get_last_pay_handlers, get_last_salary_handlers
+        unit_certs_upper = {str(c).strip().upper() for c in unit_query_certs}
+        for cert, info in tc90_info.items():
+            if cert not in unit_certs_upper:
+                continue
             base = person_units.setdefault(cert, {})
             base["contract_handlers"] = info.get("contract_handlers") or []
             if not base.get("unit_name"):
@@ -1476,7 +1530,7 @@ def api_personnel_compare():
                 add_rows, departed_rows, pending_rows, member_sets, unit_map,
                 salary_end_map=salary_end_map, last_pay_map=last_pay_map,
                 contract_start_map=contract_start_map, contract_end_map=contract_end_map)
-            return jsonify({
+            payload = {
                 "phase": "confirm",
                 "candidates": candidates,
                 "counts": counts,
@@ -1494,7 +1548,10 @@ def api_personnel_compare():
                     "filtered_active_count": stats.get("filtered_active_count", 0),
                     "filtered_payroll_count": stats.get("filtered_payroll_count", 0),
                 },
-            })
+            }
+            if phase_a_cache_key:
+                _phase_a_cache_set(phase_a_cache_key, payload)
+            return jsonify(payload)
         # 阶段 B: 应用 choices → 生成 Excel (与合并/零申报 flow 一致: 生成时重算)
         from templates_gen.compare_roster import validate_choices, apply_compare_choices
         try:

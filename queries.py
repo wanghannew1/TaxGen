@@ -79,6 +79,30 @@ _TC90_INFO_TTL = 300.0            # TC90 合同/经办人/工资结束 全表汇
 _TC90_PERSON_ID_CACHE: dict = {"ts": 0.0, "data": None}
 _TC90_PERSON_ID_TTL = 300.0       # TC90 AAC001/ATC900 个人标识取号, 同 5 分钟 TTL
 
+# ---- 增减员比对重查询 TTL 缓存 (2026-09-15 性能优化) ----
+# 原实现按 cert 每 900 人一批 × 多 SQL 大表 JOIN, 全量 ~3.8 万人时
+# get_person_units ~138s / get_last_pay_handlers ~93s, 两阶段比对重复全量重跑。
+# 改为全表/按月单趟 (无 cert IN) + keyed TTL 缓存, 5 分钟内两阶段共享。
+# keyed 缓存形状: {key: (ts, data)}, 见 _cache_get_keyed/_cache_set_keyed。
+_PERSON_UNIT_INFO_CACHE: dict = {}
+_PERSON_UNIT_INFO_TTL = 300.0     # 单位信息全表 GROUP BY, 月份无关固定 key "all"
+_PERSON_PAY_HANDLERS_CACHE: dict = {}
+_PERSON_SAL_HANDLERS_CACHE: dict = {}
+_LAST_PAY_HANDLERS_CACHE: dict = {}
+_LAST_PAY_HANDLERS_TTL = 300.0    # 减员最后一笔发薪经办人, 固定 key "all"
+_LAST_SALARY_HANDLERS_CACHE: dict = {}
+_LAST_SALARY_HANDLERS_TTL = 300.0 # 减员最后一笔做工资经办人, 固定 key "all"
+_LATEST_UNPAID_CACHE: dict = {}
+_LATEST_UNPAID_TTL = 300.0        # 最后一笔工资未发放人员, key = (cap,)
+
+# ---- 完全排除单元人员 TTL 缓存 (2026-09-15 性能优化) ----
+# 原实现 NOT EXISTS 相关子查询对 TC93(110万行) 逐行重扫反连接: 24 个排除单元时
+# 单次点击"检查合并规则"实测 284s (V$SQL 证据 gb0qw5r15v1cw, avg_lio=60万+)。
+# 改为集合差集 (排除单元人员 - 相关月份非排除单元人员) + 本缓存:
+# 结果仅依赖 (相关月份, 排除单元代码), keyed TTL 300s, 重复点击 <1s。
+_EXCLUDED_UNIT_CERTS_CACHE: dict = {}
+_EXCLUDED_UNIT_CERTS_TTL = 300.0  # 完全排除单元人员集合, key = (months tuple, codes tuple)
+
 
 def _cache_get(cache: dict, ttl: float):
     """check-then-set 读取缓存, 未命中返回 None。"""
@@ -92,6 +116,26 @@ def _cache_set(cache: dict, data):
     """写入缓存并刷新时间戳。"""
     cache["data"] = data
     cache["ts"] = time.time()
+
+
+def _cache_get_keyed(cache: dict, key, ttl: float):
+    """带 key 的 TTL 缓存读取 (增减员比对查重查询用), 未命中返回 None。
+
+    cache 形状: {key: (ts, data)}。
+    """
+    item = cache.get(key)
+    if item is not None and time.time() - item[0] < ttl:
+        return item[1]
+    return None
+
+
+def _cache_set_keyed(cache: dict, key, data):
+    """带 key 的 TTL 缓存写入, 超 64 个 key 时清理最旧一半。"""
+    if len(cache) >= 64:
+        # 逐出最旧的一半: 月份组合有限, 防止长期运行内存缓慢增长
+        for old_key, (ts, _) in sorted(cache.items(), key=lambda kv: kv[1][0])[:len(cache) // 2]:
+            del cache[old_key]
+    cache[key] = (time.time(), data)
 
 
 def _fmt_ymd(v) -> str:
@@ -1187,6 +1231,10 @@ def get_latest_unpaid_persons(conn, cert_numbers) -> Set[str]:
     口径: 所属月 <= 最近发薪月 (TC8M 最新 ATC8G7) 的范围内,
     最新所属月的 TC93 记录无对应 TC8M 已发记录 (ATC8M3=2) → 阻止减员。
     更早的历史未发放残留不影响; 未来月份 (所属月 > 最近发薪月) 的工资表不参与判定。
+
+    2026-09-15 性能优化: 原实现按 cert 每 900 人一批 × RANK 窗口,
+    全量 ~3.8 万人实测 ~9.5s。改为全表一次 RANK 窗口 (无 cert IN) +
+    5 分钟 TTL 缓存 (key = cap 最近发薪月), 两阶段比对第二次调用命中 ~0s。
     """
     if not cert_numbers:
         return set()
@@ -1199,6 +1247,10 @@ def get_latest_unpaid_persons(conn, cert_numbers) -> Set[str]:
         cap = int(row[0] or 0) if row and row[0] else 0
         if not cap:
             return result
+        cache_key = tuple([cap])
+        cached = _cache_get_keyed(_LATEST_UNPAID_CACHE, cache_key, _LATEST_UNPAID_TTL)
+        if cached is not None:
+            return cached & set(certs)
         sql = """
             SELECT cert FROM (
                 SELECT ac01.AAC002 AS cert, t93.ATC931, m.ATB930 AS paid,
@@ -1212,20 +1264,17 @@ def get_latest_unpaid_persons(conn, cert_numbers) -> Set[str]:
                 LEFT JOIN AC01 ac01 ON t93.AAC001 = ac01.AAC001
                 WHERE t93.ATC93G = '1'
                   AND t93.ATC931 <= :cap
-                  AND ac01.AAC002 IN ({placeholders})
+                  AND ac01.AAC002 IS NOT NULL
             ) WHERE rk = 1 AND paid IS NULL
         """
-        for start in range(0, len(certs), _IN_BATCH_SIZE):
-            chunk = certs[start:start + _IN_BATCH_SIZE]
-            placeholders = ", ".join(f":c{i}" for i in range(len(chunk)))
-            binds = {f"c{i}": c for i, c in enumerate(chunk)}
-            binds["cap"] = cap
-            cursor.execute(sql.format(placeholders=placeholders), binds)
-            for row in cursor.fetchall():
-                cert = str(row[0] or "").strip().upper()
-                if cert:
-                    result.add(cert)
-    return result
+        cursor.execute(sql, {"cap": cap})
+        all_unpaid = set()
+        for r in cursor.fetchall():
+            cert = str(r[0] or "").strip().upper()
+            if cert:
+                all_unpaid.add(cert)
+        _cache_set_keyed(_LATEST_UNPAID_CACHE, cache_key, all_unpaid)
+        return all_unpaid & set(certs)
 
 
 def get_pay_month_range(selected_month: int, conn) -> List[int]:
@@ -1500,82 +1549,119 @@ def get_person_units(conn, cert_numbers, pay_months, unpaid_months=None) -> Dict
     返回 {证件号(大写): {"pay_handlers": [...], "salary_handlers": [...],
     "unit_code": 结算单元代码, "unit_name": 结算单元名称(ATB931),
     "dept_name": 单位名称(AAB004)}}。
+
+    2026-09-15 性能优化: 原实现按 cert 每 900 人一批 × 3 个带 AAC002 IN 的大表
+    JOIN 查询, 全量 ~3.8 万人 43 批重跑 TC93×TC8M 大 JOIN, 实测 ~138s。
+    改为: 单位信息全表一次 GROUP BY (与月份无关) + 经办人按月范围各一次查询
+    (无 cert IN), Python 侧按 cert 过滤组装; 均挂 5 分钟 TTL keyed 缓存,
+    两阶段比对第二次调用直接命中 (~0s)。
     """
     if not cert_numbers:
         return {}
     certs = sorted({str(c).strip().upper() for c in cert_numbers if str(c).strip()})
-    result: Dict[str, dict] = {}
-    months = sorted(set(pay_months)) if pay_months else [0]
-    unpaid = sorted(set(unpaid_months or [])) if unpaid_months else []
-    sql_units = """
-        SELECT ac01.AAC002, MAX(t93.ATB930) AS unit_code,
-               MAX(t93.ATB931) AS unit_name, MAX(t93.AAB004) AS dept_name
-        FROM TC93 t93
-        LEFT JOIN AC01 ac01 ON t93.AAC001 = ac01.AAC001
-        WHERE t93.ATC93G = '1'
-          AND ac01.AAC002 IN ({cert_placeholders})
-        GROUP BY ac01.AAC002
-    """
-    sql_pay = """
-        SELECT DISTINCT ac01.AAC002, m.AAE019
-        FROM TC93 t93
-        JOIN TC8M m ON m.ATB930 = t93.ATB930
-                   AND m.ATC931 = t93.ATC931
-                   AND m.ATC937 = t93.ATC937
-                   AND m.ATC8M3 = 2
-                   AND m.ATC8G7 IN ({month_placeholders})
-        LEFT JOIN AC01 ac01 ON t93.AAC001 = ac01.AAC001
-        WHERE t93.ATC93G = '1'
-          AND m.AAE019 IS NOT NULL
-          AND ac01.AAC002 IN ({cert_placeholders})
-    """
-    sql_sal = """
-        SELECT DISTINCT ac01.AAC002, t93.AAE019
-        FROM TC93 t93
-        LEFT JOIN AC01 ac01 ON t93.AAC001 = ac01.AAC001
-        WHERE t93.ATC93G = '1'
-          AND t93.ATC931 IN ({month_placeholders})
-          AND t93.AAE019 IS NOT NULL
-          AND ac01.AAC002 IN ({cert_placeholders})
-    """
-    with conn.cursor() as cursor:
-        for start in range(0, len(certs), _IN_BATCH_SIZE):
-            chunk = certs[start:start + _IN_BATCH_SIZE]
-            cert_ph = ", ".join(f":c{i}" for i in range(len(chunk)))
-            binds = {f"c{i}": c for i, c in enumerate(chunk)}
-            cursor.execute(sql_units.format(cert_placeholders=cert_ph), binds)
+    # 1) 单位信息: 与月份无关 → 全表一次 GROUP BY (缓存 key 固定)
+    cached = _cache_get_keyed(_PERSON_UNIT_INFO_CACHE, "all", _PERSON_UNIT_INFO_TTL)
+    if cached is None:
+        sql_units = """
+            SELECT ac01.AAC002, MAX(t93.ATB930) AS unit_code,
+                   MAX(t93.ATB931) AS unit_name, MAX(t93.AAB004) AS dept_name
+            FROM TC93 t93
+            LEFT JOIN AC01 ac01 ON t93.AAC001 = ac01.AAC001
+            WHERE t93.ATC93G = '1'
+              AND ac01.AAC002 IS NOT NULL
+            GROUP BY ac01.AAC002
+        """
+        unit_info: Dict[str, dict] = {}
+        with conn.cursor() as cursor:
+            cursor.execute(sql_units)
             for row in cursor.fetchall():
                 cert = str(row[0] or "").strip().upper()
                 if cert:
-                    result[cert] = {
-                        "pay_handlers": [],
-                        "salary_handlers": [],
+                    unit_info[cert] = {
                         "unit_code": int(row[1] or 0),
                         "unit_name": str(row[2] or ""),
                         "dept_name": str(row[3] or ""),
                     }
+        _cache_set_keyed(_PERSON_UNIT_INFO_CACHE, "all", unit_info)
+    else:
+        unit_info = cached
+    # 2) 发薪经办人: 按所选发薪月份范围单趟查询 (缓 key = months 元组)
+    months = sorted({int(m) for m in (pay_months or []) if m})
+    pay_map: Dict[str, list] = {}
+    if months:
+        pay_key = tuple(months)
+        cached_pay = _cache_get_keyed(_PERSON_PAY_HANDLERS_CACHE, pay_key,
+                                      _PERSON_UNIT_INFO_TTL)
+        if cached_pay is None:
             month_ph = ", ".join(f":pm{i}" for i in range(len(months)))
-            binds2 = {f"pm{i}": m for i, m in enumerate(months)}
-            binds2.update({f"c{i}": c for i, c in enumerate(chunk)})
-            cursor.execute(sql_pay.format(month_placeholders=month_ph,
-                                          cert_placeholders=cert_ph), binds2)
-            for row in cursor.fetchall():
-                cert = str(row[0] or "").strip().upper()
-                if cert and cert in result:
-                    result[cert]["pay_handlers"].append(str(row[1] or ""))
-            if unpaid:
-                um_ph = ", ".join(f":um{i}" for i in range(len(unpaid)))
-                binds3 = {f"um{i}": m for i, m in enumerate(unpaid)}
-                binds3.update({f"c{i}": c for i, c in enumerate(chunk)})
-                cursor.execute(sql_sal.format(month_placeholders=um_ph,
-                                              cert_placeholders=cert_ph), binds3)
+            sql_pay = f"""
+                SELECT DISTINCT ac01.AAC002, m.AAE019
+                FROM TC93 t93
+                JOIN TC8M m ON m.ATB930 = t93.ATB930
+                           AND m.ATC931 = t93.ATC931
+                           AND m.ATC937 = t93.ATC937
+                           AND m.ATC8M3 = 2
+                           AND m.ATC8G7 IN ({month_ph})
+                LEFT JOIN AC01 ac01 ON t93.AAC001 = ac01.AAC001
+                WHERE t93.ATC93G = '1'
+                  AND m.AAE019 IS NOT NULL
+                  AND ac01.AAC002 IS NOT NULL
+            """
+            binds_pay = {f"pm{i}": m for i, m in enumerate(months)}
+            with conn.cursor() as cursor:
+                cursor.execute(sql_pay, binds_pay)
                 for row in cursor.fetchall():
                     cert = str(row[0] or "").strip().upper()
-                    if cert and cert in result:
-                        result[cert]["salary_handlers"].append(str(row[1] or ""))
-    for info in result.values():
-        info["pay_handlers"] = list(dict.fromkeys(info["pay_handlers"]))
-        info["salary_handlers"] = list(dict.fromkeys(info["salary_handlers"]))
+                    if cert:
+                        pay_map.setdefault(cert, []).append(str(row[1] or ""))
+            for hs in pay_map.values():
+                hs[:] = list(dict.fromkeys(hs))
+            _cache_set_keyed(_PERSON_PAY_HANDLERS_CACHE, pay_key, pay_map)
+        else:
+            pay_map = cached_pay
+    # 3) 做工资经办人: 按所选未发薪所属月份范围单趟查询
+    unpaid = sorted({int(m) for m in (unpaid_months or []) if m})
+    sal_map: Dict[str, list] = {}
+    if unpaid:
+        sal_key = tuple(unpaid)
+        cached_sal = _cache_get_keyed(_PERSON_SAL_HANDLERS_CACHE, sal_key,
+                                      _PERSON_UNIT_INFO_TTL)
+        if cached_sal is None:
+            um_ph = ", ".join(f":um{i}" for i in range(len(unpaid)))
+            sql_sal = f"""
+                SELECT DISTINCT ac01.AAC002, t93.AAE019
+                FROM TC93 t93
+                LEFT JOIN AC01 ac01 ON t93.AAC001 = ac01.AAC001
+                WHERE t93.ATC93G = '1'
+                  AND t93.ATC931 IN ({um_ph})
+                  AND t93.AAE019 IS NOT NULL
+                  AND ac01.AAC002 IS NOT NULL
+            """
+            binds_sal = {f"um{i}": m for i, m in enumerate(unpaid)}
+            with conn.cursor() as cursor:
+                cursor.execute(sql_sal, binds_sal)
+                for row in cursor.fetchall():
+                    cert = str(row[0] or "").strip().upper()
+                    if cert:
+                        sal_map.setdefault(cert, []).append(str(row[1] or ""))
+            for hs in sal_map.values():
+                hs[:] = list(dict.fromkeys(hs))
+            _cache_set_keyed(_PERSON_SAL_HANDLERS_CACHE, sal_key, sal_map)
+        else:
+            sal_map = cached_sal
+    # 4) Python 侧按 cert 过滤组装 (与原分批实现结果一致)
+    result: Dict[str, dict] = {}
+    for cert in certs:
+        info = unit_info.get(cert)
+        if info is None:
+            continue
+        result[cert] = {
+            "pay_handlers": pay_map.get(cert, []),
+            "salary_handlers": sal_map.get(cert, []),
+            "unit_code": info["unit_code"],
+            "unit_name": info["unit_name"],
+            "dept_name": info["dept_name"],
+        }
     return result
 
 
@@ -1650,71 +1736,103 @@ def get_excluded_unit_certs(conn, pay_months, unit_codes: List[int],
         return set()
     # 跨单位例外只认当期相关月份 (发薪月份+未发薪月份范围)
     months = sorted(set(relevant_months or pay_months))
+    codes = sorted(set(unit_codes))
+    cache_key = (tuple(months), tuple(codes))
+    cached = _cache_get_keyed(_EXCLUDED_UNIT_CERTS_CACHE, cache_key,
+                              _EXCLUDED_UNIT_CERTS_TTL)
+    if cached is not None:
+        return cached
     month_ph = ", ".join(f":m{i}" for i in range(len(months)))
     month_binds = {f"m{i}": m for i, m in enumerate(months)}
-    certs = set()
-    codes = sorted(set(unit_codes))
-    sql = f"""
+    # 集合差集实现 (2026-09-15 性能优化, 替代 NOT EXISTS 相关子查询):
+    #   in_excl            = 排除单元内出现过的人员 (不限月份)
+    #   in_non_excl_months = 相关月份内排除单元之外单元出现的人员 (跨单位例外)
+    #   excluded           = in_excl - in_non_excl_months
+    # 语义与原 NOT EXISTS 完全等价: "仅在排除单元有记录且当期无其他单元记录才排除"。
+    # 原实现逐行重扫 TC93 反连接 (24 个排除单元时实测 284s), 现改为单次月份切片扫描
+    # + NOT IN 残差过滤, 不再相关子查询。
+    in_excl: Set[str] = set()
+    in_non_excl_months: Set[str] = set()
+    sql_in_excl = f"""
         SELECT DISTINCT ac01.AAC002
         FROM TC93 t93
         LEFT JOIN AC01 ac01 ON t93.AAC001 = ac01.AAC001
         WHERE t93.ATC93G = '1'
           AND ac01.AAC002 IS NOT NULL
-          AND t93.ATB930 IN ({{ph1}})
-          AND NOT EXISTS (
-              SELECT 1 FROM TC93 t93b
-              LEFT JOIN AC01 ac01b ON t93b.AAC001 = ac01b.AAC001
-              WHERE t93b.ATC93G = '1'
-                AND ac01b.AAC002 = ac01.AAC002
-                AND t93b.ATC931 IN ({month_ph})
-                AND t93b.ATB930 NOT IN ({{ph2}})
-          )
+          AND t93.ATB930 IN ({{ph}})
+    """
+    sql_in_non_excl_months = f"""
+        SELECT DISTINCT ac01.AAC002
+        FROM TC93 t93
+        LEFT JOIN AC01 ac01 ON t93.AAC001 = ac01.AAC001
+        WHERE t93.ATC93G = '1'
+          AND ac01.AAC002 IS NOT NULL
+          AND t93.ATC931 IN ({{month_ph}})
+          AND t93.ATB930 NOT IN ({{ph}})
     """
     with conn.cursor() as cursor:
         for start in range(0, len(codes), _IN_BATCH_SIZE):
             chunk = codes[start:start + _IN_BATCH_SIZE]
-            ph1 = ", ".join(f":a{i}" for i in range(len(chunk)))
-            ph2 = ", ".join(f":b{i}" for i in range(len(chunk)))
+            ph = ", ".join(f":a{i}" for i in range(len(chunk)))
             binds = {f"a{i}": c for i, c in enumerate(chunk)}
-            binds.update({f"b{i}": c for i, c in enumerate(chunk)})
-            binds.update(month_binds)
-            cursor.execute(sql.format(ph1=ph1, ph2=ph2), binds)
+            cursor.execute(sql_in_excl.format(ph=ph), binds)
             for row in cursor.fetchall():
                 cert = str(row[0] or "").strip().upper()
                 if cert:
-                    certs.add(cert)
+                    in_excl.add(cert)
+        # 相关月份切片单次扫描 + NOT IN 残差过滤 (非相关子查询, 无逐行重扫)
+        ph_all = ", ".join(f":a{i}" for i in range(len(codes)))
+        binds_all = {f"a{i}": c for i, c in enumerate(codes)}
+        binds_all.update(month_binds)
+        cursor.execute(sql_in_non_excl_months.format(month_ph=month_ph, ph=ph_all), binds_all)
+        for row in cursor.fetchall():
+            cert = str(row[0] or "").strip().upper()
+            if cert:
+                in_non_excl_months.add(cert)
+    certs = in_excl - in_non_excl_months
     # 补充 TC90 合同单位 (无工资记录但有合同), 同样应用跨单位例外 (按合同起止时间过滤)
-    sql90 = f"""
-        SELECT DISTINCT t90.AAC002
-        FROM TC90 t90
-        WHERE t90.AAC002 IS NOT NULL
-          AND t90.ATB930 IN ({{ph1}})
-          AND NOT EXISTS (
-              SELECT 1 FROM TC90 t90b
-              WHERE t90b.AAC002 = t90.AAC002
-                AND t90b.ATB930 NOT IN ({{ph2}})
-                AND t90b.ATC90C IS NOT NULL
-                AND t90b.ATC90D IS NOT NULL
-                AND NOT (t90b.ATC90D < TO_DATE(:min_m, 'YYYYMMDD') OR t90b.ATC90C > TO_DATE(:max_m, 'YYYYMMDD'))
-          )
-    """
     import calendar
     min_m = f"{min(months)}01"
     last_day = calendar.monthrange(max(months) // 100, max(months) % 100)[1]
     max_m = f"{max(months)}{last_day:02d}"
+    sql90_in_excl = """
+        SELECT DISTINCT t90.AAC002
+        FROM TC90 t90
+        WHERE t90.AAC002 IS NOT NULL
+          AND t90.ATB930 IN ({ph})
+    """
+    sql90_overlap_non_excl = """
+        SELECT DISTINCT t90.AAC002
+        FROM TC90 t90
+        WHERE t90.AAC002 IS NOT NULL
+          AND t90.ATC90C IS NOT NULL
+          AND t90.ATC90D IS NOT NULL
+          AND t90.ATB930 NOT IN ({ph})
+          AND NOT (t90.ATC90D < TO_DATE(:min_m, 'YYYYMMDD') OR t90.ATC90C > TO_DATE(:max_m, 'YYYYMMDD'))
+    """
+    in_excl90: Set[str] = set()
+    overlap_non_excl90: Set[str] = set()
     with conn.cursor() as cursor:
         for start in range(0, len(codes), _IN_BATCH_SIZE):
             chunk = codes[start:start + _IN_BATCH_SIZE]
-            ph1 = ", ".join(f":a{i}" for i in range(len(chunk)))
-            ph2 = ", ".join(f":b{i}" for i in range(len(chunk)))
+            ph = ", ".join(f":a{i}" for i in range(len(chunk)))
             binds = {f"a{i}": c for i, c in enumerate(chunk)}
-            binds.update({f"b{i}": c for i, c in enumerate(chunk)})
-            binds.update({"min_m": min_m, "max_m": max_m})
-            cursor.execute(sql90.format(ph1=ph1, ph2=ph2), binds)
+            cursor.execute(sql90_in_excl.format(ph=ph), binds)
             for row in cursor.fetchall():
                 cert = str(row[0] or "").strip().upper()
                 if cert:
-                    certs.add(cert)
+                    in_excl90.add(cert)
+        # 重叠窗口期"非排除单元"合同者单次切片扫描 + NOT IN 残差过滤
+        ph_all = ", ".join(f":a{i}" for i in range(len(codes)))
+        binds_all = {f"a{i}": c for i, c in enumerate(codes)}
+        binds_all.update({"min_m": min_m, "max_m": max_m})
+        cursor.execute(sql90_overlap_non_excl.format(ph=ph_all), binds_all)
+        for row in cursor.fetchall():
+            cert = str(row[0] or "").strip().upper()
+            if cert:
+                overlap_non_excl90.add(cert)
+    certs |= (in_excl90 - overlap_non_excl90)
+    _cache_set_keyed(_EXCLUDED_UNIT_CERTS_CACHE, cache_key, certs)
     return certs
 
 
@@ -1723,10 +1841,17 @@ def get_last_pay_handlers(conn, cert_numbers) -> Dict[str, list]:
 
     同一人可能在最大发放月有多个单位批次, 全部保留 (任一命中)。
     返回 {证件号(大写): [经办人, ...]}, 无发薪记录的人员不出现。
+
+    2026-09-15 性能优化: 原实现按 cert 每 900 人一批 × RANK 窗口, 全量 ~3.8
+    万人 43 批重跑 TC8M×TC93 大 JOIN, 实测 ~93s。改为全表一次 RANK 窗口
+    (无 cert IN) + 5 分钟 TTL 缓存, 两阶段比对第二次调用直接命中 (~0s)。
     """
     if not cert_numbers:
         return {}
     certs = sorted({str(c).strip().upper() for c in cert_numbers if str(c).strip()})
+    cached = _cache_get_keyed(_LAST_PAY_HANDLERS_CACHE, "all", _LAST_PAY_HANDLERS_TTL)
+    if cached is not None:
+        return {c: cached[c] for c in certs if c in cached}
     result: Dict[str, list] = {}
     sql = """
         SELECT cert, AAE019 FROM (
@@ -1739,20 +1864,19 @@ def get_last_pay_handlers(conn, cert_numbers) -> Dict[str, list]:
                          AND t93.ATC937 = m.ATC937
             LEFT JOIN AC01 ac01 ON t93.AAC001 = ac01.AAC001
             WHERE m.ATC8M3 = 2
-              AND ac01.AAC002 IN ({placeholders})
+              AND ac01.AAC002 IS NOT NULL
         ) WHERE rk = 1 AND AAE019 IS NOT NULL
     """
     with conn.cursor() as cursor:
-        for start in range(0, len(certs), _IN_BATCH_SIZE):
-            chunk = certs[start:start + _IN_BATCH_SIZE]
-            placeholders = ", ".join(f":c{i}" for i in range(len(chunk)))
-            binds = {f"c{i}": c for i, c in enumerate(chunk)}
-            cursor.execute(sql.format(placeholders=placeholders), binds)
-            for row in cursor.fetchall():
-                cert = str(row[0] or "").strip().upper()
-                if cert:
-                    result.setdefault(cert, []).append(str(row[1] or ""))
-    return {c: list(dict.fromkeys(hs)) for c, hs in result.items()}
+        cursor.execute(sql)
+        for row in cursor.fetchall():
+            cert = str(row[0] or "").strip().upper()
+            if cert:
+                result.setdefault(cert, []).append(str(row[1] or ""))
+    for hs in result.values():
+        hs[:] = list(dict.fromkeys(hs))
+    _cache_set_keyed(_LAST_PAY_HANDLERS_CACHE, "all", result)
+    return {c: result[c] for c in certs if c in result}
 
 
 def get_last_salary_handlers(conn, cert_numbers) -> Dict[str, list]:
@@ -1760,10 +1884,16 @@ def get_last_salary_handlers(conn, cert_numbers) -> Dict[str, list]:
 
     用于无发薪记录但有工资记录的人员 (减员链: 最后一次发薪 → 最后一次做工资)。
     返回 {证件号(大写): [经办人, ...]}, 无工资记录的人员不出现。
+
+    2026-09-15 性能优化: 同 get_last_pay_handlers, 全表一次 RANK 窗口
+    (无 cert IN) + 5 分钟 TTL 缓存, 原 43 批实测 ~7s 降至缓存命中 ~0s。
     """
     if not cert_numbers:
         return {}
     certs = sorted({str(c).strip().upper() for c in cert_numbers if str(c).strip()})
+    cached = _cache_get_keyed(_LAST_SALARY_HANDLERS_CACHE, "all", _LAST_SALARY_HANDLERS_TTL)
+    if cached is not None:
+        return {c: cached[c] for c in certs if c in cached}
     result: Dict[str, list] = {}
     sql = """
         SELECT cert, AAE019 FROM (
@@ -1773,20 +1903,19 @@ def get_last_salary_handlers(conn, cert_numbers) -> Dict[str, list]:
             FROM TC93 t93
             LEFT JOIN AC01 ac01 ON t93.AAC001 = ac01.AAC001
             WHERE t93.ATC93G = '1'
-              AND ac01.AAC002 IN ({placeholders})
+              AND ac01.AAC002 IS NOT NULL
         ) WHERE rk = 1 AND AAE019 IS NOT NULL
     """
     with conn.cursor() as cursor:
-        for start in range(0, len(certs), _IN_BATCH_SIZE):
-            chunk = certs[start:start + _IN_BATCH_SIZE]
-            placeholders = ", ".join(f":c{i}" for i in range(len(chunk)))
-            binds = {f"c{i}": c for i, c in enumerate(chunk)}
-            cursor.execute(sql.format(placeholders=placeholders), binds)
-            for row in cursor.fetchall():
-                cert = str(row[0] or "").strip().upper()
-                if cert:
-                    result.setdefault(cert, []).append(str(row[1] or ""))
-    return {c: list(dict.fromkeys(hs)) for c, hs in result.items()}
+        cursor.execute(sql)
+        for row in cursor.fetchall():
+            cert = str(row[0] or "").strip().upper()
+            if cert:
+                result.setdefault(cert, []).append(str(row[1] or ""))
+    for hs in result.values():
+        hs[:] = list(dict.fromkeys(hs))
+    _cache_set_keyed(_LAST_SALARY_HANDLERS_CACHE, "all", result)
+    return {c: result[c] for c in certs if c in result}
 
 
 def get_person_tc90_info(conn) -> Dict[str, dict]:
