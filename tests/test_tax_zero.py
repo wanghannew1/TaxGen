@@ -366,6 +366,91 @@ class TestBuildSuggestions:
         assert p["suggested"] == "declare"
         assert "未减员" in p["reason"]
 
+    def test_roster_left_arrear_hit_declare(self, monkeypatch):
+        # 未发工资单保护 (2026-09-15 用户规则): 该员工/该结算单元当期无工资单时,
+        # 只要还有未发的工资单 (欠费批次 TB96.ATB96Z='1'), 默认要零申报, 不判已离职。
+        # 付广祥 39294 场景: 单位当期无工资单(整体停发欠费), 最后发薪 202604批2
+        # 命中欠费清单 → 是单元停发非个人离职, 维持 b_roster 默认生成零申报
+        self.records = []
+        # 员工单位 100 当期无工资单 (combos 只有 unit 200) → _unit_ref_ym 回退全局
+        combos = [{"unit": 200, "salary_month": 202605, "seq": "1"}]
+        roster = [_roster(cert="C1", hire="2020-01-01")]
+        self.tc90_info = {"C1": {"unit_code": 100, "unit_name": "单元100",
+                                 "contract_handlers": [], "salary_end_ym": 202604}}
+        monkeypatch.setattr("queries.get_person_system_info",
+            lambda conn, certs: {"C1": {"unit_code": 100, "unit_name": "单元100",
+                                        "last_pay_ym": 202604, "pay_month": 202604,
+                                        "last_batch": "2", "handler": "白云"}})
+        self.arrear_batches = {(100, 202604, "2")}
+        res = tax_zero.build_zero_salary_suggestions(None, 202605, combos,
+                                                     roster=roster)
+        p = res["units"][0]["persons"][0]
+        assert p["category"] == tax_zero.CAT_B_ROSTER
+        assert p["suggested"] == "declare"
+        assert p["reason"].startswith("b2")
+        assert "b4" not in p["reason"]
+        assert "未减员" in p["reason"]
+
+    def test_roster_left_arrear_unit_paid_still_declare(self, monkeypatch):
+        # 单位当期有工资单 (combos 含 unit 100) 但该员工最后发薪批次命中欠费清单
+        # → 仍有未发工资单, 默认零申报不判已离职 (与"最后一笔工资未发放"保护同源)
+        self.records = []
+        roster = [_roster(cert="C1", hire="2020-01-01")]
+        self.tc90_info = {"C1": {"unit_code": 100, "unit_name": "单元100",
+                                 "contract_handlers": [], "salary_end_ym": 202604}}
+        monkeypatch.setattr("queries.get_person_system_info",
+            lambda conn, certs: {"C1": {"unit_code": 100, "unit_name": "单元100",
+                                        "last_pay_ym": 202604, "pay_month": 202604,
+                                        "last_batch": "2", "handler": "白云"}})
+        self.arrear_batches = {(100, 202604, "2")}
+        res = tax_zero.build_zero_salary_suggestions(None, 202605, self.COMBOS,
+                                                     roster=roster)
+        p = res["units"][0]["persons"][0]
+        assert p["category"] == tax_zero.CAT_B_ROSTER
+        assert p["suggested"] == "declare"
+        assert p["reason"].startswith("b2")
+        assert "b4" not in p["reason"]
+
+    def test_roster_left_next_month_pay_declare(self, monkeypatch):
+        # 下月发 (pay_month>=当期) 视为未发完 (2026-09-15 用户规则):
+        # 最后发薪 202604 所属月但 202605 发放 → 默认零申报, 不判已离职
+        self.records = []
+        combos = [{"unit": 200, "salary_month": 202605, "seq": "1"}]
+        roster = [_roster(cert="C1", hire="2020-01-01")]
+        self.tc90_info = {"C1": {"unit_code": 100, "unit_name": "单元100",
+                                 "contract_handlers": [], "salary_end_ym": 202604}}
+        monkeypatch.setattr("queries.get_person_system_info",
+            lambda conn, certs: {"C1": {"unit_code": 100, "unit_name": "单元100",
+                                        "last_pay_ym": 202604, "pay_month": 202605,
+                                        "last_batch": "2", "handler": "白云"}})
+        res = tax_zero.build_zero_salary_suggestions(None, 202605, combos,
+                                                     roster=roster)
+        p = res["units"][0]["persons"][0]
+        assert p["category"] == tax_zero.CAT_B_ROSTER
+        assert p["suggested"] == "declare"
+        assert p["reason"].startswith("b2")
+        assert "b4" not in p["reason"]
+
+    def test_roster_left_arrear_mismatch_keep_left(self, monkeypatch):
+        # 欠费批次不匹配 (最后发薪 202604批2, 欠费记录为批1) → 保护不成立,
+        # 维持 b4 已离职判定 (默认不生成 + 建议减员)
+        self.records = []
+        combos = [{"unit": 200, "salary_month": 202605, "seq": "1"}]
+        roster = [_roster(cert="C1", hire="2020-01-01")]
+        self.tc90_info = {"C1": {"unit_code": 100, "unit_name": "单元100",
+                                 "contract_handlers": [], "salary_end_ym": 202604}}
+        monkeypatch.setattr("queries.get_person_system_info",
+            lambda conn, certs: {"C1": {"unit_code": 100, "unit_name": "单元100",
+                                        "last_pay_ym": 202604, "pay_month": 202604,
+                                        "last_batch": "2", "handler": "白云"}})
+        self.arrear_batches = {(100, 202604, "1")}
+        res = tax_zero.build_zero_salary_suggestions(None, 202605, combos,
+                                                     roster=roster)
+        p = res["units"][0]["persons"][0]
+        assert p["category"] == tax_zero.CAT_B_LEFT
+        assert p["suggested"] == "skip"
+        assert "已离职" in p["reason"] and "减员" in p["reason"]
+
     def test_roster_sys_info_full_display(self, monkeypatch):
         self.records = []
         roster = [_roster(cert="C1", hire="2020-01-01")]

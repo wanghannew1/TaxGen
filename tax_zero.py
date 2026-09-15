@@ -260,6 +260,16 @@ def build_zero_salary_suggestions(conn, pay_month, combos, roster=None, handler=
             # 在系统人员展示: 结算单元/最后发薪工资单/工资结束年月/经办人 (2026-09-11 用户需求)
             from queries import get_person_system_info
             system_info = get_person_system_info(conn, list(in_system)) if in_system else {}
+            # 欠费未发批次 (2026-09-15 用户规则): 该员工/该结算单元当期无工资单时,
+            # 只要还有未发的工资单 (欠费批次 TB96.ATB96Z='1' / 次月发放), 默认要
+            # 零申报, 不判已离职。用于 b4 判定保护: 最后发薪批次命中欠费清单
+            # (如付广祥 39294 单元当期整体停发欠费, 202604批2在欠费清单) → 是
+            # 单元停发非个人离职; 次月发放 (pay_month!=所属月) 同样视为未发完
+            b_arrear_months = sorted({int(s.get("last_pay_ym") or 0)
+                                      for s in system_info.values()
+                                      if int(s.get("last_pay_ym") or 0)})
+            b_arrear_batches = (get_arrear_batches(conn, b_arrear_months)
+                                if b_arrear_months else set())
             y, m = divmod(max(salary_months), 100)
             hire_start = f"{y - 1:04d}-{m:02d}-01"  # 近12个月入职 → B1 新签合同未做工资
             for cert, p in b_certs.items():
@@ -305,9 +315,30 @@ def build_zero_salary_suggestions(conn, pay_month, combos, roster=None, handler=
                     # 202608 所属月, 工资单已无单晓彤) → 202608>202607 判已离职;
                     # 单位压月发 (202608 付 202607 所属月工资) 时该员工最后一笔工资
                     # 当期已发 → 必须报税不判离职 (202607>202607 为 False)
-                    p_entry["category"] = CAT_B_LEFT
-                    p_entry["_end_ym"] = end_ym
-                    p_entry["_ref_ym"] = _unit_ref_ym(unit)
+                    # 未发工资单保护 (2026-09-15 用户规则): 该员工/该结算单元当期
+                    # 无工资单时, 只要还有未发的工资单 (欠费批次 TB96.ATB96Z='1' /
+                    # 下月发), 默认要零申报, 不判已离职 → 本分支不成立:
+                    # 最后发薪批次命中欠费清单 (如 付广祥 39294 当期整体停发欠费,
+                    # 202604批2 在欠费清单) → 是单元停发非个人离职;
+                    # 次月发: 最后一笔工资发放月 >= 当期 (未发完/当期才发), 同样
+                    # 视为还有未发工资单; 已结清历史压月发 (发放月 < 当期, 如
+                    # 202512 工资 202601 已发) 不触发保护, 维持 b4 已离职判定
+                    si = system_info.get(cert, {})
+                    last_ym = int(si.get("last_pay_ym") or 0)
+                    last_batch = str(si.get("last_batch") or "")
+                    si_unit = unit or int(si.get("unit_code") or 0)
+                    last_pay_month = int(si.get("pay_month") or 0)
+                    arrear_hit = bool(last_ym and (si_unit, last_ym, last_batch)
+                                      in b_arrear_batches)
+                    next_month_hit = bool(last_ym and last_pay_month
+                                          and last_pay_month >= pay_month)
+                    if arrear_hit or next_month_hit:
+                        p_entry["category"] = CAT_B_ROSTER
+                        p_entry["_is_new"] = is_new
+                    else:
+                        p_entry["category"] = CAT_B_LEFT
+                        p_entry["_end_ym"] = end_ym
+                        p_entry["_ref_ym"] = _unit_ref_ym(unit)
                 else:
                     p_entry["category"] = CAT_B_ROSTER
                     p_entry["_is_new"] = is_new
