@@ -374,7 +374,7 @@ def build_zero_salary_suggestions(conn, pay_month, combos, roster=None, handler=
     # 默认生成零申报保留在册 (新入职当月无工资也应在个税端在册)
     # C 类子类 = 文字解释差异 (2026-09-15 用户确认): 不新增分类维度,
     # 有历史发放者 (get_person_system_info.last_pay_ym>0, 如压月/曾发薪)
-    # 面板 sys_info 显示"最后发薪:YYYYMM批X(YYYYMM发)", 无历史者仅显示
+    # 面板 sys_info 显示"最后发薪:YYYYMM批X（YYYYMM发）", 无历史者仅显示
     # 合同开始日期; 生成侧 _classify_row 已按 note 区分 C类/C类-欠费未发/
     # C类-次月发放, 统计 sheet 按申报类别说明前缀统计
     from queries import get_month_salary_certs, get_person_system_info
@@ -439,8 +439,9 @@ def build_zero_salary_suggestions(conn, pay_month, combos, roster=None, handler=
 
     # 欠费未发批次 (2026-09-15 用户需求): TB96.ATB96Z='1' 的 (结算单元, 所属月, 批次),
     # 供建议侧 sys_info "最后发薪:202608批1（欠费）" 标注 —— 说明为何"做了没发":
-    # 欠费(TB96 欠费清单) 与 次月发放(pay_month!=所属月, 已存在 "(202609发)" 标注)
-    # 两种状况区分; 与既有注入侧 build_roster_zero_records/build_contract_zero_records
+    # 欠费(TB96 欠费清单) 与 正常发放(pay_month 有值, 一律标注"（YYYYMM发）"——
+    # 同月/次月/隔月都标, 2026-09-15 用户需求) 两种状况区分; 欠费互斥不标发放月
+    # (批次未实际发放); 与既有注入侧 build_roster_zero_records/build_contract_zero_records
     # 的 rec.欠费未发 同口径 (get_arrear_batches)。
     proxy_months = sorted({int(p["_sys_info"]["last_pay_ym"] or 0)
                            for u in units.values()
@@ -502,12 +503,14 @@ def build_zero_salary_suggestions(conn, pay_month, combos, roster=None, handler=
                     parts.append(f"结算单元:{unit_label}")
                 if si["last_pay_ym"]:
                     batch = (f"批{si['batch']}" if si["batch"] else "")
-                    pay_note = (f"({si['pay_month']}发)"
-                                if si["pay_month"] and si["pay_month"] != si["last_pay_ym"]
-                                else "")
-                    arrear_note = ("（欠费）"
-                                   if (si["unit_code"], si["last_pay_ym"], si["batch"])
-                                   in arrear_batches else "")
+                    arrear_hit = ((si["unit_code"], si["last_pay_ym"], si["batch"])
+                                  in arrear_batches)
+                    arrear_note = "（欠费）" if arrear_hit else ""
+                    # 发放月标注 (2026-09-15 用户需求): 只要有发放月一律标注
+                    # "（YYYYMM发）" 全角 —— 当月发当月/次月发/隔月发都标注,
+                    # 便于追查发放进度; 欠费未发(批次未实际发放)与"（欠费）"互斥
+                    pay_note = (f"（{si['pay_month']}发）"
+                                if si["pay_month"] and not arrear_hit else "")
                     parts.append(f"最后发薪:{si['last_pay_ym']}{batch}{arrear_note}{pay_note}")
                 if si["end_ym"]:
                     parts.append(f"工资结束:{si['end_ym']}")

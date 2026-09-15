@@ -2098,7 +2098,8 @@ def get_person_system_info(conn, cert_numbers) -> Dict[str, dict]:
     供零申报 B 类 (在系统) 人员展示"结算单元/最后发薪工资单/经办人":
     - unit_code/unit_name: 最后一次发薪工资单的结算单元 (TC93.ATB930/ATB931)
     - last_pay_ym: 最后一次发薪工资所属年月 (TC93.ATC931)
-    - pay_month: 最后一次发薪的发放年月 (TC8M.ATC8G7), 所属≠发放时标注
+    - pay_month: 最后一次发薪的发放年月 (TC8M.ATC8G7); 建议侧只要有值就标注
+      "（YYYYMM发）"(2026-09-15 用户需求: 同月/次月/隔月都标), 无值不标
     - last_batch: 发放次数 (TC93.ATC937)
     - make_handler: 做工资经办人 (TC93.AAE019)
     - handler: 经办人/业务经办人 (TC8M.AAE019, 经 (ATB930,ATC931,ATC937) 关联批次)

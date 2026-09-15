@@ -466,7 +466,7 @@ class TestBuildSuggestions:
         res = tax_zero.build_zero_salary_suggestions(None, 202606, self.COMBOS,
                                                      roster=roster)
         p = res["units"][0]["persons"][0]
-        assert p["sys_info"] == "结算单元:单元100(100)；最后发薪:202509批1；工资结束:202607；经办人:白云"
+        assert p["sys_info"] == "结算单元:单元100(100)；最后发薪:202509批1（202509发）；工资结束:202607；经办人:白云"
 
     def test_roster_sys_info_handler_priority(self, monkeypatch):
         self.records = []
@@ -529,9 +529,11 @@ class TestBuildSuggestions:
         res = tax_zero.build_zero_salary_suggestions(None, 202606, self.COMBOS,
                                                      roster=roster)
         p = res["units"][0]["persons"][0]
-        assert p["sys_info"] == "结算单元:单元100(100)；最后发薪:202607批2(202608发)；工资结束:202607；经办人:白云"
+        assert p["sys_info"] == "结算单元:单元100(100)；最后发薪:202607批2（202608发）；工资结束:202607；经办人:白云"
 
-    def test_roster_sys_info_pay_month_same_omitted(self, monkeypatch):
+    def test_roster_sys_info_pay_month_same_attached(self, monkeypatch):
+        # 发放月标注 (2026-09-15 用户需求): 只要有发放月一律标注"（YYYYMM发）"——
+        # 当月发当月 (pay_month==所属月 如赵廉华 202607批1 202607发)、次月发、隔月发都标注
         self.records = []
         roster = [_roster(cert="C1", hire="2020-01-01")]
         self.tc90_info = {"C1": {"unit_code": 100, "unit_name": "单元100",
@@ -543,8 +545,8 @@ class TestBuildSuggestions:
         res = tax_zero.build_zero_salary_suggestions(None, 202606, self.COMBOS,
                                                      roster=roster)
         p = res["units"][0]["persons"][0]
-        assert "202607发" not in p["sys_info"]
-        assert p["sys_info"] == "结算单元:单元100(100)；最后发薪:202607批1；工资结束:202607；经办人:白云"
+        assert "202607发" in p["sys_info"]
+        assert p["sys_info"] == "结算单元:单元100(100)；最后发薪:202607批1（202607发）；工资结束:202607；经办人:白云"
 
     def test_roster_sys_info_arrear_marked(self, monkeypatch):
         # 欠费未发 (2026-09-15 用户需求): (结算单元, 最后所属月, 最后批次) 命中
@@ -578,7 +580,7 @@ class TestBuildSuggestions:
                                                      roster=roster)
         p = res["units"][0]["persons"][0]
         assert "（欠费）" not in p["sys_info"]
-        assert p["sys_info"] == "结算单元:单元100(100)；最后发薪:202607批1；工资结束:202607；经办人:白云"
+        assert p["sys_info"] == "结算单元:单元100(100)；最后发薪:202607批1（202607发）；工资结束:202607；经办人:白云"
 
     def test_handler_filter_keeps_matching_roster(self, monkeypatch):
         # 经办人过滤 (2026-09-11 用户需求): B 类候选经办人链含过滤值 → 保留
@@ -769,7 +771,7 @@ class TestBuildSuggestions:
         res = tax_zero.build_zero_salary_suggestions(None, 202606, self.COMBOS)
         p = res["units"][0]["persons"][0]
         assert p["category"] == tax_zero.CAT_C3_HIST
-        assert "最后发薪:202604批2(202605发)" in p["sys_info"]
+        assert "最后发薪:202604批2（202605发）" in p["sys_info"]
         assert "合同开始:2026-06-15" in p["sys_info"]
         assert "最近一次发放:202604" in p["reason"]
 
