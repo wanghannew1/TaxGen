@@ -406,6 +406,18 @@ def build_zero_salary_suggestions(conn, pay_month, combos, roster=None, handler=
     if not units:
         return {"pay_month": pay_month, "units": []}
 
+    # 欠费未发批次 (2026-09-15 用户需求): TB96.ATB96Z='1' 的 (结算单元, 所属月, 批次),
+    # 供建议侧 sys_info "最后发薪:202608批1（欠费）" 标注 —— 说明为何"做了没发":
+    # 欠费(TB96 欠费清单) 与 次月发放(pay_month!=所属月, 已存在 "(202609发)" 标注)
+    # 两种状况区分; 与既有注入侧 build_roster_zero_records/build_contract_zero_records
+    # 的 rec.欠费未发 同口径 (get_arrear_batches)。
+    proxy_months = sorted({int(p["_sys_info"]["last_pay_ym"] or 0)
+                           for u in units.values()
+                           for p in u["persons"].values()
+                           if p.get("_sys_info")
+                           and int(p["_sys_info"].get("last_pay_ym") or 0)})
+    arrear_batches = get_arrear_batches(conn, proxy_months) if proxy_months else set()
+
     for unit, u in units.items():
         in_config = u["config"] == "zero_salary_no_add"
         for cert, p in u["persons"].items():
@@ -462,7 +474,10 @@ def build_zero_salary_suggestions(conn, pay_month, combos, roster=None, handler=
                     pay_note = (f"({si['pay_month']}发)"
                                 if si["pay_month"] and si["pay_month"] != si["last_pay_ym"]
                                 else "")
-                    parts.append(f"最后发薪:{si['last_pay_ym']}{batch}{pay_note}")
+                    arrear_note = ("（欠费）"
+                                   if (si["unit_code"], si["last_pay_ym"], si["batch"])
+                                   in arrear_batches else "")
+                    parts.append(f"最后发薪:{si['last_pay_ym']}{batch}{arrear_note}{pay_note}")
                 if si["end_ym"]:
                     parts.append(f"工资结束:{si['end_ym']}")
                 if si.get("contract_start"):

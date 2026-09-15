@@ -71,6 +71,10 @@ class TestBuildSuggestions:
         monkeypatch.setattr(tax_zero, "get_excluded_unit_codes",
                             lambda: [102])       # 102 为完全排除单元
         monkeypatch.setattr(tax_zero, "get_zero_overrides", lambda: {})
+        # 欠费未发批次 (2026-09-15 建议侧新增): 默认无欠费, 各用例经 self.arrear_batches 自备
+        self.arrear_batches = set()
+        monkeypatch.setattr(tax_zero, "get_arrear_batches",
+                            lambda conn, months: set(self.arrear_batches))
         # B 类系统判定 (2026-09-11 用户确认): 以 TC90 有无合同为准 (AC01 不判定系统管理)
         # 2026-09-12 合并函数: 在系统判定+合同单元/经办人/工资结束 统一走
         # get_person_tc90_info; 默认无 TC90 记录 (不在系统), 各用例经 self.tc90_info 自备
@@ -455,6 +459,40 @@ class TestBuildSuggestions:
                                                      roster=roster)
         p = res["units"][0]["persons"][0]
         assert "202607发" not in p["sys_info"]
+        assert p["sys_info"] == "结算单元:单元100(100)；最后发薪:202607批1；工资结束:202607；经办人:白云"
+
+    def test_roster_sys_info_arrear_marked(self, monkeypatch):
+        # 欠费未发 (2026-09-15 用户需求): (结算单元, 最后所属月, 最后批次) 命中
+        # TB96 欠费清单(ATB96Z='1') → sys_info 追加"（欠费）", 与"次月发放"区分
+        self.records = []
+        roster = [_roster(cert="C1", hire="2020-01-01")]
+        self.tc90_info = {"C1": {"unit_code": 100, "unit_name": "单元100",
+                                 "contract_handlers": [], "salary_end_ym": 202607}}
+        monkeypatch.setattr("queries.get_person_system_info",
+            lambda conn, certs: {"C1": {"unit_code": 100, "unit_name": "单元100",
+                                        "last_pay_ym": 202608, "pay_month": 202608,
+                                        "last_batch": "1", "handler": "白云"}})
+        self.arrear_batches = {(100, 202608, "1")}
+        res = tax_zero.build_zero_salary_suggestions(None, 202606, self.COMBOS,
+                                                     roster=roster)
+        p = res["units"][0]["persons"][0]
+        assert p["sys_info"] == "结算单元:单元100(100)；最后发薪:202608批1（欠费）；工资结束:202607；经办人:白云"
+
+    def test_roster_sys_info_arrear_batch_mismatch(self, monkeypatch):
+        # 欠费批次不匹配 (所属月 202608≠202607 / 批次不同) → 不加"（欠费）"标注
+        self.records = []
+        roster = [_roster(cert="C1", hire="2020-01-01")]
+        self.tc90_info = {"C1": {"unit_code": 100, "unit_name": "单元100",
+                                 "contract_handlers": [], "salary_end_ym": 202607}}
+        monkeypatch.setattr("queries.get_person_system_info",
+            lambda conn, certs: {"C1": {"unit_code": 100, "unit_name": "单元100",
+                                        "last_pay_ym": 202607, "pay_month": 202607,
+                                        "last_batch": "1", "handler": "白云"}})
+        self.arrear_batches = {(100, 202608, "1")}
+        res = tax_zero.build_zero_salary_suggestions(None, 202606, self.COMBOS,
+                                                     roster=roster)
+        p = res["units"][0]["persons"][0]
+        assert "（欠费）" not in p["sys_info"]
         assert p["sys_info"] == "结算单元:单元100(100)；最后发薪:202607批1；工资结束:202607；经办人:白云"
 
     def test_handler_filter_keeps_matching_roster(self, monkeypatch):
