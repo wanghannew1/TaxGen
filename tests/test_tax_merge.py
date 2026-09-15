@@ -205,6 +205,23 @@ class TestBuildSuggestions:
         monkeypatch.setattr(tax_merge, "get_unit_insurance_stats", fake_unit_stats)
         monkeypatch.setattr(tax_merge, "get_merge_overrides", lambda: {})
         monkeypatch.setattr(tax_merge, "get_pay_pattern_map", lambda: {})
+        monkeypatch.setattr(tax_merge, "get_excluded_unit_codes", lambda: [])
+        monkeypatch.setattr(tax_merge, "get_excluded_unit_certs",
+                            lambda conn, months, codes, relevant_months=None: set())
+
+    def test_excluded_unit_cert_dropped(self, monkeypatch):
+        # 完全排除单元(exclude_all=1, 不增员不报税)的人员 → 不出现在合并规则确认
+        self.records = [
+            _rec(cert="C1", sm=202605, tc930=1, pension=Decimal("400")),
+            _rec(cert="C1", sm=202606, tc930=2),
+            _rec(cert="C2", sm=202605, tc930=3, pension=Decimal("400")),
+            _rec(cert="C2", sm=202606, tc930=4),
+        ]
+        monkeypatch.setattr(tax_merge, "get_excluded_unit_codes", lambda: [999])
+        monkeypatch.setattr(tax_merge, "get_excluded_unit_certs",
+                            lambda conn, months, codes, relevant_months=None: {"C1"})
+        res = tax_merge.build_merge_suggestions(None, 202606, self.COMBOS)
+        assert [c["cert_no"] for c in res["candidates"]] == ["C2"]
 
     def test_cross_month_person_detected(self):
         self.records = [

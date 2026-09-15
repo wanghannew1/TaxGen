@@ -42,9 +42,9 @@
 用户确认后的选择可持久化（config_db.merge_override），下次默认沿用。
 """
 from decimal import Decimal
-from queries import get_salary_records_by_combos, get_unit_insurance_stats
+from queries import get_salary_records_by_combos, get_unit_insurance_stats, get_excluded_unit_certs
 from filing_history import get_filing_map
-from config_db import get_merge_overrides, get_pay_pattern_map
+from config_db import get_merge_overrides, get_pay_pattern_map, get_excluded_unit_codes
 from templates_gen.formulas import calc_本期收入
 
 
@@ -276,6 +276,21 @@ def build_merge_suggestions(conn, pay_month, combos):
     records = get_salary_records_by_combos(conn, combos)
     checked = [r for r in records
                if (r.结算单元, r.工资所属年月, r.当月批次) in combo_set]
+    if not checked:
+        return {"pay_month": pay_month, "prev_month": None, "candidates": [],
+                "work_sheets": []}
+
+    # 完全排除单元 (exclude_all=1, 不增员不报税, config_db 配置): 该单元人员全程不报税,
+    # 无三险一金合并询问必要 (2026-09-15 用户确认, 修复 吉林省林业勘察设计研究院 等
+    # 配置了完全排除却在合并规则确认仍出现的问题)。
+    # 口径与生成侧一致: 仅落在排除单元的人员排除; 若当期同时在排除与非排除单元有记录
+    # 则保留 (跨单位例外, get_excluded_unit_certs 已处理)。
+    excl_codes = get_excluded_unit_codes()
+    if excl_codes:
+        excluded_certs = get_excluded_unit_certs(conn, salary_months, excl_codes,
+                                                 relevant_months=salary_months)
+        if excluded_certs:
+            checked = [r for r in checked if r.身份证 not in excluded_certs]
     if not checked:
         return {"pay_month": pay_month, "prev_month": None, "candidates": [],
                 "work_sheets": []}
