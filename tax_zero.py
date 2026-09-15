@@ -65,6 +65,9 @@ REASON_A2 = "已做工资但未发放(TC8M无发放)，无纳税义务，默认�
 # 仅调整用户看到的文字, 不改底层分类逻辑 (b_roster/b_outside/b_left 保持)。
 REASON_B1 = "b1 个税端在职，本期新签合同未做工资，默认生成零申报保留在册"
 REASON_B2 = "b2 个税端在职，本期未做工资未发放未减员，默认生成零申报；若已离职请先办理减员"
+REASON_B_ARR = ("b5 个税端在职，工资结束期（含）前的所属月份有未发工资（欠费批次），"
+                "不能减员，默认生成零申报保留在册；直至工资结束期（含）全部工资"
+                "已发完方可减员")
 REASON_B_OUTSIDE = "b3 个税端在职但不在系统管理(人工管理)，默认不生成零申报；如需在个税端保留请确认生成"
 REASON_B_LEFT = "b4 工资结束年月{ym}早于当期工资单所属年月{pay}，判定已离职，默认不生成零申报，建议办理减员"
 REASON_C1 = "合同开始日期{date}（本月月初新入职），当期未做工资未发放，默认生成零申报保留在册；若当期已做工资请走正常申报"
@@ -477,7 +480,21 @@ def build_zero_salary_suggestions(conn, pay_month, combos, roster=None, handler=
                         suggested, reason = "declare", REASON_C2.format(
                             date=p["_contract_start"])
                 elif p["category"] == CAT_B_ROSTER:
-                    if p.pop("_is_new", False):
+                    # 欠费未发子类 b5 (2026-09-15 用户需求): 名单在册且个税端在职,
+                    # 但工资结束期(含)前有未发工资 (最后发薪批次命中 TB96 欠费清单
+                    # 且未发放 pay_month=0) → 不能减员, 仍需零申报直至该期工资发完;
+                    # 如 张薇 39294 单元 202604批2 欠费, 名单 hire_date 恰近12个月内
+                    # 但仍非"新签合同未做工资"(b1) —— 有完整工资历史 + 欠费未发。
+                    # 判定优先于 b1: 有未发工资单的语义 (未发完不能减员) 盖过
+                    # "新签合同未做工资" (新签人员通常无工资历史)。
+                    _si = p.get("_sys_info") or {}
+                    _arrear_hit = bool(
+                        _si.get("last_pay_ym")
+                        and (_si.get("unit_code"), _si.get("last_pay_ym"),
+                             _si.get("batch")) in arrear_batches)
+                    if _arrear_hit:
+                        suggested, reason = "declare", REASON_B_ARR
+                    elif p.pop("_is_new", False):
                         suggested, reason = "declare", REASON_B1
                     else:
                         suggested, reason = "declare", REASON_B2

@@ -370,7 +370,8 @@ class TestBuildSuggestions:
         # 未发工资单保护 (2026-09-15 用户规则): 该员工/该结算单元当期无工资单时,
         # 只要还有未发的工资单 (欠费批次 TB96.ATB96Z='1'), 默认要零申报, 不判已离职。
         # 付广祥 39294 场景: 单位当期无工资单(整体停发欠费), 最后发薪 202604批2
-        # 命中欠费清单 → 是单元停发非个人离职, 维持 b_roster 默认生成零申报
+        # 命中欠费清单 → 是单元停发非个人离职, 维持 b_roster 默认生成零申报;
+        # 子类升级为 b5 (2026-09-15 用户新增): 欠费未发而非 b1/b2
         self.records = []
         # 员工单位 100 当期无工资单 (combos 只有 unit 200) → _unit_ref_ym 回退全局
         combos = [{"unit": 200, "salary_month": 202605, "seq": "1"}]
@@ -387,13 +388,13 @@ class TestBuildSuggestions:
         p = res["units"][0]["persons"][0]
         assert p["category"] == tax_zero.CAT_B_ROSTER
         assert p["suggested"] == "declare"
-        assert p["reason"].startswith("b2")
-        assert "b4" not in p["reason"]
-        assert "未减员" in p["reason"]
+        assert p["reason"].startswith("b5")
+        assert "不能减员" in p["reason"]
+        assert "已发完方可减员" in p["reason"]
 
     def test_roster_left_arrear_unit_paid_still_declare(self, monkeypatch):
         # 单位当期有工资单 (combos 含 unit 100) 但该员工最后发薪批次命中欠费清单
-        # → 仍有未发工资单, 默认零申报不判已离职 (与"最后一笔工资未发放"保护同源)
+        # → 仍有未发工资单, 默认零申报不判已离职; 子类 b5 欠费未发 (2026-09-15)
         self.records = []
         roster = [_roster(cert="C1", hire="2020-01-01")]
         self.tc90_info = {"C1": {"unit_code": 100, "unit_name": "单元100",
@@ -408,8 +409,33 @@ class TestBuildSuggestions:
         p = res["units"][0]["persons"][0]
         assert p["category"] == tax_zero.CAT_B_ROSTER
         assert p["suggested"] == "declare"
-        assert p["reason"].startswith("b2")
-        assert "b4" not in p["reason"]
+        assert p["reason"].startswith("b5")
+        assert "不能减员" in p["reason"]
+
+    def test_roster_new_hire_arrear_is_b5_not_b1(self, monkeypatch):
+        # 张薇 39294 场景 (2026-09-15 用户需求): 名单 hire_date=2025-08-01 恰好落在
+        # 近12个月窗口 (pay_month 202608 → hire_start=2025-08-01 → is_new=True,
+        # 理论上会判 b1 新签合同); 但该员工 202504-202604 完整有工资历史且最后发薪
+        # 批次命中欠费清单(未发放) → 是"欠费未发完不能减员", 必须归 b5 而非 b1
+        self.records = []
+        combos = [{"unit": 200, "salary_month": 202608, "seq": "1"}]
+        roster = [_roster(cert="C1", hire="2025-08-01")]
+        self.tc90_info = {"C1": {"unit_code": 100, "unit_name": "单元100",
+                                 "contract_handlers": [], "salary_end_ym": 202604}}
+        monkeypatch.setattr("queries.get_person_system_info",
+            lambda conn, certs: {"C1": {"unit_code": 100, "unit_name": "单元100",
+                                        "last_pay_ym": 202604, "pay_month": 0,
+                                        "last_batch": "2", "handler": "刘悦"}})
+        self.arrear_batches = {(100, 202604, "2")}
+        res = tax_zero.build_zero_salary_suggestions(None, 202608, combos,
+                                                     roster=roster)
+        p = res["units"][0]["persons"][0]
+        assert p["category"] == tax_zero.CAT_B_ROSTER
+        assert p["suggested"] == "declare"
+        assert p["reason"].startswith("b5")
+        assert "不能减员" in p["reason"]
+        assert "已发完方可减员" in p["reason"]
+        assert "新签合同" not in p["reason"]
 
     def test_roster_left_next_month_pay_declare(self, monkeypatch):
         # 下月发 (pay_month>=当期) 视为未发完 (2026-09-15 用户规则):
