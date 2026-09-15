@@ -238,10 +238,10 @@ class TestBuildCandidatePayload:
         candidates, counts = build_candidate_payload(add_list, [], [], member_sets, unit_map)
         # 合同为排他标签 (与 build_verify_row 一致): C003 有未发薪则合同被抑制
         assert candidates["add"] == [
-            {"cert_no": "A001", "name": "张三", "unit": "结算单元A", "reason": "发薪"},
-            {"cert_no": "B002", "name": "李四", "unit": "结算单元B", "reason": "发薪+未发薪"},
-            {"cert_no": "C003", "name": "王五", "unit": "", "reason": "未发薪"},
-            {"cert_no": "D004", "name": "赵六", "unit": "", "reason": "合同"},
+            {"cert_no": "A001", "name": "张三", "unit": "结算单元A", "reason": "发薪", "detail": []},
+            {"cert_no": "B002", "name": "李四", "unit": "结算单元B", "reason": "发薪+未发薪", "detail": []},
+            {"cert_no": "C003", "name": "王五", "unit": "", "reason": "未发薪", "detail": []},
+            {"cert_no": "D004", "name": "赵六", "unit": "", "reason": "合同", "detail": []},
         ]
         assert counts == {"add": 4, "departed": 0, "pending": 0}
 
@@ -251,7 +251,7 @@ class TestBuildCandidatePayload:
         member_sets = {"paid": {"E005"}, "unpaid": set(), "contract": {"E005"}}
         candidates, counts = build_candidate_payload(add_list, [], [], member_sets, {})
         assert candidates["add"] == [
-            {"cert_no": "E005", "name": "孙七", "unit": "", "reason": "发薪"}]
+            {"cert_no": "E005", "name": "孙七", "unit": "", "reason": "发薪", "detail": []}]
         assert counts == {"add": 1, "departed": 0, "pending": 0}
 
     def test_departed_pending_fixed_reason(self):
@@ -259,9 +259,9 @@ class TestBuildCandidatePayload:
         pending_list = [self._row("E001", "钱七")]
         candidates, counts = build_candidate_payload([], departed_list, pending_list, {}, {})
         assert candidates["departed"] == [
-            {"cert_no": "D001", "name": "赵六", "unit": "", "reason": "近期离职"}]
+            {"cert_no": "D001", "name": "赵六", "unit": "", "reason": "近期离职", "detail": []}]
         assert candidates["pending"] == [
-            {"cert_no": "E001", "name": "钱七", "unit": "", "reason": "待确认"}]
+            {"cert_no": "E001", "name": "钱七", "unit": "", "reason": "待确认", "detail": []}]
         assert counts == {"add": 0, "departed": 1, "pending": 1}
 
     def test_unit_missing_tolerated(self):
@@ -275,5 +275,55 @@ class TestBuildCandidatePayload:
         candidates, counts = build_candidate_payload(
             add_list, [], [], {"paid": {"A001"}}, {"A001": "结算单元A"})
         assert candidates["add"] == [
-            {"cert_no": "A001", "name": "张三", "unit": "结算单元A", "reason": "发薪"}]
+            {"cert_no": "A001", "name": "张三", "unit": "结算单元A", "reason": "发薪", "detail": []}]
         assert counts == {"add": 1, "departed": 0, "pending": 0}
+
+    def test_payload_detail_departed(self):
+        # 一人 salary_end+last_pay+contract_end 全命中 (pay_month≠salary_month 追加「发放」),
+        # 一人仅 last_pay 命中 (验证无数据行省略)
+        departed_list = [self._row("D001", "赵六"), self._row("D002", "钱七")]
+        salary_end_map = {"D001": "2026-07"}
+        last_pay_map = {
+            "D001": {"unit_name": "结算单元甲", "salary_month": 202606,
+                     "seq": "3", "pay_month": 202607},
+            "D002": {"unit_name": "结算单元乙", "salary_month": 202605,
+                     "seq": "1", "pay_month": 202605},
+        }
+        contract_end_map = {"D001": "2026-08-31"}
+        candidates, counts = build_candidate_payload(
+            [], departed_list, [], {}, {}, salary_end_map=salary_end_map,
+            last_pay_map=last_pay_map, contract_end_map=contract_end_map)
+        assert candidates["departed"][0]["detail"] == [
+            "工资结束年月：2026-07",
+            "最后一笔工资：结算单元甲（所属202606 发放202607 批次3）",
+            "合同结束：2026-08-31（仅供参照，以工资结束年月为准）",
+        ]
+        assert candidates["departed"][1]["detail"] == [
+            "最后一笔工资：结算单元乙（所属202605 批次1）",
+        ]
+        assert counts == {"add": 0, "departed": 2, "pending": 0}
+
+    def test_payload_detail_add_contract_start(self):
+        # add 候选 detail 仅补「合同开始」, 不重复 reason 已有信息
+        add_list = [self._row("A001", "张三"), self._row("A002", "李四")]
+        contract_start_map = {"A001": "2026-07-01"}
+        candidates, counts = build_candidate_payload(
+            add_list, [], [], {"paid": {"A001", "A002"}}, {},
+            contract_start_map=contract_start_map)
+        assert candidates["add"][0]["detail"] == ["合同开始：2026-07-01"]
+        assert candidates["add"][1]["detail"] == []
+        assert counts == {"add": 2, "departed": 0, "pending": 0}
+
+    def test_payload_detail_pending(self):
+        # pending 仅 last_pay 命中 → 含最后一笔工资行、无合同行
+        pending_list = [self._row("E001", "钱七")]
+        last_pay_map = {
+            "E001": {"unit_name": "结算单元丙", "salary_month": 202604,
+                     "seq": "2", "pay_month": 202604},
+        }
+        candidates, counts = build_candidate_payload(
+            [], [], pending_list, {}, {}, last_pay_map=last_pay_map)
+        assert candidates["pending"][0]["detail"] == [
+            "最后一笔工资：结算单元丙（所属202604 批次2）",
+        ]
+        assert counts == {"add": 0, "departed": 0, "pending": 1}

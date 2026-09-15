@@ -174,28 +174,73 @@ def _derive_add_reason(cert: str, member_sets: Dict) -> str:
 
 
 def build_candidate_payload(add_list: List, departed_list: List, pending_list: List,
-                            member_sets: Dict, unit_map: Dict) -> Tuple[Dict, Dict]:
+                            member_sets: Dict, unit_map: Dict,
+                            salary_end_map: Dict[str, str] = None,
+                            last_pay_map: Dict[str, dict] = None,
+                            contract_start_map: Dict[str, str] = None,
+                            contract_end_map: Dict[str, str] = None) -> Tuple[Dict, Dict]:
     """组装弹窗候选 JSON。
 
-    每个候选 {"cert_no", "name", "unit", "reason"}:
+    每个候选 {"cert_no", "name", "unit", "reason", "detail"}:
     - add 候选 reason 由 member_sets ({"paid", "unpaid", "contract"} 三元身份
       集合) 推导, departed 固定 "近期离职", pending 固定 "待确认"
     - unit 从 unit_map (cert_no→结算单元名) 映射, 缺失容忍为空串
+    - detail 为展示行列表 (顺序固定, 无数据则省略该行, 绝不输出空行/None):
+      - add: 仅补「合同开始：YYYY-MM-DD」(contract_start_map 命中), 不重复
+        reason 已有信息
+      - departed/pending: ① 工资结束年月 (salary_end_map 命中) ② 最后一笔
+        工资 (last_pay_map 命中, pay_month≠salary_month 时追加「发放」)
+        ③ 合同结束 (contract_end_map 命中, 仅供参照)
+      - 完全无 detail 数据时 detail=[] (向后兼容)
     返回 (candidates, counts): candidates 键为 {"add", "departed", "pending"},
     counts 为 {"add": n, "departed": n, "pending": n}。
     """
     unit_map = unit_map or {}
     member_sets = member_sets or {}
+    salary_end_map = salary_end_map or {}
+    last_pay_map = last_pay_map or {}
+    contract_start_map = contract_start_map or {}
+    contract_end_map = contract_end_map or {}
 
-    def _candidate(item, reason):
+    def _detail_departed(cert):
+        detail = []
+        end_month = salary_end_map.get(cert)
+        if end_month:
+            detail.append(f"工资结束年月：{end_month}")
+        pay = last_pay_map.get(cert)
+        if pay and pay.get("salary_month"):
+            unit_name = pay.get("unit_name") or ""
+            salary_month = pay.get("salary_month")
+            seq = pay.get("seq") or ""
+            pay_month = pay.get("pay_month")
+            if pay_month and pay_month != salary_month:
+                detail.append(
+                    f"最后一笔工资：{unit_name}（所属{salary_month} 发放{pay_month} 批次{seq}）")
+            else:
+                detail.append(f"最后一笔工资：{unit_name}（所属{salary_month} 批次{seq}）")
+        contract_end = contract_end_map.get(cert)
+        if contract_end:
+            detail.append(f"合同结束：{contract_end}（仅供参照，以工资结束年月为准）")
+        return detail
+
+    def _candidate(item, reason, group):
         cert = _item_cert_no(item)
-        return {"cert_no": cert, "name": _item_name(item),
+        cand = {"cert_no": cert, "name": _item_name(item),
                 "unit": str(unit_map.get(cert) or ""), "reason": reason}
+        if group == "add":
+            detail = []
+            contract_start = contract_start_map.get(cert)
+            if contract_start:
+                detail.append(f"合同开始：{contract_start}")
+            cand["detail"] = detail
+        else:
+            cand["detail"] = _detail_departed(cert)
+        return cand
 
-    add_candidates = [_candidate(item, _derive_add_reason(_item_cert_no(item), member_sets))
+    add_candidates = [_candidate(item, _derive_add_reason(_item_cert_no(item), member_sets), "add")
                       for item in add_list]
-    departed_candidates = [_candidate(item, "近期离职") for item in departed_list]
-    pending_candidates = [_candidate(item, "待确认") for item in pending_list]
+    departed_candidates = [_candidate(item, "近期离职", "departed") for item in departed_list]
+    pending_candidates = [_candidate(item, "待确认", "pending") for item in pending_list]
 
     candidates = {"add": add_candidates, "departed": departed_candidates,
                   "pending": pending_candidates}

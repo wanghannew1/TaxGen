@@ -20,6 +20,7 @@
         .candidate-group-title { font-size: 0.95rem; font-weight: 600; }
         .candidate-table th { font-size: 0.85rem; white-space: nowrap; }
         .candidate-table td { font-size: 0.9rem; }
+        .candidate-reason-cell { min-width: 340px; white-space: normal; }
     </style>
 </head>
 <body>
@@ -208,7 +209,7 @@
 
 <!-- 增减员逐人确认 Modal -->
 <div class="modal fade" id="confirmModal" tabindex="-1" aria-labelledby="confirmModalLabel" aria-hidden="true">
-    <div class="modal-dialog modal-dialog-scrollable modal-lg">
+    <div class="modal-dialog modal-dialog-scrollable" style="max-width: 1800px; width: calc(100vw - 60px);">
         <div class="modal-content">
             <div class="modal-header">
                 <h5 class="modal-title" id="confirmModalLabel">增减员确认</h5>
@@ -568,7 +569,10 @@
                     <td>${escapeHtml(c.name)}</td>
                     <td>${escapeHtml(c.cert_no)}</td>
                     <td>${escapeHtml(c.unit)}</td>
-                    <td>${escapeHtml(c.reason)}</td>
+                    <td class="candidate-reason-cell">
+                        <div>${escapeHtml(c.reason)}</div>
+                        ${(c.detail || []).map(d => `<div class="text-muted small">${escapeHtml(d)}</div>`).join('')}
+                    </td>
                     <td>
                         <select class="form-select form-select-sm candidate-action" data-group="${g.key}" data-cert="${escapeHtml(c.cert_no)}">
                             <option value="confirm" selected>确认</option>
@@ -581,7 +585,7 @@
                     <h6 class="candidate-group-title ${g.cls}">${g.title}（${list.length} 人）</h6>
                     <table class="table table-sm table-bordered align-middle candidate-table">
                         <thead>
-                            <tr><th>姓名</th><th>证件号</th><th>结算单元</th><th>原因</th><th>操作</th></tr>
+                            <tr><th>姓名</th><th>证件号</th><th>结算单元</th><th>原因/明细</th><th>操作</th></tr>
                         </thead>
                         <tbody>${rows}</tbody>
                     </table>

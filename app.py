@@ -1443,8 +1443,39 @@ def api_personnel_compare():
                            "contract": contract_persons}
             unit_map = {cert: (info.get("unit_name") or "")
                         for cert, info in person_units.items()}
+            # 弹窗 detail 展示数据: 仅查最终候选 (已按 handler/unit/dept 过滤)
+            candidate_certs = {r[IDX_证件号码] for r in add_rows + departed_rows + pending_rows}
+            salary_end_map = {}
+            last_pay_map = {}
+            contract_start_map = {}
+            contract_end_map = {}
+            if candidate_certs:
+                from queries import get_last_pay_records, get_tc90_records
+                last_pay_map = get_last_pay_records(conn, candidate_certs)
+                tc90_rows = get_tc90_records(conn, candidate_certs)
+                for r in tc90_rows:
+                    cert = r.get("cert")
+                    if not cert:
+                        continue
+                    start = r.get("合同开始日期")
+                    if start:
+                        start_s = str(start)[:10]
+                        if cert not in contract_start_map or start_s < contract_start_map[cert]:
+                            contract_start_map[cert] = start_s
+                    end = r.get("合同终止日期")
+                    if end:
+                        end_s = str(end)[:10]
+                        if cert not in contract_end_map or end_s > contract_end_map[cert]:
+                            contract_end_map[cert] = end_s
+                salary_end_map = {
+                    c: f"{d.year:04d}-{d.month:02d}"
+                    for c, d in salary_end_dates.items()
+                    if c in candidate_certs
+                }
             candidates, counts = build_candidate_payload(
-                add_rows, departed_rows, pending_rows, member_sets, unit_map)
+                add_rows, departed_rows, pending_rows, member_sets, unit_map,
+                salary_end_map=salary_end_map, last_pay_map=last_pay_map,
+                contract_start_map=contract_start_map, contract_end_map=contract_end_map)
             return jsonify({
                 "phase": "confirm",
                 "candidates": candidates,
