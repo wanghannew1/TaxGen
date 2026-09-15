@@ -89,7 +89,15 @@ def _classify_row(rec: SalaryRecord, income, trips, merge_choices,
             else:
                 note = "；当期无未发工资，无历史发放记录"
             if getattr(rec, "合同新入职", False):
-                return "零申报", "C类: 合同新入职无工资（零申报注入）" + note
+                # C 类子类 (2026-09-15 用户确认): 按合同子类 (c1月初/c2月中/c3有历史)
+                # 输出不同文字说明, 子类判定见 tax_zero.build_contract_zero_records;
+                # 未挂载子类 (旧数据) 回退通用文案
+                sub = getattr(rec, "合同子类", "")
+                c_label = {"c1": "C类: 合同月初新入职无工资（零申报注入）",
+                           "c2": "C类: 合同月中新入职无工资（零申报注入）",
+                           "c3": "C类: 合同新入职有历史发放（零申报注入）"}.get(
+                    sub, "C类: 合同新入职无工资（零申报注入）")
+                return "零申报", c_label + note
             return "零申报", "B类: 名单在册无工资（零申报注入）" + note
         return "零申报", "A1: 工资表收入为0"
     if trips and len(trips) > 1:

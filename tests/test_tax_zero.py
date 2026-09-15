@@ -81,8 +81,9 @@ class TestBuildSuggestions:
 
         monkeypatch.setattr("queries.get_person_tc90_info", fake_tc90)
         # 在册信息 (2026-09-11): 默认无 TC93 记录
+        self.system_info = {}
         monkeypatch.setattr("queries.get_person_system_info",
-                            lambda conn, certs: {})
+                            lambda conn, certs: dict(self.system_info))
         # 当期申报月 TC93 全量有记录证号 (2026-09-14 C 类排除): 默认无记录
         self.month_salary_certs = set()
         monkeypatch.setattr("queries.get_month_salary_certs",
@@ -545,6 +546,7 @@ class TestBuildSuggestions:
     def test_contract_new_hire_in_window_candidate(self, monkeypatch):
         # C 类 (2026-09-14 新增, 独立于名单): 合同开始月==申报月 (窗口内 2026-06-01~30),
         # 当期无 TC93 记录, 不在名单 → 候选, 默认 declare + 理由带合同日期
+        # 子类 (2026-09-15): c2 月中 (合同开始日非1日, 无历史发放)
         self.records = []
         self.tc90_info = {"C1": self._c_tc90(start="2026-06-15")}
         res = tax_zero.build_zero_salary_suggestions(None, 202606, self.COMBOS)
@@ -554,11 +556,21 @@ class TestBuildSuggestions:
         p = u["persons"][0]
         assert p["cert_no"] == "C1"
         assert p["name"] == "合同人"
-        assert p["category"] == tax_zero.CAT_C_CONTRACT
+        assert p["category"] == tax_zero.CAT_C2_MID
         assert p["suggested"] == "declare"
         assert p["default_chosen"] == "declare"
         assert "2026-06-15" in p["reason"]
         assert "合同开始:2026-06-15" in p["sys_info"]
+
+    def test_contract_day1_in_window_candidate(self, monkeypatch):
+        # C 类子类 c1 (2026-09-15 用户确认): 合同开始日=当月1日 → 月初子类
+        self.records = []
+        self.tc90_info = {"C1": self._c_tc90(start="2026-06-01")}
+        res = tax_zero.build_zero_salary_suggestions(None, 202606, self.COMBOS)
+        p = res["units"][0]["persons"][0]
+        assert p["category"] == tax_zero.CAT_C1_DAY1
+        assert p["suggested"] == "declare"
+        assert "月初" in p["reason"]
 
     def test_contract_start_before_window_excluded(self, monkeypatch):
         # 合同开始早于申报月窗口 (2026-05-20) → 非"本月新入职", 不进候选
@@ -599,7 +611,8 @@ class TestBuildSuggestions:
                                                      roster=roster)
         p = res["units"][0]["persons"][0]
         assert p["category"] == tax_zero.CAT_B_ROSTER  # 名单优先, 非 C 类
-        assert p["category"] != tax_zero.CAT_C_CONTRACT
+        assert p["category"] not in (tax_zero.CAT_C1_DAY1, tax_zero.CAT_C2_MID,
+                                     tax_zero.CAT_C3_HIST)
 
     def test_contract_excl_unit_excluded(self, monkeypatch):
         # 合同单元为完全排除单元(102) → 不进候选
@@ -621,7 +634,21 @@ class TestBuildSuggestions:
         self.tc90_info = {"C1": self._c_tc90(start="2026-06-15", end_ym=202607)}
         res = tax_zero.build_zero_salary_suggestions(None, 202606, self.COMBOS)
         p = res["units"][0]["persons"][0]
-        assert p["category"] == tax_zero.CAT_C_CONTRACT
+        assert p["category"] == tax_zero.CAT_C2_MID
+
+    def test_contract_with_history_shows_last_pay_text(self, monkeypatch):
+        # C 类子类 c3 (2026-09-15 用户确认): 有历史发放 → 有历史子类,
+        # 面板 sys_info 显示"最后发薪:YYYYMM批X(YYYYMM发)", reason 带最近一次发放
+        self.records = []
+        self.tc90_info = {"C1": self._c_tc90(start="2026-06-15")}
+        self.system_info = {"C1": {"last_pay_ym": 202604, "last_batch": "2",
+                                   "pay_month": 202605, "unit_code": 100}}
+        res = tax_zero.build_zero_salary_suggestions(None, 202606, self.COMBOS)
+        p = res["units"][0]["persons"][0]
+        assert p["category"] == tax_zero.CAT_C3_HIST
+        assert "最后发薪:202604批2(202605发)" in p["sys_info"]
+        assert "合同开始:2026-06-15" in p["sys_info"]
+        assert "最近一次发放:202604" in p["reason"]
 
     def test_contract_handler_filter(self, monkeypatch):
         # 经办人过滤: C 类仅取合同经办人
@@ -640,7 +667,7 @@ class TestBuildSuggestions:
         self.tc90_info = {"C1": self._c_tc90(start="2026-06-15", unit=101)}
         res = tax_zero.build_zero_salary_suggestions(None, 202606, self.COMBOS)
         p = res["units"][0]["persons"][0]
-        assert p["category"] == tax_zero.CAT_C_CONTRACT
+        assert p["category"] == tax_zero.CAT_C2_MID
         assert p["suggested"] == "skip"
         assert "不增员不报税" in p["reason"]
 
@@ -1002,6 +1029,28 @@ class TestBuildContractZeroRecords:
     def test_no_declare_returns_empty(self):
         assert self._call(choices={}) == []
 
+    def test_contract_history_last_pay_attached(self):
+        # 有历史结算 → 工资所属年月/批次取最后真实结算, 且挂 C 类标记 + 子类 c3
+        self.tc90_info = {"C1": self._c_info(start="2026-06-15")}
+        self.sys_info = {"C1": {"last_pay_ym": 202604, "last_batch": "2"}}
+        rows = self._call()
+        assert rows[0].工资所属年月 == 202604
+        assert rows[0].当月批次 == "2"
+        assert getattr(rows[0], "合同新入职", False) is True
+        assert getattr(rows[0], "合同子类", "") == "c3"
+
+    def test_contract_subclass_day1(self):
+        # 合同开始日=当月1日 → 子类 c1 (月初)
+        self.tc90_info = {"C1": self._c_info(start="2026-06-01")}
+        rows = self._call()
+        assert getattr(rows[0], "合同子类", "") == "c1"
+
+    def test_contract_subclass_mid(self):
+        # 合同开始日月中, 无历史 → 子类 c2
+        self.tc90_info = {"C1": self._c_info(start="2026-06-15")}
+        rows = self._call()
+        assert getattr(rows[0], "合同子类", "") == "c2"
+
 
 class TestClassifyRowZeroSubcategories:
     """_classify_row 零申报子类标注: A2/A1/B类/B类-次月发放/B类-欠费未发。
@@ -1067,3 +1116,22 @@ class TestClassifyRowZeroSubcategories:
         assert detail == "A1: 工资表收入为0"
         cat, detail = self._call(rec, unpaid_certs={"C1"})
         assert detail == "A2: 做了工资当月未发放"
+
+    def test_c_subclass_labels(self):
+        # C 类子类文字 (2026-09-15 用户确认): 合同子类 c1月初/c2月中/c3有历史
+        # → 申报类别说明输出不同文字; 未挂载回退通用文案
+        rec = SalaryRecord(身份证="C1", 工资所属年月=0, 当月批次="")
+        rec.合同新入职 = True
+        rec.合同子类 = "c1"
+        cat, detail = self._call(rec)
+        assert detail == "C类: 合同月初新入职无工资（零申报注入）；当期无未发工资，无历史发放记录"
+        rec.合同子类 = "c2"
+        cat, detail = self._call(rec)
+        assert detail == "C类: 合同月中新入职无工资（零申报注入）；当期无未发工资，无历史发放记录"
+        rec.合同子类 = "c3"
+        rec.工资所属年月 = 202604
+        cat, detail = self._call(rec)
+        assert detail == "C类: 合同新入职有历史发放（零申报注入）；当期无未发工资，最近一次发放:202604"
+        del rec.合同子类
+        cat, detail = self._call(rec)
+        assert detail.startswith("C类: 合同新入职无工资（零申报注入）")

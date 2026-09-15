@@ -42,26 +42,34 @@ CAT_A2_UNPAID = "a2_unpaid"             # 做了工资没发 (TC8M 无发放)
 CAT_B_ROSTER = "b_roster"               # 个税端在职无工资 (名单在册, 在职)
 CAT_B_OUTSIDE = "b_outside"             # 名单在册但系统查无此人 (人工管理, 默认不生成)
 CAT_B_LEFT = "b_left"                   # 在系统但工资结束年月早于当期工资单所属月 (已离职, 默认不生成+建议减员)
-CAT_C_CONTRACT = "c_contract"           # 合同开始月==申报月 新入职未做工资 (不在名单, 默认生成零申报)
+CAT_C1_DAY1 = "c1_contract_day1"     # 合同开始日=当月1日 月初新入职未做工资 (不在名单, 默认生成零申报)
+CAT_C2_MID = "c2_contract_mid"       # 合同开始日月中 新入职未做工资 (不在名单, 默认生成零申报)
+CAT_C3_HIST = "c3_contract_hist"     # 合同新入职但有历史发放 (压月/曾发薪, 不在名单, 默认生成零申报)
 
 # 单元内人员展示排序 (2026-09-11 用户确认): 名单在册最前, 不在系统最后
 _CAT_SORT_ORDER = {
-    CAT_C_CONTRACT: -1,       # 合同新入职未做工资 → 最前 (2026-09-14 新入职漏报待补)
-    CAT_B_ROSTER: 0,          # 名单在册 (在职) → 次前
-    CAT_B_LEFT: 1,            # 名单在册·已离职
-    CAT_A1_INCOME_ZERO: 2,    # 工资单收入=0
-    CAT_A2_UNPAID: 3,         # 做了工资没发
-    CAT_B_OUTSIDE: 4,         # 名单在册·不在系统 → 最后
+    CAT_C3_HIST: -3,      # 合同新入职·有历史发放 → 最前 (有发薪记录需关注)
+    CAT_C1_DAY1: -2,      # 合同月初新入职 → 次前
+    CAT_C2_MID: -1,       # 合同月中新入职
+    CAT_B_ROSTER: 0,      # 名单在册 (在职) → 次前
+    CAT_B_LEFT: 1,        # 名单在册·已离职
+    CAT_A1_INCOME_ZERO: 2,  # 工资单收入=0
+    CAT_A2_UNPAID: 3,     # 做了工资没发
+    CAT_B_OUTSIDE: 4,     # 名单在册·不在系统 → 最后
 }
 
 REASON_A1 = "工资表按公式计算本期收入为0，默认生成零申报"
 REASON_A1_CONFIG = "结算单元配置'工资为0不增员不报税'，默认不生成零申报"
 REASON_A2 = "已做工资但未发放(TC8M无发放)，无纳税义务，默认不生成；若个税端需保留在册可改生成"
-REASON_B1 = "个税端在职，本期新签合同未做工资，默认生成零申报保留在册"
-REASON_B2 = "个税端在职，本期未做工资未发放未减员，默认生成零申报；若已离职请先办理减员"
-REASON_B_OUTSIDE = "个税端在职但不在系统管理(人工管理)，默认不生成零申报；如需在个税端保留请确认生成"
-REASON_B_LEFT = "工资结束年月{ym}早于当期工资单所属年月{pay}，判定已离职，默认不生成零申报，建议办理减员"
-REASON_C = "合同开始日期{date}（本月新入职），当期未做工资未发放，默认生成零申报保留在册；若当期已做工资请走正常申报"
+# B 类文字编号 b1/b2/b3/b4 (2026-09-15 用户确认): 不同的文字解释即不同子类,
+# 仅调整用户看到的文字, 不改底层分类逻辑 (b_roster/b_outside/b_left 保持)。
+REASON_B1 = "b1 个税端在职，本期新签合同未做工资，默认生成零申报保留在册"
+REASON_B2 = "b2 个税端在职，本期未做工资未发放未减员，默认生成零申报；若已离职请先办理减员"
+REASON_B_OUTSIDE = "b3 个税端在职但不在系统管理(人工管理)，默认不生成零申报；如需在个税端保留请确认生成"
+REASON_B_LEFT = "b4 工资结束年月{ym}早于当期工资单所属年月{pay}，判定已离职，默认不生成零申报，建议办理减员"
+REASON_C1 = "合同开始日期{date}（本月月初新入职），当期未做工资未发放，默认生成零申报保留在册；若当期已做工资请走正常申报"
+REASON_C2 = "合同开始日期{date}（本月月中新入职），当期未做工资未发放，默认生成零申报保留在册；若当期已做工资请走正常申报"
+REASON_C3 = "合同开始日期{date}（本月新入职），最近一次发放:{ym}，当期未做工资未发放，默认生成零申报保留在册；若当期已做工资请走正常申报"
 
 
 def _income_of_dict(d: dict) -> Decimal:
@@ -333,11 +341,17 @@ def build_zero_salary_suggestions(conn, pay_month, combos, roster=None, handler=
     # 2026-09-14 修复为按当期全量 TC93 记录排除;
     # 经办人过滤仅取合同经办人 (C 类无 TC8M/TC93 记录);
     # 默认生成零申报保留在册 (新入职当月无工资也应在个税端在册)
-    from queries import get_month_salary_certs
+    # C 类子类 = 文字解释差异 (2026-09-15 用户确认): 不新增分类维度,
+    # 有历史发放者 (get_person_system_info.last_pay_ym>0, 如压月/曾发薪)
+    # 面板 sys_info 显示"最后发薪:YYYYMM批X(YYYYMM发)", 无历史者仅显示
+    # 合同开始日期; 生成侧 _classify_row 已按 note 区分 C类/C类-欠费未发/
+    # C类-次月发放, 统计 sheet 按申报类别说明前缀统计
+    from queries import get_month_salary_certs, get_person_system_info
     c_y, c_m = divmod(pay_month, 100)
     c_win_start = f"{c_y:04d}-{c_m:02d}-01"
     c_win_end = _month_end(pay_month)
     month_salary_certs = get_month_salary_certs(conn, pay_month)
+    c_candidates = {}
     for cert, info in tc90_info.items():
         if cert in checked_certs or cert in month_salary_certs or cert in roster_certs:
             continue
@@ -354,6 +368,9 @@ def build_zero_salary_suggestions(conn, pay_month, combos, roster=None, handler=
             h = str((info.get("contract_handlers") or [""])[0] or "")
             if handler_filter not in h:
                 continue
+        c_candidates[cert] = (info, start, unit, end_ym)
+    c_sys_info = get_person_system_info(conn, list(c_candidates)) if c_candidates else {}
+    for cert, (info, start, unit, end_ym) in c_candidates.items():
         unit_name = str(info.get("unit_name") or "")
         u = _ensure_unit(unit, unit_name or "未关联结算单元",
                          "zero_salary_no_add" if unit in zero_codes else "normal",
@@ -366,11 +383,21 @@ def build_zero_salary_suggestions(conn, pay_month, combos, roster=None, handler=
             "salary_months": [],
             "income_total": 0.0,
         })
-        p_entry["category"] = CAT_C_CONTRACT
+        last = c_sys_info.get(cert, {})
+        last_pay_ym = int(last.get("last_pay_ym") or 0)
+        day1 = start.endswith("-01")
+        if last_pay_ym:
+            p_entry["category"] = CAT_C3_HIST
+        elif day1:
+            p_entry["category"] = CAT_C1_DAY1
+        else:
+            p_entry["category"] = CAT_C2_MID
         p_entry["_contract_start"] = start
         p_entry["_sys_info"] = {
             "unit_code": unit, "unit_name": unit_name,
-            "last_pay_ym": 0, "pay_month": 0, "batch": "",
+            "last_pay_ym": last_pay_ym,
+            "pay_month": int(last.get("pay_month") or 0),
+            "batch": str(last.get("last_batch") or ""),
             "end_ym": end_ym,
             "handler": str((info.get("contract_handlers") or [""])[0] or ""),
             "contract_start": start,
@@ -394,8 +421,17 @@ def build_zero_salary_suggestions(conn, pay_month, combos, roster=None, handler=
                         ym=p["_end_ym"], pay=p.get("_ref_ym") or salary_months[0])
                 elif in_config:
                     suggested, reason = "skip", REASON_A1_CONFIG
-                elif p["category"] == CAT_C_CONTRACT:
-                    suggested, reason = "declare", REASON_C.format(date=p["_contract_start"])
+                elif p["category"] in (CAT_C1_DAY1, CAT_C2_MID, CAT_C3_HIST):
+                    if p["category"] == CAT_C3_HIST:
+                        ym = p["_sys_info"]["last_pay_ym"]
+                        suggested, reason = "declare", REASON_C3.format(
+                            date=p["_contract_start"], ym=ym)
+                    elif p["category"] == CAT_C1_DAY1:
+                        suggested, reason = "declare", REASON_C1.format(
+                            date=p["_contract_start"])
+                    else:
+                        suggested, reason = "declare", REASON_C2.format(
+                            date=p["_contract_start"])
                 elif p["category"] == CAT_B_ROSTER:
                     if p.pop("_is_new", False):
                         suggested, reason = "declare", REASON_B1
@@ -543,6 +579,9 @@ def build_contract_zero_records(conn, pay_month, zero_choices, excl_codes,
     (ATC90AV) 空 或 > pay_month → 在职; 排除名单在册 (B 类已覆盖)、当期有
     工资记录与完全排除单元 (excl_codes)。当期有工资记录按申报月 TC93 全量
     (get_month_salary_certs) 判定, 与建议侧同口径 (2026-09-14 修复)。
+    子类 (2026-09-15 用户确认): 挂 合同子类 动态属性 c1/c2/c3 --
+    有历史发薪 (last_pay_ym>0) → c3; 合同开始日=当月1日 → c1; 其余 → c2,
+    与建议侧 build_zero_salary_suggestions 判定完全一致。
     """
     declare_certs = {str(c).strip().upper() for c, m in (zero_choices or {}).items()
                      if m == "declare"}
@@ -609,7 +648,13 @@ def build_contract_zero_records(conn, pay_month, zero_choices, excl_codes,
             rec.欠费未发 = True
         # 合同新入职标记: 动态属性, 供 _classify_row 区分 C 类 (合同新入职零申报注入)
         # 与 B 类 (名单在册零申报注入), 避免 C 类记录被误标为"名单在册"
+        # 子类 (2026-09-15 用户确认): c3 有历史发薪 > c1 合同开始日=当月1日 > c2 月中,
+        # 判定与建议侧完全一致 (last_pay_ym>0 → 有历史; 合同开始日 endswith -01 → 月初)
         rec.合同新入职 = True
+        last_pay_ym = int(last.get("last_pay_ym") or 0)
+        rec.合同子类 = ("c3" if last_pay_ym
+                        else "c1" if str(info.get("contract_start") or "").endswith("-01")
+                        else "c2")
         rows.append(rec)
     return rows
 
