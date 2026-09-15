@@ -84,15 +84,16 @@ class TestTemplateGeneration:
         # 申报分类统计 sheet (2026-09-12 用户确认: 文件名人数=收入表总行数口径):
         # 正常+合并+零申报合计 = 合计 = record_count; B类/C类-欠费未发/次月发放为子行
         # (2026-09-13 新增 B类子行: 零申报合计移至 row9;
-        #  2026-09-14 新增 C类子行 row9/10/11: 零申报合计/合计/不含零申报下移至 row12/13/14)
+        #  2026-09-14 新增 C类子行 row9/10/11: 零申报合计/合计/不含零申报下移至 row12/13/14;
+        #  2026-09-15 新增 A2次月发放/A3 子行: 零申报合计/合计/不含零申报下移至 row14/15/16)
         st = wb["申报分类统计"]
         normal = st.cell(row=2, column=3).value or 0
         merged = st.cell(row=3, column=3).value or 0
-        zero = st.cell(row=12, column=3).value or 0
-        total = st.cell(row=13, column=3).value or 0
+        zero = st.cell(row=14, column=3).value or 0
+        total = st.cell(row=15, column=3).value or 0
         assert normal + merged + zero == len(records)
         assert total == len(records)
-        non_zero = st.cell(row=14, column=3).value or 0
+        non_zero = st.cell(row=16, column=3).value or 0
         assert non_zero == normal + merged
     
     def test_generate_labor_service(self, conn, output_dir):

@@ -579,6 +579,20 @@ def api_generate():
                 checked_certs=_c_checked, roster=_roster)
             if _c_injected:
                 records = records + _c_injected
+            # A2 次月发放 / A3 无批次窗口注入 (2026-09-15 用户规则, Gitee IKFZSY/#33):
+            # 锚点=已选组合, 窗口=(单元最小已选所属月, 发放月] 向后扫 TC93, 当期做了
+            # 工资但工资单不在发放清单 (TC8M 无已发批次, A3) 或次月/未来发放
+            # (ATC8G7>发放月, A2) 且不在报税名单/个税端名单的人员, 确认"生成"时
+            # 注入零申报行保留个税端在册; 下期发放月按真实收入申报 (不冲突)。
+            if confirmed_combos:
+                from tax_zero import build_window_zero_records
+                _w_checked = {str(r.身份证 or r.职工号 or "").strip().upper()
+                              for r in records}
+                _w_injected = build_window_zero_records(
+                    conn, month, confirmed_combos, zero_choices, excl_codes,
+                    checked_certs=_w_checked, roster=_roster)
+                if _w_injected:
+                    records = records + _w_injected
         warnings = []
         if confirmed_combos and merge_by_person:
             persons = list({r.职工号 for r in raw_records})

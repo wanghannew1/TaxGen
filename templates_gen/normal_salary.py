@@ -53,12 +53,23 @@ def _classify_row(rec: SalaryRecord, income, trips, merge_choices,
                   raw_certs, unpaid_certs) -> tuple:
     """生成验证报告"申报类别/申报类别说明"列。
 
-    收入==0 → 零申报 (A2做了没发 / B类名单在册注入 / A1工资表为0);
+    收入==0 → 零申报 (A1工资表收入为0 / A2做了没发 / A2次月发放 / A3无批次 /
+    B类名单在册注入 / C类合同新入职注入);
     涉多个组合 (跨月/同月多批次/跨结算单元) → 合并申报 (+三险口径);
     其余 → 正常申报 (当月报当月，无合并、无零申报)。
     """
     cert = str(getattr(rec, "身份证", None) or getattr(rec, "职工号", None) or "").strip().upper()
     if income == 0:
+        # A2 次月发放 / A3 无批次 (窗口扫描注入, 2026-09-15 用户规则, Gitee IKFZSY):
+        # 动态属性由 tax_zero.build_window_zero_records 挂载, 优先于 unpaid/raw_certs
+        # 判定 (A3 无批次记录在 unpaid_pairs 中, 不加此分支会误标为旧 A2)
+        if getattr(rec, "次月发放", False):
+            pm = int(getattr(rec, "发放月", 0) or 0)
+            note = f"A2: 次月发放（{pm}发），本期零申报保留在册" if pm \
+                else "A2: 次月发放，本期零申报保留在册"
+            return "零申报", note
+        if getattr(rec, "无批次", False):
+            return "零申报", "A3: 做了工资未发放，工资单不在发放清单（本期零申报保留在册）"
         if cert in unpaid_certs:
             return "零申报", "A2: 做了工资当月未发放"
         if cert not in raw_certs:
@@ -415,7 +426,10 @@ def generate_normal_salary(records: List[SalaryRecord], title: str, output_dir: 
             "第32列'申报类别'+第33列'申报类别说明'逐行标注申报类型：",
             "正常申报 = 当月报当月、无合并、无零申报；",
             "合并申报 = 跨多个所属月 / 同月多个批次 / 跨多个结算单元，并以 '；' 列出跨月数、批次数、单元数及三险合并口径（多月合并=默认、单月、不报）；",
-            "零申报 = 本期收入为0；子类 A1=工资表收入为0、A2=做了工资当月未发放（TC8M 未发放月）、B类=名单在册无工资（零申报注入，无 TC93 原始记录）、C类=合同新入职无工资（零申报注入，合同开始月==申报月且无 TC93 原始记录，不在名单）；",
+            "零申报 = 本期收入为0；子类 A1=工资表收入为0、A2=做了工资当月未发放（TC8M 未发放月）、"
+            "A2次月发放=工资单已排期未来发放（窗口扫描注入，8月零申报保留在册，下期按真实收入申报）、"
+            "A3=做了工资未发放且工资单不在发放清单（TC8M无批次，窗口扫描注入）、"
+            "B类=名单在册无工资（零申报注入，无 TC93 原始记录）、C类=合同新入职无工资（零申报注入，合同开始月==申报月且无 TC93 原始记录，不在名单）；",
              "B 类行'所属月份/批次' = 该人最后一次真实发放的所属月-批次（TC93），无历史发放则所属月为空并注明'当期无未发工资，无历史发放记录'（不臆造所属月）。",
              "B 类发放月≠所属月（如202608的工资9月1日才发放）时单独小类'次月发放了当期工资'，标注'所属月-批次（发放月发）'（如长春市公共关系学校-202608-1（202609发）），",
              "避免'上次发放:202608'误导以为所属月当月已发工资（申报8月个税时该笔次月发放工资不能计入）。",
@@ -978,7 +992,12 @@ def generate_category_stats_sheet(wb: Workbook, validations: List[dict], total: 
         if d.startswith("A1"):
             zero_sub["A1"] += 1
         elif d.startswith("A2"):
-            zero_sub["A2"] += 1
+            if "次月发放" in d:
+                zero_sub["A2-次月发放"] += 1
+            else:
+                zero_sub["A2"] += 1
+        elif d.startswith("A3"):
+            zero_sub["A3"] += 1
         elif d.startswith("C类"):
             if "（欠费未发）" in d:
                 zero_sub["C类-欠费未发"] += 1
@@ -997,6 +1016,8 @@ def generate_category_stats_sheet(wb: Workbook, validations: List[dict], total: 
         ("合并申报", "", cats.get("合并申报", 0)),
         ("零申报", "A1: 工资表收入为0", zero_sub.get("A1", 0)),
         ("零申报", "A2: 做了工资当月未发放", zero_sub.get("A2", 0)),
+        ("零申报", "A2: 次月/未来发放（零申报保留在册）", zero_sub.get("A2-次月发放", 0)),
+        ("零申报", "A3: 做了工资未发放，工资单不在发放清单（零申报保留在册）", zero_sub.get("A3", 0)),
         ("零申报", "B类: 名单在册无工资（零申报注入）", zero_sub.get("B类", 0)),
         ("零申报", "B类: 名单在册无工资（零申报注入），欠费未发（TB96.ATB96Z=1）", zero_sub.get("B类-欠费未发", 0)),
         ("零申报", "B类: 名单在册无工资（零申报注入），次月发放了当期工资（发放月≠所属月）", zero_sub.get("B类-次月发放", 0)),

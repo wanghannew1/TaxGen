@@ -1105,6 +1105,43 @@ def get_unpaid_salary_cert_months(conn, salary_months) -> Set[Tuple[str, int]]:
     return pairs
 
 
+def get_paid_batch_pay_map(conn, units, months) -> Dict[Tuple[int, int, str], Set[int]]:
+    """查询 TC8M 已发放批次 (ATC8M3=2) 的发放月集合。
+
+    A2 次月发放/A3 无批次窗口扫描候选分类使用 (2026-09-15 用户规则):
+    返回 {(结算单元, 所属月, 批次): {ATC8G7, ...}}——同一 (单元, 所属月, 批次)
+    可能有多个 TC8M 行 (逐人记录), ATC8G7 取 DISTINCT 集合:
+    - 存在 ATC8G7 > pay_month 的已发批次 → 次月/未来发放 (A2);
+    - 无任何已发批次 → 工资单不在发放清单 (A3);
+    - 已发批次 ATC8G7 <= pay_month → 当期或前期已申报, 跳过。
+    纯只读 SELECT, 绑定变量分批 (Oracle 11g IN 上限 1000)。
+    """
+    if not units or not months:
+        return {}
+    units = sorted({int(u) for u in units if u})
+    months = sorted({int(m) for m in months if m})
+    if not units or not months:
+        return {}
+    result: Dict[Tuple[int, int, str], Set[int]] = {}
+    with conn.cursor() as cursor:
+        for u_start in range(0, len(units), _IN_BATCH_SIZE):
+            u_chunk = units[u_start:u_start + _IN_BATCH_SIZE]
+            for m_start in range(0, len(months), _IN_BATCH_SIZE):
+                m_chunk = months[m_start:m_start + _IN_BATCH_SIZE]
+                up = ", ".join(f":u{i}" for i in range(len(u_chunk)))
+                mp = ", ".join(f":m{i}" for i in range(len(m_chunk)))
+                binds = {f"u{i}": u for i, u in enumerate(u_chunk)}
+                binds.update({f"m{i}": m for i, m in enumerate(m_chunk)})
+                cursor.execute(
+                    "SELECT DISTINCT ATB930, ATC931, ATC937, ATC8G7 FROM TC8M\n"
+                    f" WHERE ATC8M3 = 2 AND ATB930 IN ({up}) AND ATC931 IN ({mp})",
+                    binds)
+                for row in cursor.fetchall():
+                    key = (int(row[0] or 0), int(row[1] or 0), str(row[2] or ""))
+                    result.setdefault(key, set()).add(int(row[3] or 0))
+    return result
+
+
 def get_arrear_batches(conn, salary_months) -> Set[Tuple[int, int, str]]:
     """查询欠费未发放批次集合: (结算单元, 所属月, 批次) 且 TB96.ATB96Z='1'。
 

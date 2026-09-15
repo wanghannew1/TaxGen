@@ -30,7 +30,8 @@
 from decimal import Decimal
 from dataclasses import replace
 
-from queries import (get_salary_records_by_combos, get_unpaid_salary_cert_months,
+from queries import (get_salary_records_by_combos, get_salary_records,
+                     get_paid_batch_pay_map, get_unpaid_salary_cert_months,
                      get_paid_units_in_month, get_arrear_batches)
 from config_db import get_zero_overrides, get_zero_salary_unit_codes, get_excluded_unit_codes
 from templates_gen.formulas import calc_本期收入
@@ -45,6 +46,8 @@ CAT_B_LEFT = "b_left"                   # 在系统但工资结束年月早于�
 CAT_C1_DAY1 = "c1_contract_day1"     # 合同开始日=当月1日 月初新入职未做工资 (不在名单, 默认生成零申报)
 CAT_C2_MID = "c2_contract_mid"       # 合同开始日月中 新入职未做工资 (不在名单, 默认生成零申报)
 CAT_C3_HIST = "c3_contract_hist"     # 合同新入职但有历史发放 (压月/曾发薪, 不在名单, 默认生成零申报)
+CAT_A2_NEXT_MONTH = "a2_next_month"  # 次月/未来发放: TC8M 有 ATC8M3=2 批次且 ATC8G7>发放月 (窗口扫描, 默认生成零申报)
+CAT_A3_NO_BATCH = "a3_no_batch"      # 做了工资未发放, 工资单不在发放清单: TC8M 无 ATC8M3=2 批次 (窗口扫描, 默认生成零申报)
 
 # 单元内人员展示排序 (2026-09-11 用户确认): 名单在册最前, 不在系统最后
 _CAT_SORT_ORDER = {
@@ -55,7 +58,9 @@ _CAT_SORT_ORDER = {
     CAT_B_LEFT: 1,        # 名单在册·已离职
     CAT_A1_INCOME_ZERO: 2,  # 工资单收入=0
     CAT_A2_UNPAID: 3,     # 做了工资没发
-    CAT_B_OUTSIDE: 4,     # 名单在册·不在系统 → 最后
+    CAT_A2_NEXT_MONTH: 3,  # 次月/未来发放 (窗口扫描) → 与 A2 并列
+    CAT_A3_NO_BATCH: 4,   # 做了工资未发放, 不在发放清单 (窗口扫描)
+    CAT_B_OUTSIDE: 5,     # 名单在册·不在系统 → 最后
 }
 
 REASON_A1 = "工资表按公式计算本期收入为0，默认生成零申报"
@@ -73,6 +78,8 @@ REASON_B_LEFT = "b4 工资结束年月{ym}早于当期工资单所属年月{pay}
 REASON_C1 = "合同开始日期{date}（本月月初新入职），当期未做工资未发放，默认生成零申报保留在册；若当期已做工资请走正常申报"
 REASON_C2 = "合同开始日期{date}（本月月中新入职），当期未做工资未发放，默认生成零申报保留在册；若当期已做工资请走正常申报"
 REASON_C3 = "合同开始日期{date}（本月新入职），最近一次发放:{ym}，当期未做工资未发放，默认生成零申报保留在册；若当期已做工资请走正常申报"
+REASON_A2_NEXT = "A2: 当期工资单已排期发放（{ym}发），本期零申报保留在册；下期发放月按真实收入申报"
+REASON_A3_NO_BATCH = "A3: 当期做了工资但未发放，工资单不在发放清单（TC8M无发放记录），本期零申报保留在册；发放后再按真实收入申报"
 
 
 def _income_of_dict(d: dict) -> Decimal:
@@ -117,6 +124,63 @@ def _zero_salary_record(rec) -> SalaryRecord:
                    个人其他调整=Decimal("0"), 个人欠款=Decimal("0"),
                    扣款大病险=Decimal("0"), 税后工会会费=Decimal("0"),
                    个人代理费=Decimal("0"), 意外险个人=Decimal("0"), 经济补偿金=Decimal("0"))
+
+
+def _scan_a2a3_candidates(conn, pay_month, combos, checked_certs, roster_certs,
+                          excl_codes):
+    """A2 次月发放 / A3 无批次 窗口扫描候选 (2026-09-15 用户规则)。
+
+    锚点 = 已选组合 (发放月 P 已发批次); 窗口 = 每单元 (最小已选所属月, P];
+    窗口内 TC93 工资单 (ATC93G='1') 分类:
+    - TC8M 有 ATC8M3=2 批次且 ATC8G7 > P → CAT_A2_NEXT_MONTH (次月/未来发放);
+    - TC8M 无 ATC8M3=2 批次 → CAT_A3_NO_BATCH (工资单不在发放清单);
+    - 已发批次 ATC8G7 <= P → 当期或前期已申报, 跳过。
+    人员过滤: 报税名单 (checked_certs) + 个税端名单 (roster_certs, B 类已覆盖防重复)
+    + 完全排除单元 (excl_codes)。
+    返回 [(SalaryRecord, category)]; 并在记录上挂动态属性 次月发放/发放月/无批次
+    供验证报告 A 列分类标注 (与 欠费未发/合同新入职 同机制)。
+    """
+    combo_set = {(int(c.get("unit", 0) or 0), int(c.get("salary_month", 0) or 0),
+                  str(c.get("seq", "") or "")) for c in combos}
+    if not combo_set:
+        return []
+    unit_min_month = {}
+    for c in combos:
+        u = int(c.get("unit", 0) or 0)
+        unit_min_month[u] = min(unit_min_month.get(u, int(c.get("salary_month", 0) or 0)),
+                                int(c.get("salary_month", 0) or 0))
+    window_months = sorted({m for u, m0 in unit_min_month.items()
+                            for m in range(m0 + 1, pay_month + 1)})
+    if not window_months:
+        return []
+    batch_pay = get_paid_batch_pay_map(conn, list(unit_min_month), window_months)
+    checked = {str(c).strip().upper() for c in (checked_certs or set())}
+    roster = {str(c).strip().upper() for c in (roster_certs or set())}
+    excl = set(int(e) for e in (excl_codes or set()))
+    cands = []
+    for m in window_months:
+        for rec in get_salary_records(conn, m):
+            u = int(rec.结算单元 or 0)
+            if u not in unit_min_month or not (unit_min_month[u] < m <= pay_month):
+                continue
+            if u in excl:
+                continue
+            cert = str(rec.身份证 or rec.职工号 or "").strip().upper()
+            if not cert or cert in checked or cert in roster:
+                continue
+            pays = batch_pay.get((u, m, str(rec.当月批次 or "")), set())
+            if any(p <= pay_month for p in pays):
+                continue  # 当期或前期已发 → 已申报
+            future = sorted(p for p in pays if p > pay_month)
+            if future:
+                rec.次月发放 = True
+                rec.发放月 = future[0]  # 最早未来发放月 (标注用)
+                cat = CAT_A2_NEXT_MONTH
+            else:
+                rec.无批次 = True
+                cat = CAT_A3_NO_BATCH
+            cands.append((rec, cat))
+    return cands
 
 
 def build_zero_salary_suggestions(conn, pay_month, combos, roster=None, handler=""):
@@ -240,6 +304,35 @@ def build_zero_salary_suggestions(conn, pay_month, combos, roster=None, handler=
     # 名单在册证号集合 (C 类排除, 名单人员走 B 类避免与 B 类重复)
     roster_certs = {str(p.get("cert_no") or "").strip().upper()
                     for p in (roster or []) if str(p.get("cert_no") or "").strip()}
+
+    # A2 次月发放 / A3 无批次 窗口扫描 (2026-09-15 用户规则):
+    # 锚点 = 已选组合; 窗口 = (单元最小已选所属月, pay_month]; 分类见
+    # _scan_a2a3_candidates。解决"做了工资未发放 (工资单不在发放清单/次月发放)
+    # 人员不进零申报面板"问题 (个税端反馈 73 人未填写正常工资薪金所得,
+    # 如高东方/佟立华等 5 人, Gitee IKFZSY / GitHub #33)。
+    # 两类均默认 declare (零申报保留在册); 次月发放下期按真实收入申报。
+    for rec, cat in _scan_a2a3_candidates(
+            conn, pay_month, combos, checked_certs, roster_certs, excl_codes):
+        cert = _cert_of(rec)
+        if not cert:
+            continue
+        unit = _unit_of(rec)
+        u = _ensure_unit(unit, str(rec.结算单元名称 or ""),
+                         "zero_salary_no_add" if unit in zero_codes else "normal",
+                         "skip" if unit in zero_codes else "declare")
+        u["count"] += 1
+        u["income_total"] += 0.0
+        p = u["persons"].setdefault(cert, {
+            "cert_no": cert,
+            "name": str(rec.姓名 or ""),
+            "emp_no": str(rec.职工号 or ""),
+            "salary_months": [],
+            "income_total": 0.0,
+        })
+        p["salary_months"].append(rec.工资所属年月)
+        p["category"] = cat
+        if cat == CAT_A2_NEXT_MONTH:
+            p["pay_month"] = int(getattr(rec, "发放月", 0) or 0)
 
     if roster:
         month_end = _month_end(pay_month)
@@ -461,6 +554,13 @@ def build_zero_salary_suggestions(conn, pay_month, combos, roster=None, handler=
             if p.get("suggested") is None:
                 if p["category"] == CAT_A2_UNPAID:
                     suggested, reason = "skip", REASON_A2
+                elif p["category"] == CAT_A2_NEXT_MONTH:
+                    # 次月/未来发放 (窗口扫描): 8 月零申报保留在册, 下期按真实收入申报
+                    suggested, reason = "declare", REASON_A2_NEXT.format(
+                        ym=p.get("pay_month") or "")
+                elif p["category"] == CAT_A3_NO_BATCH:
+                    # 做了工资未发放, 工资单不在发放清单 (窗口扫描): 零申报保留在册
+                    suggested, reason = "declare", REASON_A3_NO_BATCH
                 elif p["category"] == CAT_B_OUTSIDE:
                     suggested, reason = "skip", REASON_B_OUTSIDE
                 elif p["category"] == CAT_B_LEFT:
@@ -722,6 +822,62 @@ def build_contract_zero_records(conn, pay_month, zero_choices, excl_codes,
                         else "c1" if str(info.get("contract_start") or "").endswith("-01")
                         else "c2")
         rows.append(rec)
+    return rows
+
+
+def build_window_zero_records(conn, pay_month, combos, zero_choices, excl_codes,
+                              checked_certs, roster=None):
+    """A2 次月发放 / A3 无批次 (窗口扫描) 被确认"生成" → 构造零申报 SalaryRecord 列表。
+
+    2026-09-15 用户规则 (Gitee IKFZSY / GitHub #33): 当期做了工资但工资单
+    不在发放清单 (TC8M 无已发批次, A3) 或次月/未来发放 (TC8M 有已发批次且
+    ATC8G7>pay_month, A2) 的人员, 确认生成时注入零申报行保留个税端在册;
+    下期发放月按真实收入申报 (8 月零申报与 9 月收入申报不冲突)。
+    与 build_roster_zero_records 同构: 收入/五险皆 0, 身份/结算单元取窗口
+    扫描到的 TC93 记录, 工资所属年月 = 该工资单所属月 (不臆造);
+    挂动态属性 次月发放/发放月 (A2) 与 无批次 (A3), 供 _classify_row 标注
+    "A2: 次月发放（YYYYMM发）" / "A3: 做了工资未发放，工资单不在发放清单"。
+    """
+    declare_certs = {str(c).strip().upper() for c, m in (zero_choices or {}).items()
+                     if m == "declare"}
+    if not declare_certs:
+        return []
+    roster_certs = {str(p.get("cert_no") or "").strip().upper()
+                    for p in (roster or []) if str(p.get("cert_no") or "").strip()}
+    checked = {str(c).strip().upper() for c in (checked_certs or set())}
+    cands = _scan_a2a3_candidates(conn, pay_month, combos, checked, roster_certs,
+                                  excl_codes)
+    rows = []
+    for rec, cat in cands:
+        cert = str(rec.身份证 or rec.职工号 or "").strip().upper()
+        if cert not in declare_certs:
+            continue
+        zero = SalaryRecord(
+            职工号=str(rec.职工号 or ""),
+            姓名=str(rec.姓名 or ""),
+            身份证=cert,
+            工资所属年月=int(rec.工资所属年月 or 0),
+            结算单元=int(rec.结算单元 or 0),
+            结算单元名称=str(rec.结算单元名称 or ""),
+            当月批次=str(rec.当月批次 or ""),
+            应发工资=Decimal("0"), 实发工资=Decimal("0"), 个人所得税=Decimal("0"),
+            工资总额=Decimal("0"), 独生子女费=Decimal("0"), 采暖费=Decimal("0"),
+            奖金=Decimal("0"), 养老个人=Decimal("0"), 医疗个人=Decimal("0"),
+            失业个人=Decimal("0"), 公积金个人=Decimal("0"),
+            补缴及退款保险金额个人=Decimal("0"), 大病险个人=Decimal("0"),
+            补发3=Decimal("0"), 个人交纳现金=Decimal("0"),
+            个人其他调整=Decimal("0"), 个人欠款=Decimal("0"),
+            扣款大病险=Decimal("0"), 税后工会会费=Decimal("0"),
+            个人代理费=Decimal("0"), 意外险个人=Decimal("0"), 经济补偿金=Decimal("0"),
+        )
+        if cat == CAT_A2_NEXT_MONTH:
+            zero.次月发放 = True
+            if pm := int(getattr(rec, "发放月", 0) or 0):
+                if pm != int(rec.工资所属年月 or 0):
+                    zero.发放月 = pm
+        else:
+            zero.无批次 = True
+        rows.append(zero)
     return rows
 
 

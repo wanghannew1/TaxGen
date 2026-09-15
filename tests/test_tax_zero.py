@@ -66,6 +66,14 @@ class TestBuildSuggestions:
                             lambda conn, months: self.unpaid_pairs)
         monkeypatch.setattr(tax_zero, "get_paid_units_in_month",
                             lambda conn, pay_month: self.paid_units)
+        # A2 次月发放/A3 无批次窗口扫描 (2026-09-15): 默认窗口内无记录/无已发批次
+        self.window_records = []
+        self.batch_pay = {}
+        monkeypatch.setattr(tax_zero, "get_salary_records",
+                            lambda conn, month: [r for r in self.window_records
+                                                 if r.工资所属年月 == month])
+        monkeypatch.setattr(tax_zero, "get_paid_batch_pay_map",
+                            lambda conn, units, months: dict(self.batch_pay))
         monkeypatch.setattr(tax_zero, "get_zero_salary_unit_codes",
                             lambda: [101])       # 101 为配置"工资为0不申报"单元
         monkeypatch.setattr(tax_zero, "get_excluded_unit_codes",
@@ -214,6 +222,77 @@ class TestBuildSuggestions:
         self.unpaid_pairs = {("C1", 202606)}
         self.paid_units = {100}     # 单元 100 在发放月有已发记录
         res = tax_zero.build_zero_salary_suggestions(None, 202606, self.COMBOS)
+        assert res["units"] == []
+
+    def test_a2_next_month_window_candidate(self):
+        # 窗口扫描: 单元已选202607, 202608工资单有已发批次 ATC8G7=202609 → A2 次月发放, 默认 declare
+        self.window_records = [_rec(cert="W1", unit=100, sm=202608,
+                                    income=Decimal("5000"))]
+        self.batch_pay = {(100, 202608, "1"): {202609}}
+        combos = [{"unit": 100, "salary_month": 202607, "seq": "1"}]
+        res = tax_zero.build_zero_salary_suggestions(None, 202608, combos)
+        assert len(res["units"]) == 1
+        p = res["units"][0]["persons"][0]
+        assert p["cert_no"] == "W1"
+        assert p["category"] == tax_zero.CAT_A2_NEXT_MONTH
+        assert p["suggested"] == "declare"
+        assert p["default_chosen"] == "declare"
+        assert "202609发" in p["reason"]
+
+    def test_a3_no_batch_window_candidate(self):
+        # 窗口扫描: 202608工资单 TC8M 无已发批次 → A3 无批次, 默认 declare
+        self.window_records = [_rec(cert="W1", unit=100, sm=202608,
+                                    income=Decimal("5000"))]
+        combos = [{"unit": 100, "salary_month": 202607, "seq": "1"}]
+        res = tax_zero.build_zero_salary_suggestions(None, 202608, combos)
+        p = res["units"][0]["persons"][0]
+        assert p["category"] == tax_zero.CAT_A3_NO_BATCH
+        assert p["suggested"] == "declare"
+        assert "不在发放清单" in p["reason"]
+
+    def test_window_paid_this_month_skipped(self):
+        # 窗口内工资单当期已发 (ATC8G7=202608) → 跳过 (已申报)
+        self.window_records = [_rec(cert="W1", unit=100, sm=202608,
+                                    income=Decimal("5000"))]
+        self.batch_pay = {(100, 202608, "1"): {202608}}
+        combos = [{"unit": 100, "salary_month": 202607, "seq": "1"}]
+        res = tax_zero.build_zero_salary_suggestions(None, 202608, combos)
+        assert res["units"] == []
+
+    def test_window_multiple_paid_months_uses_min(self):
+        # 单元当期补发多个月 (202606+202607), 下界取最小 → 202607 未发单也扫到
+        self.window_records = [
+            _rec(cert="W1", unit=100, sm=202607, income=Decimal("5000")),
+            _rec(cert="W2", unit=100, sm=202608, income=Decimal("5000")),
+        ]
+        combos = [{"unit": 100, "salary_month": 202606, "seq": "1"},
+                  {"unit": 100, "salary_month": 202607, "seq": "1"}]
+        res = tax_zero.build_zero_salary_suggestions(None, 202608, combos)
+        certs = {p["cert_no"] for u in res["units"] for p in u["persons"]}
+        assert certs == {"W1", "W2"}
+
+    def test_window_checked_and_roster_excluded(self):
+        # 报税名单 (checked) 与 个税端名单 (roster) 人员不进窗口候选
+        self.window_records = [
+            _rec(cert="W1", unit=100, sm=202608, income=Decimal("5000")),
+            _rec(cert="W2", unit=100, sm=202608, income=Decimal("5000")),
+        ]
+        self.records = [_rec(cert="W1", unit=100, sm=202607, income=Decimal("0"))]
+        combos = [{"unit": 100, "salary_month": 202607, "seq": "1"}]
+        roster = [_roster(cert="W2")]
+        res = tax_zero.build_zero_salary_suggestions(None, 202608, combos, roster=roster)
+        persons = {p["cert_no"]: p for u in res["units"] for p in u["persons"]}
+        assert persons["W1"]["category"] == tax_zero.CAT_A1_INCOME_ZERO  # 已选组合内收入0 → A1
+        # 名单在册 → 由 B 类覆盖 (此处 b_outside), 窗口扫描不重复进 A3
+        assert persons["W2"]["category"] != tax_zero.CAT_A3_NO_BATCH
+        assert persons["W2"]["category"] != tax_zero.CAT_A2_NEXT_MONTH
+
+    def test_window_other_unit_not_anchored(self):
+        # 非锚点单元 (不在已选组合) 的窗口记录不扫
+        self.window_records = [_rec(cert="W1", unit=200, sm=202608,
+                                    income=Decimal("5000"))]
+        combos = [{"unit": 100, "salary_month": 202607, "seq": "1"}]
+        res = tax_zero.build_zero_salary_suggestions(None, 202608, combos)
         assert res["units"] == []
 
     def test_roster_b1_new_hire_declare(self, monkeypatch):
@@ -1286,3 +1365,105 @@ class TestClassifyRowZeroSubcategories:
         del rec.合同子类
         cat, detail = self._call(rec)
         assert detail.startswith("C类: 合同新入职无工资（零申报注入）")
+
+class TestClassifyRowA2A3Window:
+    """_classify_row A2 次月发放 / A3 无批次 标签 (2026-09-15 窗口扫描注入标记)。"""
+
+    def _call(self, rec, income=0, raw_certs=set(), unpaid_certs=set()):
+        from templates_gen.normal_salary import _classify_row
+        return _classify_row(rec, income, set(), {}, raw_certs, unpaid_certs)
+
+    def test_a2_next_month_label(self):
+        rec = SalaryRecord(身份证="C1", 工资所属年月=202608, 当月批次="1")
+        rec.次月发放 = True
+        rec.发放月 = 202609
+        cat, detail = self._call(rec, unpaid_certs={"C1"})
+        assert cat == "零申报"
+        assert detail == "A2: 次月发放（202609发），本期零申报保留在册"
+
+    def test_a2_next_month_no_pay_month_label(self):
+        rec = SalaryRecord(身份证="C1", 工资所属年月=202608, 当月批次="1")
+        rec.次月发放 = True
+        cat, detail = self._call(rec)
+        assert detail == "A2: 次月发放，本期零申报保留在册"
+
+    def test_a3_no_batch_label(self):
+        rec = SalaryRecord(身份证="C1", 工资所属年月=202608, 当月批次="1")
+        rec.无批次 = True
+        cat, detail = self._call(rec, unpaid_certs={"C1"})
+        assert cat == "零申报"
+        assert detail == "A3: 做了工资未发放，工资单不在发放清单（本期零申报保留在册）"
+
+    def test_a2a3_markers_beat_unpaid_and_raw(self):
+        # A3 无批次记录在 unpaid_pairs 中且不在 raw_certs, 标记优先于旧 A2/B 类判定
+        rec = SalaryRecord(身份证="C1", 工资所属年月=202608, 当月批次="1")
+        rec.无批次 = True
+        cat, detail = self._call(rec, unpaid_certs={"C1"}, raw_certs=set())
+        assert detail.startswith("A3: ")
+
+
+class TestBuildWindowZeroRecords:
+    """build_window_zero_records: A2 次月发放/A3 无批次窗口注入零申报行 (2026-09-15)。
+
+    与 B/C 注入同构: 收入/五险全 0, 身份/单元取窗口扫描到的 TC93 记录,
+    挂 次月发放/发放月 (A2) 与 无批次 (A3) 动态属性供验证报告 A 列标注。
+    """
+
+    @pytest.fixture(autouse=True)
+    def patch_sources(self, monkeypatch):
+        self.window_records = []
+        self.batch_pay = {}
+        monkeypatch.setattr(tax_zero, "get_salary_records",
+                            lambda conn, month: [r for r in self.window_records
+                                                 if r.工资所属年月 == month])
+        monkeypatch.setattr(tax_zero, "get_paid_batch_pay_map",
+                            lambda conn, units, months: dict(self.batch_pay))
+
+    def _call(self, pay_month=202608, choices=None, combos=None, checked=set(),
+              roster=None):
+        combos = combos if combos is not None else \
+            [{"unit": 100, "salary_month": 202607, "seq": "1"}]
+        choices = choices if choices is not None else {"W1": "declare"}
+        return tax_zero.build_window_zero_records(
+            None, pay_month, combos, choices, set(), checked, roster=roster)
+
+    def test_a3_zero_record_with_marker(self):
+        self.window_records = [_rec(cert="W1", unit=100, sm=202608, emp="E1",
+                                    income=Decimal("5000"))]
+        rows = self._call()
+        assert len(rows) == 1
+        r = rows[0]
+        assert r.身份证 == "W1" and r.姓名 == "姓W1" and r.职工号 == "E1"
+        assert r.工资总额 == Decimal("0") and r.养老个人 == Decimal("0")
+        assert r.工资所属年月 == 202608 and r.当月批次 == "1"
+        assert r.结算单元 == 100 and r.结算单元名称 == "单元100"
+        assert getattr(r, "无批次", False) is True
+        assert getattr(r, "次月发放", False) is False
+
+    def test_a2_zero_record_with_pay_month(self):
+        self.window_records = [_rec(cert="W1", unit=100, sm=202608,
+                                    income=Decimal("5000"))]
+        self.batch_pay = {(100, 202608, "1"): {202609}}
+        rows = self._call()
+        assert len(rows) == 1
+        r = rows[0]
+        assert getattr(r, "次月发放", False) is True
+        assert getattr(r, "发放月", 0) == 202609
+        assert getattr(r, "无批次", False) is False
+
+    def test_declare_filter(self):
+        self.window_records = [
+            _rec(cert="W1", unit=100, sm=202608),
+            _rec(cert="W2", unit=100, sm=202608),
+        ]
+        rows = self._call(choices={"W1": "declare", "W2": "skip"})
+        assert [r.身份证 for r in rows] == ["W1"]
+
+    def test_checked_and_roster_excluded(self):
+        self.window_records = [_rec(cert="W1", unit=100, sm=202608)]
+        assert self._call(checked={"W1"}) == []
+        assert self._call(roster=[_roster(cert="W1")]) == []
+
+    def test_window_empty_no_rows(self):
+        combos = [{"unit": 100, "salary_month": 202608, "seq": "1"}]
+        assert self._call(combos=combos) == []
