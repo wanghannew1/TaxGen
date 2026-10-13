@@ -47,7 +47,13 @@
         <div class="card-body">
             <div class="roster-status-panel alert alert-info mb-3 d-flex justify-content-between align-items-center flex-wrap gap-2">
                 <span id="rosterStatusText">名单状态加载中...</span>
-                <a href="/" class="btn btn-sm btn-outline-secondary" id="btnReimport">重新导入名单</a>
+                <span class="d-flex gap-2 align-items-center flex-wrap">
+                    <span id="rosterImportMsg" class="text-muted small"></span>
+                    <button type="button" class="btn btn-sm btn-outline-secondary" id="btnRosterImportDomestic">重新导入境内名单</button>
+                    <button type="button" class="btn btn-sm btn-outline-secondary" id="btnRosterImportOverseas">重新导入境外名单</button>
+                    <input type="file" id="rosterFileDomestic" accept=".xls" style="display:none;">
+                    <input type="file" id="rosterFileOverseas" accept=".xls" style="display:none;">
+                </span>
             </div>
             <div class="alert alert-info mb-3" style="font-size: 0.9rem;">
                 基于已导入的个税端在册人员名单（境内+境外）进行比对，显式选择发薪月份时间段（起始~结束）和
@@ -277,6 +283,11 @@
     const fileInfo = document.getElementById('fileInfo');
     const rosterStatusPanel = document.querySelector('.roster-status-panel');
     const rosterStatusText = document.getElementById('rosterStatusText');
+    const btnRosterImportDomestic = document.getElementById('btnRosterImportDomestic');
+    const btnRosterImportOverseas = document.getElementById('btnRosterImportOverseas');
+    const rosterFileDomestic = document.getElementById('rosterFileDomestic');
+    const rosterFileOverseas = document.getElementById('rosterFileOverseas');
+    const rosterImportMsg = document.getElementById('rosterImportMsg');
     const confirmModal = document.getElementById('confirmModal');
     const confirmModalSubtitle = document.getElementById('confirmModalSubtitle');
     const candidateGroups = document.getElementById('candidateGroups');
@@ -512,12 +523,45 @@
             const parts = Object.entries(data.by_source || {}).map(([k, v]) => `${k} ${v}人`).join(' / ');
             rosterStatusText.textContent = `个税端在册人员：${parts}，最近导入 ${data.latest_import || ''}`;
             rosterStatusPanel.className = 'roster-status-panel alert alert-success mb-3 d-flex justify-content-between align-items-center flex-wrap gap-2';
+            btnCompare.disabled = false;
         } catch (e) {
             // 获取失败不禁用按钮，用户仍可尝试比对
             rosterStatusText.textContent = '名单状态获取失败';
             rosterStatusPanel.className = 'roster-status-panel alert alert-warning mb-3 d-flex justify-content-between align-items-center flex-wrap gap-2';
         }
     }
+
+    // ===== 重新导入个税端名单 (境内/境外 .xls, 覆盖式更新 tax_roster) =====
+    function uploadRosterFile(fileInput, source) {
+        const file = fileInput.files && fileInput.files[0];
+        if (!file) return;
+        hideError();
+        rosterImportMsg.textContent = '';
+        const btn = source === '境外' ? btnRosterImportOverseas : btnRosterImportDomestic;
+        const old = btn.textContent;
+        btn.disabled = true;
+        btn.textContent = '导入中...';
+        const fd = new FormData();
+        fd.append('file', file);
+        fd.append('source', source);
+        fetch('/api/tax-roster/import', { method: 'POST', body: fd })
+            .then(resp => resp.json())
+            .then(r => {
+                if (r.error) { showError(r.error); return; }
+                rosterImportMsg.textContent = `${source}名单导入成功：${r.count} 人`;
+                fileInput.value = '';
+                loadRosterStatus();
+            })
+            .catch(e => showError(`名单导入失败: ${e.message}`))
+            .finally(() => {
+                btn.disabled = false;
+                btn.textContent = old;
+            });
+    }
+    btnRosterImportDomestic.addEventListener('click', () => rosterFileDomestic.click());
+    btnRosterImportOverseas.addEventListener('click', () => rosterFileOverseas.click());
+    rosterFileDomestic.addEventListener('change', e => uploadRosterFile(e.target, '境内'));
+    rosterFileOverseas.addEventListener('change', e => uploadRosterFile(e.target, '境外'));
 
     // ===== 两阶段比对: 第一跳(无 choices) → 候选弹窗 → 第二跳(带 choices) =====
     function buildFormData() {
