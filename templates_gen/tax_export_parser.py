@@ -67,6 +67,17 @@ def _format_datetime(dt: datetime) -> str:
     return dt.strftime("%Y-%m-%d %H:%M:%S")
 
 
+def _cell(sh, r, c, wb=None) -> str:
+    """读取单元格并规范化为字符串, 参差行 (ragged row) 列越界时返回空串。
+
+    xlrd 对行尾空单元格被省略的行 (导出文件被 Excel/LibreOffice 重存后常见),
+    cell_value(r, c) 在 c >= sh.row_len(r) 时抛 IndexError, 会令整份名单导入失败。
+    """
+    if 0 <= c < sh.row_len(r):
+        return _normalize_cell(sh.cell_value(r, c), wb)
+    return ""
+
+
 def parse_tax_export(filepath: str) -> List[Dict[str, str]]:
     """解析个税端境内人员信息列表 .xls 文件。
 
@@ -80,7 +91,7 @@ def parse_tax_export(filepath: str) -> List[Dict[str, str]]:
     """
     wb = xlrd.open_workbook(filepath)
     sh = wb.sheet_by_index(0)
-    is_overseas = sh.ncols >= 50 and "纳税人识别号" in str(sh.cell_value(0, 35))
+    is_overseas = sh.ncols >= 50 and "纳税人识别号" in _cell(sh, 0, 35, None)
     col_任职类型 = 35 if not is_overseas else 30
     col_国籍 = 38 if not is_overseas else 34
     col_纳税人识别号 = None if not is_overseas else 35
@@ -88,31 +99,31 @@ def parse_tax_export(filepath: str) -> List[Dict[str, str]]:
     col_更新时间 = COL_更新时间 if not is_overseas else 53
     persons = []
     for r in range(1, sh.nrows):
-        name = _normalize_cell(sh.cell_value(r, COL_姓名), wb)
-        cert = _normalize_cell(sh.cell_value(r, COL_证件号码), wb)
+        name = _cell(sh, r, COL_姓名, wb)
+        cert = _cell(sh, r, COL_证件号码, wb)
         if not name and not cert:
             continue
         p = {
-            "工号": _normalize_cell(sh.cell_value(r, COL_工号), wb),
+            "工号": _cell(sh, r, COL_工号, wb),
             "姓名": name,
-            "证件类型": _normalize_cell(sh.cell_value(r, COL_证件类型), wb),
+            "证件类型": _cell(sh, r, COL_证件类型, wb),
             "证件号码": cert,
-            "性别": _normalize_cell(sh.cell_value(r, COL_性别), wb),
-            "出生日期": _normalize_cell(sh.cell_value(r, COL_出生日期), wb),
-            "报送状态": _normalize_cell(sh.cell_value(r, COL_报送状态), wb),
-            "身份验证状态": _normalize_cell(sh.cell_value(r, COL_身份验证状态), wb),
-            "手机号码": _normalize_cell(sh.cell_value(r, COL_手机号码), wb),
-            "任职受雇从业日期": _normalize_cell(sh.cell_value(r, COL_任职受雇从业日期), wb),
-            "离职日期": _normalize_cell(sh.cell_value(r, COL_离职日期), wb),
-            "是否扣除减除费用": _normalize_cell(sh.cell_value(r, COL_是否扣除减除费用), wb),
-            "任职受雇从业类型": _normalize_cell(sh.cell_value(r, col_任职类型), wb),
-            "其他情况说明": _normalize_cell(sh.cell_value(r, COL_其他情况说明), wb),
-            "国籍": _normalize_cell(sh.cell_value(r, col_国籍), wb),
-            "备注": _normalize_cell(sh.cell_value(r, col_备注), wb),
-            "更新时间": _normalize_cell(sh.cell_value(r, col_更新时间), wb),
+            "性别": _cell(sh, r, COL_性别, wb),
+            "出生日期": _cell(sh, r, COL_出生日期, wb),
+            "报送状态": _cell(sh, r, COL_报送状态, wb),
+            "身份验证状态": _cell(sh, r, COL_身份验证状态, wb),
+            "手机号码": _cell(sh, r, COL_手机号码, wb),
+            "任职受雇从业日期": _cell(sh, r, COL_任职受雇从业日期, wb),
+            "离职日期": _cell(sh, r, COL_离职日期, wb),
+            "是否扣除减除费用": _cell(sh, r, COL_是否扣除减除费用, wb),
+            "任职受雇从业类型": _cell(sh, r, col_任职类型, wb),
+            "其他情况说明": _cell(sh, r, COL_其他情况说明, wb),
+            "国籍": _cell(sh, r, col_国籍, wb),
+            "备注": _cell(sh, r, col_备注, wb),
+            "更新时间": _cell(sh, r, col_更新时间, wb),
         }
         if col_纳税人识别号 is not None:
-            p["纳税人识别号"] = _normalize_cell(sh.cell_value(r, col_纳税人识别号), wb)
+            p["纳税人识别号"] = _cell(sh, r, col_纳税人识别号, wb)
         persons.append(p)
     return persons
 
