@@ -31,6 +31,29 @@
     </div>
 
     <div class="card">
+        <div class="card-header"><strong>数据质量防护</strong></div>
+        <div class="card-body">
+            <div class="row g-2 align-items-center">
+                <div class="col-md-auto">
+                    <div class="form-check form-switch">
+                        <input class="form-check-input" type="checkbox" id="filterEmptyCert" style="width:3em;height:1.5em;" checked>
+                        <label class="form-check-label fw-bold" for="filterEmptyCert">过滤身份证号为空的数据</label>
+                    </div>
+                </div>
+                <div class="col-md-8">
+                    <div class="text-muted" style="font-size: 0.9rem;">
+                        开启后生成报税数据时过滤 AC01.AAC002 为空的记录（无证件"幽灵主档"，如东北师大后勤 37725 的 5 人，
+                        已注销但 TC93 仍每月刷 0 工资记录，会生成税务端无法受理的无证件零申报行）。关闭则保持旧行为（含无证件记录）。
+                    </div>
+                </div>
+                <div class="col-md-auto">
+                    <span id="filterCertMsg" class="text-muted" style="font-size:0.85rem;"></span>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <div class="card">
         <div class="card-header"><strong>特殊结算单元配置</strong></div>
         <div class="card-body">
             <div class="alert alert-info" style="font-size: 0.9rem;">
@@ -289,6 +312,46 @@
 
     document.addEventListener('DOMContentLoaded', function() {
         loadUnits();
+        loadFilterEmptyCert();
+    });
+
+    const filterEmptyCert = document.getElementById('filterEmptyCert');
+    const filterCertMsg = document.getElementById('filterCertMsg');
+
+    async function loadFilterEmptyCert() {
+        try {
+            const resp = await fetch('/api/filter-empty-cert');
+            if (!resp.ok) throw new Error('加载失败');
+            const data = await resp.json();
+            filterEmptyCert.checked = !!data.enabled;
+            updateFilterCertMsg();
+        } catch (e) {
+            filterCertMsg.textContent = `加载开关失败: ${e.message}`;
+        }
+    }
+
+    function updateFilterCertMsg() {
+        filterCertMsg.textContent = filterEmptyCert.checked ? '已开启：生成时过滤无证件记录' : '已关闭：保留无证件记录（旧行为）';
+    }
+
+    filterEmptyCert.addEventListener('change', async function() {
+        const enabled = filterEmptyCert.checked;
+        filterCertMsg.textContent = '保存中...';
+        try {
+            const resp = await fetch('/api/filter-empty-cert', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ enabled })
+            });
+            const data = await resp.json();
+            if (!resp.ok || data.error) { showError(data.error || '保存失败'); filterEmptyCert.checked = !enabled; updateFilterCertMsg(); return; }
+            hideError();
+            updateFilterCertMsg();
+        } catch (e) {
+            showError(`保存失败: ${e.message}`);
+            filterEmptyCert.checked = !enabled;
+            updateFilterCertMsg();
+        }
     });
 </script>
 </body>

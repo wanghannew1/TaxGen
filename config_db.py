@@ -453,3 +453,46 @@ def get_tax_roster_status() -> dict:
     conn.close()
     return {"imported": total > 0, "total": int(total), "by_source": by_source,
             "latest_import": str(latest or "")}
+
+
+# ---------------------------------------------------------------------------
+# app_config: 全局应用配置 (KV 表)
+# 存放非单元级、非个人级的全局开关/参数, 全部持久化到 SQLite (config.db),
+# 与 Oracle 业务数据完全隔离。现有 key:
+#   filter_empty_cert: 过滤身份证号(AAC002)为空的数据 (默认开, 2026-09-17 新增)
+# ---------------------------------------------------------------------------
+
+def get_app_config(key: str, default: str = "") -> str:
+    """读取全局 KV 配置值, 不存在时返回 default。"""
+    conn = get_db()
+    row = conn.execute(
+        "SELECT value FROM app_config WHERE key = ?", (key,)).fetchone()
+    conn.close()
+    return str(row["value"]) if row and row["value"] is not None else default
+
+
+def set_app_config(key: str, value: str) -> None:
+    """写入全局 KV 配置值 (upsert)。"""
+    conn = get_db()
+    conn.execute(
+        "INSERT INTO app_config (key, value) VALUES (?, ?) "
+        "ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+        (key, value))
+    conn.commit()
+    conn.close()
+
+
+def get_filter_empty_cert() -> bool:
+    """身份证号为空的数据过滤开关 (默认开启)。
+
+    数据背景 (2026-09-17 排查): AC01 存在无证件号 (AAC002 为 NULL) 的
+    "幽灵主档" (已注销但 TC93 仍每月刷 0 工资 G=1 记录, 如东北师大后勤
+    37725 的 5 人), 程序此前会如实生成无证件零申报行, 税务端无法受理。
+    开启后取数 SQL 增加 AND ac01.AAC002 IS NOT NULL, 直接过滤这类记录;
+    关闭则保持旧行为 (含无证件记录)。
+    """
+    return get_app_config("filter_empty_cert", "1") == "1"
+
+def set_filter_empty_cert(on: bool) -> None:
+    """设置身份证号为空的数据过滤开关 ('1' 开 / '0' 关)。"""
+    set_app_config("filter_empty_cert", "1" if on else "0")

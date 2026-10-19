@@ -458,6 +458,9 @@ def api_generate():
             return jsonify({"error": "请选择至少一个模板"}), 400
         
         conn = get_connection()
+        from config_db import get_filter_empty_cert
+        _filter_empty_cert = get_filter_empty_cert()
+        _skipped_empty_cert = 0
         if confirmed_combos is not None:
             combo_set = {(c["unit"], c["salary_month"], c["seq"]) for c in confirmed_combos}
             from config_db import get_scope_map
@@ -599,7 +602,13 @@ def api_generate():
             warnings = get_merge_warnings(conn, [month],
                                           combo_set if confirmed_combos else set(), persons)
         abnormal_reasons = {r.get("ATC930"): f"ATC93G={r.get('ATC93G', 'NULL')}(未结算)" for r in abnormal}
-        
+
+        if _filter_empty_cert:
+            from queries import count_empty_cert_records
+            _skipped_empty_cert = sum(
+                count_empty_cert_records(conn, sm)
+                for sm in sorted(salary_months if confirmed_combos else {month}))
+
         results = []
         # 主结算单元(单元级属性): 该单元在所属月范围内绝大多数人缴五险一金才作为人员归属
         # (与 tax_merge.MAIN_UNIT_MIN_PEOPLE/MAIN_UNIT_INSURED_RATIO 同阈值, Oracle 只读聚合)
@@ -721,7 +730,8 @@ def api_generate():
             "files": results,
             "abnormal_count": len(abnormal),
             "tc93_total_count": len(tc93_all),
-            "merge_warnings": warnings
+            "merge_warnings": warnings,
+            "skipped_empty_cert": _skipped_empty_cert if _filter_empty_cert else None
         })
     except Exception as e:
         return _log_api_error(e)
@@ -995,6 +1005,29 @@ def page_payroll_records():
 @app.route("/special-units")
 def page_special_units():
     return render_template("special_units.html")
+
+
+@app.route("/api/filter-empty-cert", methods=["GET"])
+def api_filter_empty_cert_get():
+    """获取"过滤身份证号为空的数据"开关状态 (SQLite config_db, 默认开)。"""
+    try:
+        from config_db import get_filter_empty_cert
+        return jsonify({"enabled": get_filter_empty_cert()})
+    except Exception as e:
+        return _log_api_error(e)
+
+
+@app.route("/api/filter-empty-cert", methods=["POST"])
+def api_filter_empty_cert_set():
+    """设置"过滤身份证号为空的数据"开关 (持久化到 SQLite config_db)。"""
+    try:
+        data = request.get_json() or {}
+        enabled = bool(data.get("enabled"))
+        from config_db import set_filter_empty_cert
+        set_filter_empty_cert(enabled)
+        return jsonify({"enabled": enabled})
+    except Exception as e:
+        return _log_api_error(e)
 
 
 @app.route("/api/special-units", methods=["GET"])

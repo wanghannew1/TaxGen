@@ -46,7 +46,7 @@ import time
 from dataclasses import dataclass
 from datetime import datetime
 from decimal import Decimal
-from typing import Dict, List, Set, Tuple
+from typing import Dict, List, Optional, Set, Tuple
 
 from models import MonthOption, PersonnelInfo, SalaryRecord
 
@@ -222,12 +222,18 @@ def get_pay_months(conn) -> List[MonthOption]:
     return options
 
 
-def get_salary_records(conn, month: int) -> List[SalaryRecord]:
+def get_salary_records(conn, month: int, filter_empty_cert: Optional[bool] = None) -> List[SalaryRecord]:
     """按工资所属年月查询正常工资记录 (TC93 + AC01 左连接)。
 
     仅返回 ATC93G='1'(已结算) 的正常记录。
     异常记录(ATC93G≠1 或 NULL)需通过 get_abnormal_records 单独查询。
+
+    filter_empty_cert: 默认 None → 读 config_db.get_filter_empty_cert() 开关;
+        True 时过滤 AC01.AAC002 为空的记录 (无证件幽灵主档), False 不过滤。
     """
+    if filter_empty_cert is None:
+        from config_db import get_filter_empty_cert
+        filter_empty_cert = get_filter_empty_cert()
     sql = """
         SELECT
           t93.AAC001,
@@ -269,6 +275,7 @@ def get_salary_records(conn, month: int) -> List[SalaryRecord]:
         LEFT JOIN AC01 ac01 ON t93.AAC001 = ac01.AAC001
         WHERE t93.ATC931 = :month
           AND t93.ATC93G = '1'
+        """ + ("AND ac01.AAC002 IS NOT NULL\n" if filter_empty_cert else "") + """
         ORDER BY t93.AAC003
     """
     records = []
@@ -310,7 +317,8 @@ def get_salary_records(conn, month: int) -> List[SalaryRecord]:
     return records
 
 
-def get_salary_records_by_combos(conn, combos: List[Dict]) -> List[SalaryRecord]:
+def get_salary_records_by_combos(conn, combos: List[Dict],
+                                 filter_empty_cert: Optional[bool] = None) -> List[SalaryRecord]:
     """按 (结算单元, 工资所属年月, 批次) 组合过滤查询正常工资记录。
 
     供生成前建议接口（合并规则/零申报）使用：前端勾选的是组合列表，
@@ -318,7 +326,11 @@ def get_salary_records_by_combos(conn, combos: List[Dict]) -> List[SalaryRecord]
     （528 个组合跨 20 个所属月时全量拉取 34 万条，仅 1.5 万条是目标）。
 
     combos: [{"unit", "salary_month", "seq"}, ...]；重复组合自动去重。
+    filter_empty_cert: 默认 None → 读 config_db 开关; True 过滤 AC01.AAC002 为空记录。
     """
+    if filter_empty_cert is None:
+        from config_db import get_filter_empty_cert
+        filter_empty_cert = get_filter_empty_cert()
     combo_set = {(int(c.get("unit", 0) or 0), int(c.get("salary_month", 0) or 0),
                   str(c.get("seq", "") or "")) for c in combos}
     if not combo_set:
@@ -364,6 +376,7 @@ def get_salary_records_by_combos(conn, combos: List[Dict]) -> List[SalaryRecord]
         FROM TC93 t93
         LEFT JOIN AC01 ac01 ON t93.AAC001 = ac01.AAC001
         WHERE t93.ATC93G = '1'
+""" + ("          AND ac01.AAC002 IS NOT NULL\n" if filter_empty_cert else "") + """
     """
     records = []
     with conn.cursor() as cursor:
@@ -462,14 +475,19 @@ def get_unit_insurance_stats(conn, units, months) -> Dict[int, Dict[str, int]]:
     return result
 
 
-def get_abnormal_records(conn, month: int) -> List[dict]:
+def get_abnormal_records(conn, month: int,
+                         filter_empty_cert: Optional[bool] = None) -> List[dict]:
     """查询因状态字段异常被过滤的TC93记录 (ATC93G≠1 或 NULL)。"""
+    if filter_empty_cert is None:
+        from config_db import get_filter_empty_cert
+        filter_empty_cert = get_filter_empty_cert()
     sql = """
         SELECT t93.*, ac01.AAC002 AS 身份证
         FROM TC93 t93
         LEFT JOIN AC01 ac01 ON t93.AAC001 = ac01.AAC001
         WHERE t93.ATC931 = :month
           AND (t93.ATC93G != '1' OR t93.ATC93G IS NULL)
+        """ + ("AND ac01.AAC002 IS NOT NULL\n" if filter_empty_cert else "") + """
         ORDER BY t93.AAC003
     """
     with conn.cursor() as cursor:
@@ -493,8 +511,12 @@ def get_tc93_field_comments(conn) -> Dict[str, str]:
     return comments
 
 
-def get_tc93_all_fields(conn, month: int) -> List[dict]:
+def get_tc93_all_fields(conn, month: int,
+                        filter_empty_cert: Optional[bool] = None) -> List[dict]:
     """查询指定月份TC93全部字段，供导出总表使用。附经办年月(ATC8G7)作发放年月最终依据。"""
+    if filter_empty_cert is None:
+        from config_db import get_filter_empty_cert
+        filter_empty_cert = get_filter_empty_cert()
     sql = """
         SELECT t93.*, ac01.AAC002 AS 身份证,
                (SELECT MAX(m.ATC8G7) FROM TC8M m
@@ -503,12 +525,31 @@ def get_tc93_all_fields(conn, month: int) -> List[dict]:
         FROM TC93 t93
         LEFT JOIN AC01 ac01 ON t93.AAC001 = ac01.AAC001
         WHERE t93.ATC931 = :month
+        """ + ("AND ac01.AAC002 IS NOT NULL\n" if filter_empty_cert else "") + """
         ORDER BY ac01.AAC002 NULLS LAST, t93.ATC930
     """
     with conn.cursor() as cursor:
         cursor.execute(sql, {"month": month})
         cols = [d[0] for d in cursor.description]
         return [dict(zip(cols, row)) for row in cursor.fetchall()]
+
+
+def count_empty_cert_records(conn, month: int) -> int:
+    """统计指定所属月 TC93 已结算记录中 AC01.AAC002 为空 (无证件) 的条数。
+
+    供生成接口在"过滤身份证号为空"开关开启时报出被过滤的记录数 (幽灵主档)。
+    """
+    sql = """
+        SELECT COUNT(*)
+        FROM TC93 t93
+        LEFT JOIN AC01 ac01 ON t93.AAC001 = ac01.AAC001
+        WHERE t93.ATC931 = :month
+          AND t93.ATC93G = '1'
+          AND ac01.AAC002 IS NULL
+    """
+    with conn.cursor() as cursor:
+        cursor.execute(sql, {"month": month})
+        return int(cursor.fetchone()[0] or 0)
 
 
 def get_deduction_details(conn, atc930_list: List[int]) -> Dict[int, DeductionInfo]:
@@ -641,13 +682,17 @@ def search_tc8m(conn, unit_name: str = "", salary_month: int = 0,
         } for r in cursor.fetchall()]
 
 
-def get_personnel_info(conn, month: int) -> List[PersonnelInfo]:
+def get_personnel_info(conn, month: int,
+                       filter_empty_cert: Optional[bool] = None) -> List[PersonnelInfo]:
     """按工资所属年月查询去重人员信息 (TC93 + AC01 左连接)。
 
     出生日期从身份证第 7-14 位提取 (YYYY-MM-DD); 性别取 AC01.AAC004
     (all_col_comments 证实 AAC004=性别, AAE005 实为联系电话),
     若为数字编码 (1/2) 则转换为 男/女。
     """
+    if filter_empty_cert is None:
+        from config_db import get_filter_empty_cert
+        filter_empty_cert = get_filter_empty_cert()
     # 注意: 原始需求指定 ac01.AAE005 AS 性别, 但 all_col_comments 证实
     # AAE005 = 联系电话, 真实性别列为 AAC004 (实跑验证: AAE005 返回手机号,
     # AAC004 返回 1/2 性别码)。此处已修正, 避免把电话号写入性别字段。
@@ -660,6 +705,7 @@ def get_personnel_info(conn, month: int) -> List[PersonnelInfo]:
         FROM TC93 t93
         LEFT JOIN AC01 ac01 ON t93.AAC001 = ac01.AAC001
         WHERE t93.ATC931 = :month
+        """ + ("AND ac01.AAC002 IS NOT NULL\n" if filter_empty_cert else "") + """
         ORDER BY t93.AAC003
     """
     gender_map = {"1": "男", "2": "女"}
