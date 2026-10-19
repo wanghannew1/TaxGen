@@ -54,6 +54,32 @@
     </div>
 
     <div class="card">
+        <div class="card-header"><strong>报税日期设置</strong></div>
+        <div class="card-body">
+            <div class="row g-2 align-items-center">
+                <div class="col-md-auto">
+                    <label class="form-label fw-bold mb-1" for="reportDeadlineDay">报税截止日（每月第几日）</label>
+                    <div class="input-group" style="width: 12em;">
+                        <input type="number" id="reportDeadlineDay" class="form-control" min="1" max="31" step="1" value="15">
+                        <button class="btn btn-primary" type="button" id="btnSaveDeadline">保存</button>
+                    </div>
+                </div>
+                <div class="col-md-8">
+                    <div class="text-muted" style="font-size: 0.9rem;">
+                        规则：每月 <strong>1 日 ~ 截止日（含）</strong>默认申报<strong>上个月</strong>个税；
+                        <strong>截止日次日 ~ 月末</strong>默认申报<strong>当月</strong>个税（默认影响
+                        「报税数据生成」月份下拉、「增减员比对」默认上报月份）。默认 15：即 1~15 日默认报上月、16 日起默认报当月。
+                        税务局临时调整申报期截止日（如本月延到 20 日）时，在此修改保存即可，立即生效。
+                    </div>
+                </div>
+                <div class="col-md-auto">
+                    <span id="deadlineMsg" class="text-muted" style="font-size:0.85rem;"></span>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <div class="card">
         <div class="card-header"><strong>特殊结算单元配置</strong></div>
         <div class="card-body">
             <div class="alert alert-info" style="font-size: 0.9rem;">
@@ -313,6 +339,7 @@
     document.addEventListener('DOMContentLoaded', function() {
         loadUnits();
         loadFilterEmptyCert();
+        loadReportDeadline();
     });
 
     const filterEmptyCert = document.getElementById('filterEmptyCert');
@@ -351,6 +378,55 @@
             showError(`保存失败: ${e.message}`);
             filterEmptyCert.checked = !enabled;
             updateFilterCertMsg();
+        }
+    });
+
+    const reportDeadlineDay = document.getElementById('reportDeadlineDay');
+    const btnSaveDeadline = document.getElementById('btnSaveDeadline');
+    const deadlineMsg = document.getElementById('deadlineMsg');
+
+    async function loadReportDeadline() {
+        try {
+            const resp = await fetch('/api/report-deadline');
+            if (!resp.ok) throw new Error('加载失败');
+            const data = await resp.json();
+            reportDeadlineDay.value = data.day;
+            updateDeadlineMsg();
+        } catch (e) {
+            deadlineMsg.textContent = `加载截止日失败: ${e.message}`;
+        }
+    }
+
+    function updateDeadlineMsg() {
+        const d = parseInt(reportDeadlineDay.value, 10);
+        deadlineMsg.textContent = (d >= 1 && d <= 31)
+            ? `当前：1~${d} 日默认报上月，${d + 1} 日起默认报当月`
+            : '请输入 1-31 的整数';
+    }
+
+    reportDeadlineDay.addEventListener('input', updateDeadlineMsg);
+
+    btnSaveDeadline.addEventListener('click', async function() {
+        const day = parseInt(reportDeadlineDay.value, 10);
+        if (!Number.isInteger(day) || day < 1 || day > 31) {
+            showError('报税截止日必须为 1-31 的整数');
+            return;
+        }
+        deadlineMsg.textContent = '保存中...';
+        try {
+            const resp = await fetch('/api/report-deadline', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ day })
+            });
+            const data = await resp.json();
+            if (!resp.ok || data.error) { showError(data.error || '保存失败'); updateDeadlineMsg(); return; }
+            hideError();
+            reportDeadlineDay.value = data.day;
+            updateDeadlineMsg();
+        } catch (e) {
+            showError(`保存失败: ${e.message}`);
+            updateDeadlineMsg();
         }
     });
 </script>

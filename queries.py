@@ -1512,15 +1512,20 @@ def get_personnel_by_certs(conn, cert_numbers) -> List[PersonnelInfo]:
     return people
 
 
-def get_default_report_month(conn) -> int:
+def get_default_report_month(conn, now: Optional[datetime] = None) -> int:
     """计算默认上报发薪月份。
 
-    规则: 系统时间 1-15日 → 上个月; 16日及以后 → 本月 (若已有发薪记录则返回本月,
-    否则回退到最近发薪月份)。报税一般在发薪月过完后半个月内进行。
+    规则: 系统时间 1~截止日(含) → 上个月; 截止日次日及以后 → 本月
+    (若已有发薪记录则返回本月, 否则回退到最近发薪月份)。
+    截止日默认 15, 存 config_db.report_deadline_day, 后台可改 (税务局可能调整)。
+    报税一般在发薪月过完后半个月内进行。
+    now 参数仅供测试注入固定时间, 生产调用不传。
     """
-    from datetime import datetime
-    now = datetime.now()
-    if now.day <= 15:
+    from config_db import get_report_deadline_day
+    deadline = get_report_deadline_day()
+    if now is None:
+        now = datetime.now()
+    if now.day <= deadline:
         last_month = now.replace(day=1)
         from datetime import timedelta
         last_month -= timedelta(days=1)

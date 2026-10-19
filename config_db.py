@@ -493,6 +493,38 @@ def get_filter_empty_cert() -> bool:
     """
     return get_app_config("filter_empty_cert", "1") == "1"
 
+
 def set_filter_empty_cert(on: bool) -> None:
     """设置身份证号为空的数据过滤开关 ('1' 开 / '0' 关)。"""
     set_app_config("filter_empty_cert", "1" if on else "0")
+
+# ---------------------------------------------------------------------------
+# 报税截止日 (2026-10-19 新增): 每月默认"截止日(含)前报上月, 次日起报当月"。
+# 默认 15 (1-15日 → 上月, 16日及以后 → 当月)。税务局可能临时调整申报期截止
+# 日 (如延到 20 日), 故开放后台修改, 持久化到 app_config (key='report_deadline_day')。
+# ---------------------------------------------------------------------------
+
+_REPORT_DEADLINE_DEFAULT = 15
+
+
+def get_report_deadline_day() -> int:
+    """读取报税截止日 (1-31), 未配置或非法时返回默认 15。"""
+    raw = get_app_config("report_deadline_day", "")
+    try:
+        day = int(str(raw).strip())
+    except (TypeError, ValueError):
+        return _REPORT_DEADLINE_DEFAULT
+    if 1 <= day <= 31:
+        return day
+    return _REPORT_DEADLINE_DEFAULT
+
+
+def set_report_deadline_day(day: int) -> None:
+    """设置报税截止日 (1-31), 越界/非法抛 ValueError (调用方转 400)。"""
+    try:
+        day = int(day)
+    except (TypeError, ValueError):
+        raise ValueError("报税截止日必须为 1-31 的整数")
+    if not 1 <= day <= 31:
+        raise ValueError("报税截止日必须为 1-31 的整数")
+    set_app_config("report_deadline_day", str(day))

@@ -1030,6 +1030,32 @@ def api_filter_empty_cert_set():
         return _log_api_error(e)
 
 
+@app.route("/api/report-deadline", methods=["GET"])
+def api_report_deadline_get():
+    """获取报税截止日 (每月第几日, 默认 15; 截止日前报上月, 次日起报当月)。"""
+    try:
+        from config_db import get_report_deadline_day
+        return jsonify({"day": get_report_deadline_day()})
+    except Exception as e:
+        return _log_api_error(e)
+
+
+@app.route("/api/report-deadline", methods=["POST"])
+def api_report_deadline_set():
+    """设置报税截止日 (1-31, 持久化到 SQLite config_db)。"""
+    try:
+        data = request.get_json() or {}
+        day = data.get("day")
+        from config_db import set_report_deadline_day
+        set_report_deadline_day(day)
+        from config_db import get_report_deadline_day
+        return jsonify({"day": get_report_deadline_day()})
+    except ValueError as e:
+        return jsonify({"error": str(e)}), 400
+    except Exception as e:
+        return _log_api_error(e)
+
+
 @app.route("/api/special-units", methods=["GET"])
 def api_special_units_list():
     """获取特殊结算单元配置列表 (SQLite config_db)。"""

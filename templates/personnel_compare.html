@@ -332,7 +332,7 @@
     }
 
     async function loadDefaultReportMonth() {
-        // 默认上报月份: 1-15日默认上月, 16日及以后默认当月
+        // 默认上报月份: 截止日(含)前默认上月, 次日起默认当月 (截止日可后台配置, 默认 15)
         try {
             const resp = await fetch('/api/personnel-compare/default-report-month');
             if (!resp.ok) throw new Error('加载默认月份失败');

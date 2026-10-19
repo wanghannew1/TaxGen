@@ -1963,9 +1963,15 @@
                 let options = '<option value="">请选择月份</option>';
                 months.forEach(m => { options += `<option value="${m.value}">${m.label}</option>`; });
                 monthSelect.innerHTML = options;
-                // 申报期默认发放月份: 每月 1~15 日(含)仍在申报期内, 默认选中上个月; 16 日起默认选中当月
+                // 申报期默认发放月份: 每月 1~截止日(含) 默认选中上个月, 次日起默认选中当月。
+                // 截止日默认 15, 后台可改 (/api/report-deadline, 税务局可能调整申报期)。
+                let deadlineDay = 15;
+                try {
+                    const dResp = await fetch('/api/report-deadline');
+                    if (dResp.ok) deadlineDay = (await dResp.json()).day || 15;
+                } catch (e) { /* 截止日加载失败时用默认 15 */ }
                 const today = new Date();
-                const target = today.getDate() <= 15
+                const target = today.getDate() <= deadlineDay
                     ? new Date(today.getFullYear(), today.getMonth() - 1, 1)
                     : new Date(today.getFullYear(), today.getMonth(), 1);
                 const targetValue = String(target.getFullYear() * 100 + (target.getMonth() + 1));
