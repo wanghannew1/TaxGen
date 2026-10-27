@@ -57,6 +57,50 @@
     </div>
 
     <div class="card">
+        <div class="card-header"><strong>报税后核对（生成文件 vs 个税端导出）</strong></div>
+        <div class="card-body">
+            <div class="row g-2 align-items-end">
+                <div class="col-md-2">
+                    <label class="form-label">税款所属期/发放月份</label>
+                    <input type="number" id="cmpMonth" class="form-control" placeholder="如 202609" min="200001" max="209912">
+                    <div class="form-text">生成文件无月份列，按此月份比对</div>
+                </div>
+                <div class="col-md-2">
+                    <label class="form-label">生成文件类型</label>
+                    <select id="cmpGenType" class="form-select">
+                        <option value="正常工资薪金">正常工资薪金</option>
+                        <option value="劳务报酬">劳务报酬</option>
+                        <option value="全年一次性奖金">全年一次性奖金</option>
+                    </select>
+                </div>
+                <div class="col-md-2">
+                    <label class="form-label">个税端导出类型</label>
+                    <select id="cmpFilingType" class="form-select">
+                        <option value="税款计算">税款计算（申报后最终）</option>
+                        <option value="正常工资薪金">正常工资薪金（导入后原始）</option>
+                        <option value="劳务报酬">劳务报酬</option>
+                        <option value="全年一次性奖金">全年一次性奖金</option>
+                    </select>
+                </div>
+                <div class="col-md-3">
+                    <label class="form-label">生成的报税文件（可多选，重复证件会保留）</label>
+                    <input type="file" id="genFiles" class="form-control" accept=".xls,.xlsx,.csv" multiple>
+                </div>
+                <div class="col-md-1">
+                    <button id="btnGenImport" class="btn btn-outline-primary w-100">导入生成</button>
+                </div>
+                <div class="col-md-1">
+                    <button id="btnCompare" class="btn btn-primary w-100">比对</button>
+                </div>
+                <div class="col-md-1">
+                    <button id="btnCmpExport" class="btn btn-success w-100" disabled>导出</button>
+                </div>
+            </div>
+            <div class="mt-2"><span id="genImportMsg" class="badge-warn"></span></div>
+        </div>
+    </div>
+
+    <div class="card">
         <div class="card-header"><strong>申报汇总（月份 × 所得项目类型）</strong></div>
         <div class="card-body">
             <div class="table-responsive">
@@ -112,6 +156,93 @@
                     <button id="detailsNext" class="btn btn-sm btn-outline-secondary">下一页</button>
                     <input type="number" id="detailsJump" class="form-control form-control-sm" style="width:70px" min="1" placeholder="页码">
                     <button id="detailsJumpBtn" class="btn btn-sm btn-outline-primary">跳页</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <div id="cmpStatsCard" class="card" style="display:none;">
+        <div class="card-header"><strong>比对概览（<span id="cmpMonthLabel"></span>）</strong></div>
+        <div class="card-body">
+            <div class="row">
+                <div class="col-md-2 col-sm-4 stat-card"><div class="stat-info num" id="cmpGenCerts">0</div><div class="text-muted">生成人数</div></div>
+                <div class="col-md-2 col-sm-4 stat-card"><div class="stat-info num" id="cmpFilCount">0</div><div class="text-muted">个税端人数</div></div>
+                <div class="col-md-2 col-sm-4 stat-card"><div class="stat-ok num" id="cmpMatched">0</div><div class="text-muted">一致</div></div>
+                <div class="col-md-2 col-sm-4 stat-card"><div class="stat-warn num" id="cmpDiff">0</div><div class="text-muted">有差异</div></div>
+                <div class="col-md-2 col-sm-4 stat-card"><div class="stat-danger num" id="cmpGenOnly">0</div><div class="text-muted">仅生成（个税端无）</div></div>
+                <div class="col-md-2 col-sm-4 stat-card"><div class="stat-danger num" id="cmpFilOnly">0</div><div class="text-muted">仅个税端（生成侧无）</div></div>
+            </div>
+            <div class="row mt-2 g-2">
+                <div class="col-md-4"><span class="badge-warn">生成侧重复证件：<strong id="cmpDup">0</strong> 人</span></div>
+                <div class="col-md-5"><span class="badge-warn">同名不同证/同名多人：<strong id="cmpSameName">0</strong> 组（明细标记 <strong id="cmpSameNameRows">0</strong> 行）</span></div>
+            </div>
+        </div>
+    </div>
+
+    <div id="cmpSameCard" class="card" style="display:none;">
+        <div class="card-header"><strong>同名不同证 / 疑似挂错身份证</strong></div>
+        <div class="card-body">
+            <div class="table-responsive">
+                <table class="table table-sm table-striped table-hover mb-0 w-100">
+                    <thead class="sticky-top">
+                        <tr>
+                            <th style="width:80px">姓名</th><th style="width:240px">类型</th><th style="width:220px">共同单位</th>
+                            <th>生成侧（证件/单位/收入）</th><th>个税端（证件/单位/收入）</th>
+                        </tr>
+                    </thead>
+                    <tbody id="cmpSameTbody"></tbody>
+                </table>
+            </div>
+        </div>
+    </div>
+
+    <div id="cmpDetailsCard" class="card" style="display:none;">
+        <div class="card-header d-flex justify-content-between align-items-center flex-wrap gap-2">
+            <strong>比对明细</strong>
+            <div class="d-flex gap-2">
+                <select id="cmpStatusFilter" class="form-select form-select-sm" style="width:auto;">
+                    <option value="">全部状态</option>
+                    <option value="生成侧重复">生成侧重复</option>
+                    <option value="仅生成">仅生成</option>
+                    <option value="仅个税端">仅个税端</option>
+                    <option value="姓名不一致">姓名不一致</option>
+                    <option value="收入差异">收入差异</option>
+                    <option value="三险差异">三险差异</option>
+                    <option value="单位差异">单位差异</option>
+                    <option value="一致">一致</option>
+                </select>
+                <input type="text" id="cmpSearch" class="form-control form-control-sm" placeholder="姓名/证件号" style="width:200px;">
+                <label class="form-check-label small d-flex align-items-center gap-1">
+                    <input type="checkbox" id="cmpSameOnly" class="form-check-input mt-0"> 只看同名不同证
+                </label>
+                <button id="btnCmpFilter" class="btn btn-sm btn-outline-primary">筛选</button>
+            </div>
+        </div>
+        <div class="card-body">
+            <div class="table-responsive">
+                <table class="table table-sm table-striped table-hover mb-0 w-100" id="cmpDetailsTable">
+                    <thead class="sticky-top">
+                        <tr>
+                            <th style="width:50px">序号</th><th style="width:90px">姓名(生成)</th><th style="width:90px">姓名(个税端)</th><th style="width:190px">证件号码</th>
+                            <th>生成单位</th><th>个税端单位</th>
+                            <th style="width:100px">生成收入</th><th style="width:100px">个税端收入</th><th style="width:80px">收入差</th>
+                            <th style="width:90px">生成三险</th><th style="width:90px">个税端三险</th><th style="width:80px">三险差</th>
+                            <th style="width:90px">个税端个税</th><th style="width:100px">状态</th><th>说明</th>
+                        </tr>
+                    </thead>
+                    <tbody id="cmpTbody"></tbody>
+                </table>
+            </div>
+            <div class="d-flex justify-content-between align-items-center mt-2">
+                <span id="cmpCount" class="text-muted"></span>
+                <div class="d-flex gap-2 align-items-center">
+                    <label class="form-label mb-0 small">每页</label>
+                    <select id="cmpPageSize" class="form-select form-select-sm" style="width:auto;">
+                        <option value="50" selected>50</option><option value="100">100</option><option value="200">200</option><option value="500">500</option>
+                    </select>
+                    <button id="cmpPrev" class="btn btn-sm btn-outline-secondary">上一页</button>
+                    <span class="small" id="cmpPageInfo"></span>
+                    <button id="cmpNext" class="btn btn-sm btn-outline-secondary">下一页</button>
                 </div>
             </div>
         </div>
@@ -172,6 +303,7 @@
             months.map(m => `<option value="${m}">${m}</option>`).join('');
         typeFilter.innerHTML = '<option value="">全部类型</option>' +
             types.map(t => `<option value="${t}">${t}</option>`).join('');
+        setDefaultCmpMonth(groups);
     }
 
     document.getElementById('btnImport').addEventListener('click', async () => {
@@ -284,6 +416,207 @@
         queryRecords();
     });
     document.getElementById('detailsPageSize').addEventListener('change', () => { detailsPage = 1; queryRecords(); });
+
+    // ===== 报税后核对（生成文件 vs 个税端导出） =====
+    const cmpMonth = document.getElementById('cmpMonth');
+    const genFiles = document.getElementById('genFiles');
+    let cmpPage = 1;
+    let cmpTotal = 0;
+
+    function setDefaultCmpMonth(groups) {
+        if (!cmpMonth || cmpMonth.value) return;
+        const months = (groups || []).map(g => Number(g.month)).filter(m => m > 0);
+        if (months.length) cmpMonth.value = Math.max(...months);
+    }
+
+    function fmt2(v) {
+        return v === null || v === undefined || v === '' ? '-' : Number(v).toFixed(2);
+    }
+
+    function escapeHtml(s) {
+        return String(s == null ? '' : s).replace(/[&<>"']/g, c => ({
+            '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'
+        }[c]));
+    }
+
+    function statusClass(s) {
+        if (s === '一致') return 'text-success';
+        if (s === '生成侧重复' || s === '仅生成' || s === '仅个税端') return 'text-danger';
+        return 'text-warning';
+    }
+
+    document.getElementById('btnGenImport').addEventListener('click', async () => {
+        const msg = document.getElementById('genImportMsg');
+        const month = parseInt(cmpMonth.value);
+        if (!month) { msg.textContent = '请先填写税款所属期/发放月份（如 202609）'; return; }
+        if (!genFiles.files.length) { msg.textContent = '请选择生成的报税文件'; return; }
+        const fd = new FormData();
+        fd.append('month', month);
+        for (const f of genFiles.files) fd.append('files', f);
+        msg.textContent = '导入中...';
+        try {
+            const resp = await fetch('/api/filing/import-generated', { method: 'POST', body: fd });
+            const data = await resp.json();
+            if (data.error) {
+                const parts = (data.files || []).map(f => f.error ? `${f.filename} 失败: ${f.error}` : '');
+                msg.textContent = '导入失败: ' + data.error + (parts.length ? '；' + parts.join('；') : '');
+                return;
+            }
+            const parts = (data.files || []).map(f => f.error
+                ? `${f.filename} 失败: ${f.error}`
+                : `${f.filename} (${f.item_type}, ${f.count}条)`);
+            msg.textContent = `导入成功 ${data.count} 条，月份 ${data.month}，类型 ${(data.types || []).join('、')}；` + parts.join('；');
+            if ((data.types || []).length === 1) {
+                const t = data.types[0];
+                document.getElementById('cmpGenType').value = t;
+                if (t !== '正常工资薪金') document.getElementById('cmpFilingType').value = t;
+            }
+            genFiles.value = '';
+            document.getElementById('btnCmpExport').disabled = false;
+        } catch (e) {
+            msg.textContent = '导入失败: ' + e.message;
+        }
+    });
+
+    document.getElementById('btnCompare').addEventListener('click', () => {
+        cmpPage = 1;
+        queryCompare();
+    });
+    document.getElementById('btnCmpFilter').addEventListener('click', () => {
+        cmpPage = 1;
+        queryCompare();
+    });
+    document.getElementById('cmpSameOnly').addEventListener('change', () => {
+        cmpPage = 1;
+        queryCompare();
+    });
+    document.getElementById('cmpPageSize').addEventListener('change', () => {
+        cmpPage = 1;
+        queryCompare();
+    });
+    document.getElementById('cmpPrev').addEventListener('click', () => {
+        if (cmpPage > 1) { cmpPage--; queryCompare(); }
+    });
+    document.getElementById('cmpNext').addEventListener('click', () => {
+        const ps = parseInt(document.getElementById('cmpPageSize').value) || 50;
+        if (cmpPage * ps < cmpTotal) { cmpPage++; queryCompare(); }
+    });
+
+    async function queryCompare() {
+        const month = parseInt(cmpMonth.value);
+        if (!month) { alert('请填写税款所属期/发放月份（如 202609）'); return; }
+        const params = new URLSearchParams({
+            month: month,
+            gen_item_type: document.getElementById('cmpGenType').value,
+            filing_item_type: document.getElementById('cmpFilingType').value,
+            page: cmpPage,
+            page_size: document.getElementById('cmpPageSize').value,
+        });
+        const status = document.getElementById('cmpStatusFilter').value;
+        const search = document.getElementById('cmpSearch').value.trim();
+        if (status) params.set('status', status);
+        if (search) params.set('search', search);
+        if (document.getElementById('cmpSameOnly').checked) params.set('same_name', '1');
+        const tbody = document.getElementById('cmpTbody');
+        tbody.innerHTML = '<tr><td colspan="15" class="text-center text-muted py-3">比对中...</td></tr>';
+        try {
+            const resp = await fetch('/api/filing/compare?' + params.toString());
+            const data = await resp.json();
+            if (data.error) {
+                tbody.innerHTML = `<tr><td colspan="15" class="text-center text-danger py-3">${escapeHtml(data.error)}</td></tr>`;
+                return;
+            }
+            cmpTotal = data.total;
+            renderCompareSummary(data.summary || {});
+            renderSameName(data.same_name || []);
+            renderCompareDetails(data.details || []);
+            document.getElementById('btnCmpExport').disabled = false;
+        } catch (e) {
+            tbody.innerHTML = `<tr><td colspan="15" class="text-center text-danger py-3">比对失败: ${escapeHtml(e.message)}</td></tr>`;
+        }
+    }
+
+    function renderCompareSummary(s) {
+        document.getElementById('cmpStatsCard').style.display = '';
+        document.getElementById('cmpMonthLabel').textContent =
+            `${s.month || ''}（${s.gen_item_type || ''} vs ${s.filing_item_type || ''}）`;
+        const set = (id, v) => { document.getElementById(id).textContent = v ?? 0; };
+        set('cmpGenCerts', s.gen_certs);
+        set('cmpFilCount', s.fil_count);
+        set('cmpMatched', s.matched);
+        set('cmpDiff', s.diff);
+        set('cmpGenOnly', s.gen_only);
+        set('cmpFilOnly', s.fil_only);
+        set('cmpDup', s.dup_certs);
+        set('cmpSameName', s.same_name_groups);
+        set('cmpSameNameRows', s.same_name_rows);
+    }
+
+    function renderSameName(rows) {
+        const card = document.getElementById('cmpSameCard');
+        const tbody = document.getElementById('cmpSameTbody');
+        if (!rows.length) {
+            card.style.display = 'none';
+            tbody.innerHTML = '';
+            return;
+        }
+        card.style.display = '';
+        tbody.innerHTML = rows.map(g => `
+            <tr>
+                <td>${escapeHtml(g.name)}</td>
+                <td class="${g.type.includes('疑似') ? 'text-danger fw-semibold' : ''}">${escapeHtml(g.type)}</td>
+                <td>${escapeHtml(g.same_units)}</td>
+                <td class="small">${escapeHtml(g.gen_detail)}</td>
+                <td class="small">${escapeHtml(g.fil_detail)}</td>
+            </tr>`).join('');
+    }
+
+    function renderCompareDetails(rows) {
+        const ps = parseInt(document.getElementById('cmpPageSize').value) || 50;
+        const totalPages = Math.max(1, Math.ceil(cmpTotal / ps));
+        const start = (cmpPage - 1) * ps;
+        document.getElementById('cmpDetailsCard').style.display = '';
+        document.getElementById('cmpTbody').innerHTML = rows.map((d, i) => `
+            <tr>
+                <td>${start + i + 1}</td>
+                <td>${escapeHtml(d.gen_name)}</td>
+                <td>${escapeHtml(d.fil_name)}</td>
+                <td class="nowrap">${escapeHtml(d.cert_no)}</td>
+                <td class="ellipsis-cell" title="${escapeHtml(d.gen_unit)}">${escapeHtml(d.gen_unit)}</td>
+                <td class="ellipsis-cell" title="${escapeHtml(d.fil_unit)}">${escapeHtml(d.fil_unit)}</td>
+                <td class="num-cell">${fmt2(d.gen_income)}</td>
+                <td class="num-cell">${fmt2(d.fil_income)}</td>
+                <td class="num-cell">${fmt2(d.income_diff)}</td>
+                <td class="num-cell">${fmt2(d.gen_insurance)}</td>
+                <td class="num-cell">${fmt2(d.fil_insurance)}</td>
+                <td class="num-cell">${fmt2(d.insurance_diff)}</td>
+                <td class="num-cell">${fmt2(d.fil_tax_due)}</td>
+                <td class="${statusClass(d.status)}">${escapeHtml(d.status)}</td>
+                <td class="small" title="${escapeHtml(d.note)}">${escapeHtml(d.note)}</td>
+            </tr>`).join('') || '<tr><td colspan="15" class="text-center text-muted py-3">暂无数据（请先导入生成文件/确认个税端导出已导入）</td></tr>';
+        document.getElementById('cmpCount').textContent = `共 ${cmpTotal} 条`;
+        document.getElementById('cmpPageInfo').textContent = `第 ${cmpPage}/${totalPages} 页`;
+        document.getElementById('cmpPrev').disabled = cmpPage <= 1;
+        document.getElementById('cmpNext').disabled = cmpPage * ps >= cmpTotal;
+    }
+
+    document.getElementById('btnCmpExport').addEventListener('click', async () => {
+        const month = parseInt(cmpMonth.value);
+        if (!month) { alert('请填写税款所属期/发放月份'); return; }
+        const params = new URLSearchParams({
+            month: month,
+            gen_item_type: document.getElementById('cmpGenType').value,
+            filing_item_type: document.getElementById('cmpFilingType').value,
+        });
+        try {
+            const resp = await fetch('/api/filing/compare/export?' + params.toString());
+            const data = await resp.json();
+            if (data.download_url) window.location.href = data.download_url;
+            else alert(data.error || '导出失败');
+        } catch (e) {
+            alert('导出失败: ' + e.message);
+        }
+    });
 </script>
 </body>
 </html>

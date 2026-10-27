@@ -992,6 +992,129 @@ def api_filing_records():
     except Exception as e:
         return _log_api_error(e)
 
+
+@app.route("/api/filing/import-generated", methods=["POST"])
+def api_filing_import_generated():
+    """导入本项目生成的报税模板（正常工资薪金/劳务报酬/全年一次性奖金）。
+
+    生成文件没有月份列，月份必须由页面选择「税款所属期/发放月份」；
+    同一批可多选多个业务员文件，重复证件号保留多行，供比对标记生成侧重复。
+    """
+    try:
+        from filing_compare import (init_db as init_compare_db,
+                                    parse_generated_file, import_generated_records)
+        init_compare_db()
+        month = _parse_month_arg(request.form.get("month"))
+        if month is None:
+            return jsonify({"error": "请选择税款所属期/发放月份（YYYYMM）"}), 400
+        files = request.files.getlist("files")
+        if not files:
+            return jsonify({"error": "请选择生成的报税文件"}), 400
+        records = []
+        results = []
+        for i, f in enumerate(files):
+            if not f or not f.filename:
+                continue
+            ext = os.path.splitext(f.filename)[1].lower()
+            if ext not in (".xls", ".xlsx", ".xlsm", ".csv"):
+                results.append({"filename": f.filename, "count": 0,
+                                "item_type": "", "error": f"不支持的文件格式: {ext}"})
+                continue
+            tmp_path = os.path.join(
+                OUTPUT_DIR,
+                f"_generated_tmp_{datetime.now().strftime('%Y%m%d%H%M%S%f')}_{i}{ext}")
+            f.save(tmp_path)
+            try:
+                recs = parse_generated_file(tmp_path, month, source_file=f.filename)
+                records.extend(recs)
+                results.append({"filename": f.filename, "count": len(recs),
+                                "item_type": recs[0]["item_type"] if recs else "",
+                                "error": None})
+            except Exception as e:
+                logging.getLogger(__name__).exception(
+                    "generated import file error: %s", f.filename)
+                results.append({"filename": f.filename, "count": 0,
+                                "item_type": "", "error": str(e)})
+            finally:
+                if os.path.exists(tmp_path):
+                    os.remove(tmp_path)
+        if not records:
+            return jsonify({"error": "未解析到有效记录", "files": results}), 400
+        count = import_generated_records(records)
+        types = sorted({r["item_type"] for r in records})
+        return jsonify({"ok": True, "count": count, "month": month,
+                        "types": types, "files": results})
+    except Exception as e:
+        return _log_api_error(e)
+
+
+@app.route("/api/filing/generated-types")
+def api_filing_generated_types():
+    try:
+        from filing_compare import get_generated_types
+        month = _parse_month_arg(request.args.get("month"))
+        if month is None:
+            return jsonify({"error": "请选择月份"}), 400
+        return jsonify({"month": month, "types": get_generated_types(month)})
+    except Exception as e:
+        return _log_api_error(e)
+
+
+@app.route("/api/filing/compare")
+def api_filing_compare():
+    try:
+        from filing_compare import compare_generated_vs_filing, TYPE_正常工资薪金
+        month = _parse_month_arg(request.args.get("month"))
+        if month is None:
+            return jsonify({"error": "请选择税款所属期/发放月份"}), 400
+        gen_type = (request.args.get("gen_item_type") or TYPE_正常工资薪金).strip()
+        filing_type = (request.args.get("filing_item_type") or "税款计算").strip()
+        status = (request.args.get("status") or "").strip()
+        search = (request.args.get("search") or "").strip()
+        same_name_only = request.args.get("same_name") == "1"
+        page = max(1, int(request.args.get("page", 1) or 1))
+        page_size = min(500, max(1, int(request.args.get("page_size", 50) or 50)))
+        result = compare_generated_vs_filing(month, gen_type, filing_type)
+        details = result["details"]
+        if status:
+            details = [d for d in details if d["status"] == status]
+        if search:
+            sl = search.lower()
+            details = [d for d in details
+                       if sl in (d["gen_name"] or "").lower()
+                       or sl in (d["fil_name"] or "").lower()
+                       or search in d["cert_no"]]
+        if same_name_only:
+            details = [d for d in details if d.get("same_name_flag")]
+        total = len(details)
+        start = (page - 1) * page_size
+        return jsonify({
+            "summary": result["summary"],
+            "same_name": result["same_name"],
+            "total": total,
+            "page": page,
+            "page_size": page_size,
+            "details": details[start:start + page_size],
+        })
+    except Exception as e:
+        return _log_api_error(e)
+
+
+@app.route("/api/filing/compare/export")
+def api_filing_compare_export():
+    try:
+        from filing_compare import export_comparison, TYPE_正常工资薪金
+        month = _parse_month_arg(request.args.get("month"))
+        if month is None:
+            return jsonify({"error": "请选择税款所属期/发放月份"}), 400
+        gen_type = (request.args.get("gen_item_type") or TYPE_正常工资薪金).strip()
+        filing_type = (request.args.get("filing_item_type") or "税款计算").strip()
+        filename = export_comparison(month, gen_type, filing_type, OUTPUT_DIR)
+        return jsonify({"download_url": f"/api/download/{filename}"})
+    except Exception as e:
+        return _log_api_error(e)
+
+
 @app.route("/personnel-compare")
 def page_personnel_compare():
     return render_template("personnel_compare.html")
