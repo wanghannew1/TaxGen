@@ -84,6 +84,40 @@ _FIELD_MAP = {
 }
 
 
+_FILING_FIELD_MAP = {
+    TYPE_正常工资薪金: {
+        "income": ("本期收入",),
+        "tax_free": ("本期免税收入",),
+        "pension": ("本期基本养老保险费", "基本养老保险费"),
+        "medical": ("本期基本医疗保险费", "基本医疗保险费"),
+        "unemployment": ("本期失业保险费", "失业保险费"),
+        "housing": ("本期住房公积金", "住房公积金"),
+        "tax_due": ("应补(退)税额",),
+        "remark": ("备注",),
+    },
+    TYPE_劳务报酬: {
+        "income": ("收入",),
+        "tax_free": ("免税收入",),
+        "pension": None,
+        "medical": None,
+        "unemployment": None,
+        "housing": None,
+        "tax_due": ("应补(退)税额",),
+        "remark": ("备注",),
+    },
+    TYPE_全年一次性奖金: {
+        "income": ("全年一次性奖金额",),
+        "tax_free": ("免税收入",),
+        "pension": None,
+        "medical": None,
+        "unemployment": None,
+        "housing": None,
+        "tax_due": None,
+        "remark": ("备注",),
+    },
+}
+
+
 def get_db():
     conn = sqlite3.connect(DB_PATH)
     conn.row_factory = sqlite3.Row
@@ -110,12 +144,20 @@ def init_db():
             housing REAL DEFAULT 0,
             insurance REAL DEFAULT 0,
             tax_due REAL DEFAULT 0,
+            source_kind TEXT DEFAULT 'generated',
+            tax_comparable INTEGER DEFAULT 0,
             remark TEXT DEFAULT '',
             raw TEXT DEFAULT '{}',
             source_file TEXT DEFAULT '',
             import_time TEXT
         )
     """)
+    for column, ddl in (("source_kind", "TEXT DEFAULT 'generated'"),
+                        ("tax_comparable", "INTEGER DEFAULT 0")):
+        try:
+            conn.execute(f"ALTER TABLE generated_record ADD COLUMN {column} {ddl}")
+        except sqlite3.OperationalError:
+            pass
     conn.execute("CREATE INDEX IF NOT EXISTS idx_generated_month_type "
                  "ON generated_record(month, item_type)")
     conn.execute("CREATE INDEX IF NOT EXISTS idx_generated_cert "
@@ -188,23 +230,39 @@ def _read_sheet(filepath):
     return header, rows[idx + 1:]
 
 
-def _detect_type(header):
-    """按表头识别生成文件类型；个税端导出文件要拒绝并提示去上方导入。"""
+def _detect_type(header, allow_filing_export=False):
+    """按表头识别上报侧文件类型。
+
+    默认只接受本项目生成的 3 类模板；allow_filing_export=True 时也接受
+    个税端导出（税款计算/正常工资薪金/劳务报酬/全年一次性奖金），用于
+    “两次个税端导出互相比对”（如 5人合并 vs 1027）。
+    """
     hset = set(header)
     is_filing_export = ("所得期间起" in hset) or ("税款所属期起" in hset)
+    if is_filing_export and not allow_filing_export:
+        raise ValueError("这是个税端导出的申报文件，请把「上报侧来源」切到「个税端导出文件」")
     if "全年一次性奖金额" in hset:
-        if is_filing_export:
-            raise ValueError("这是个税端导出的申报文件，请用上方「申报文件导入」")
         return TYPE_全年一次性奖金
     if "本期收入" in hset and ("基本养老保险费" in hset or "本期基本养老保险费" in hset):
-        if is_filing_export:
-            raise ValueError("这是个税端导出的申报文件，请用上方「申报文件导入」")
         return TYPE_正常工资薪金
     if "收入" in hset and ("允许扣除的税费" in hset or "费用" in hset):
-        if is_filing_export:
-            raise ValueError("这是个税端导出的申报文件，请用上方「申报文件导入」")
         return TYPE_劳务报酬
-    raise ValueError("无法识别生成文件类型（正常工资薪金/劳务报酬/全年一次性奖金）")
+    raise ValueError("无法识别上报侧文件类型（正常工资薪金/劳务报酬/全年一次性奖金）")
+
+
+def _filing_columns(header, item_type):
+    """个税端导出文件的列映射（税款计算用“本期基本养老保险费”，
+    正常工资薪金导出用“基本养老保险费”，两种都兼容）。"""
+    col = {"emp_no": header.index("工号") if "工号" in header else None,
+           "name": header.index("姓名") if "姓名" in header else None,
+           "id_type": header.index("证件类型") if "证件类型" in header else None,
+           "cert_no": header.index("证件号码") if "证件号码" in header else None}
+    for target, candidates in _FILING_FIELD_MAP[item_type].items():
+        if not candidates:
+            col[target] = None
+            continue
+        col[target] = next((header.index(c) for c in candidates if c in header), None)
+    return col
 
 
 def _parse_month(value):
@@ -226,19 +284,28 @@ def _parse_month(value):
     return int(digits[:6]) if len(digits) >= 6 else 0
 
 
-def parse_generated_file(filepath, month, source_file=""):
-    """解析单个生成文件，返回规范化记录列表（保留重复证件行）。
+def parse_generated_file(filepath, month, source_file="", allow_filing_export=False):
+    """解析上报侧文件，返回规范化记录列表（保留重复证件行）。
 
     month: 税款所属期/发放月份（YYYYMM），由页面选择。
+    allow_filing_export: True 时接受个税端导出文件（如 5人合并），用于
+    两份个税端导出互相比对；默认只接受本项目生成的 3 类模板。
     """
     if not month or month <= 0:
         raise ValueError("请选择税款所属期/发放月份（生成文件本身没有月份列）")
     header, rows = _read_sheet(filepath)
-    item_type = _detect_type(header)
-    field_map = _FIELD_MAP[item_type]
-    col = {}
-    for target, src in field_map.items():
-        col[target] = header.index(src) if src and src in header else None
+    item_type = _detect_type(header, allow_filing_export)
+    is_filing_export = allow_filing_export and (
+        ("所得期间起" in header) or ("税款所属期起" in header))
+    if is_filing_export:
+        col = _filing_columns(header, item_type)
+    else:
+        field_map = _FIELD_MAP[item_type]
+        col = {}
+        for target, src in field_map.items():
+            col[target] = header.index(src) if src and src in header else None
+    tax_comparable = bool(is_filing_export and col.get("tax_due") is not None)
+    source_kind = "filing_export" if is_filing_export else "generated"
     records = []
     for row in rows:
         def cell(target):
@@ -273,7 +340,9 @@ def parse_generated_file(filepath, month, source_file=""):
             "unemployment": unemployment,
             "housing": housing,
             "insurance": insurance,
-            "tax_due": _as_float(cell("tax_due")),
+            "tax_due": _as_float(cell("tax_due")) if col.get("tax_due") is not None else 0,
+            "source_kind": source_kind,
+            "tax_comparable": tax_comparable,
             "remark": _as_str(cell("remark")),
             "raw": json.dumps(raw, ensure_ascii=False, default=str),
             "source_file": source_file or os.path.basename(filepath),
@@ -306,11 +375,13 @@ def import_generated_records(records):
                     INSERT INTO generated_record
                     (cert_no, name, emp_no, id_type, month, item_type,
                      income, tax_free, pension, medical, unemployment, housing,
-                     insurance, tax_due, remark, raw, source_file, import_time)
-                    VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+                     insurance, tax_due, source_kind, tax_comparable,
+                     remark, raw, source_file, import_time)
+                    VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
                 """, (r["cert_no"], r["name"], r["emp_no"], r["id_type"], month, item_type,
                       r["income"], r["tax_free"], r["pension"], r["medical"],
                       r["unemployment"], r["housing"], r["insurance"], r["tax_due"],
+                      r.get("source_kind", "generated"), 1 if r.get("tax_comparable") else 0,
                       r["remark"], r["raw"], r["source_file"], now))
                 count += 1
         conn.commit()
@@ -337,7 +408,8 @@ def get_generated_rows(month, item_type):
     rows = conn.execute("""
         SELECT cert_no, name, emp_no, id_type, month, item_type,
                income, tax_free, pension, medical, unemployment, housing,
-               insurance, tax_due, remark, source_file, import_time
+               insurance, tax_due, source_kind, tax_comparable,
+               remark, source_file, import_time
         FROM generated_record
         WHERE month=? AND item_type=?
         ORDER BY cert_no, id
@@ -432,6 +504,10 @@ def compare_generated_vs_filing(month, gen_item_type=TYPE_正常工资薪金,
         fil_insurance = float(f.get("insurance") or 0) if f else None
         income_diff = round(fil_income - gen_income, 2) if f else None
         insurance_diff = round(fil_insurance - gen_insurance, 2) if f else None
+        gen_tax_due = round(sum(float(r["tax_due"] or 0) for r in grows), 2)
+        fil_tax_due = round(float(f.get("tax_due") or 0), 2) if f else None
+        tax_comparable = any(int(r.get("tax_comparable") or 0) for r in grows)
+        tax_diff = round(fil_tax_due - gen_tax_due, 2) if (f and tax_comparable) else None
 
         same_name_flag = False
         if not grows:
@@ -469,6 +545,9 @@ def compare_generated_vs_filing(month, gen_item_type=TYPE_正常工资薪金,
         elif _unit(gen_unit) != _unit(f.get("remark")):
             status = "单位差异"
             note = f"生成 {gen_unit or '无单位'} vs 个税端 {f.get('remark','') or '无单位'}"
+        elif tax_comparable and abs(tax_diff) > 0.01:
+            status = "个税差异"
+            note = f"上报侧 {gen_tax_due:.2f} vs 个税端 {fil_tax_due:.2f}"
         else:
             status = "一致"
             note = ""
@@ -487,8 +566,10 @@ def compare_generated_vs_filing(month, gen_item_type=TYPE_正常工资薪金,
             "gen_insurance": round(gen_insurance, 2),
             "fil_insurance": round(fil_insurance, 2) if f else None,
             "insurance_diff": insurance_diff,
-            "gen_tax_due": round(sum(float(r["tax_due"] or 0) for r in grows), 2),
-            "fil_tax_due": round(float(f.get("tax_due") or 0), 2) if f else None,
+            "gen_tax_due": gen_tax_due,
+            "fil_tax_due": fil_tax_due,
+            "tax_comparable": tax_comparable,
+            "tax_diff": tax_diff,
             "gen_rows": [{"unit": _unit(r["remark"]), "income": round(float(r["income"] or 0), 2),
                           "insurance": round(float(r["insurance"] or 0), 2),
                           "source_file": r.get("source_file", "")} for r in grows],
@@ -498,7 +579,7 @@ def compare_generated_vs_filing(month, gen_item_type=TYPE_正常工资薪金,
         })
 
     order = {"生成侧重复": 0, "仅生成": 1, "仅个税端": 2, "姓名不一致": 3,
-             "收入差异": 4, "三险差异": 5, "单位差异": 6, "一致": 7}
+             "收入差异": 4, "三险差异": 5, "单位差异": 6, "个税差异": 7, "一致": 8}
     details.sort(key=lambda d: (order.get(d["status"], 9), d["gen_name"] or d["fil_name"], d["cert_no"]))
 
     same_name = _same_name_groups(gen_by_cert, fil_map)
@@ -516,6 +597,7 @@ def compare_generated_vs_filing(month, gen_item_type=TYPE_正常工资薪金,
         "dup_certs": sum(1 for rows in gen_by_cert.values() if len(rows) > 1),
         "same_name_groups": len(same_name),
         "same_name_rows": sum(1 for d in details if d.get("same_name_flag")),
+        "tax_diff_count": sum(1 for d in details if d["status"] == "个税差异"),
     }
     return {"summary": summary, "details": details, "same_name": same_name}
 
@@ -544,6 +626,7 @@ def export_comparison(month, gen_item_type, filing_item_type, output_dir):
         ("仅个税端（生成侧无）", s["fil_only"]),
         ("生成侧重复证件人数", s["dup_certs"]),
         ("同名不同证/同名多人组数", s["same_name_groups"]),
+        ("个税差异行数", s.get("tax_diff_count", 0)),
     ]
     ws.append(["项目", "值"])
     for row in summary_rows:
@@ -553,15 +636,17 @@ def export_comparison(month, gen_item_type, filing_item_type, output_dir):
 
     headers = ["姓名(生成)", "姓名(个税端)", "证件号码", "生成单位", "个税端单位",
                "生成本期收入", "个税端本期收入", "收入差", "生成三险", "个税端三险", "三险差",
-               "个税端个税(应补退)", "状态", "说明"]
+               "上报侧个税(应补退)", "个税端个税(应补退)", "个税差", "状态", "说明"]
     detail = wb.create_sheet("比对明细")
     detail.append(headers)
     for d in result["details"]:
         detail.append([d["gen_name"], d["fil_name"], d["cert_no"], d["gen_unit"], d["fil_unit"],
                        d["gen_income"], d["fil_income"], d["income_diff"],
                        d["gen_insurance"], d["fil_insurance"], d["insurance_diff"],
-                       d["fil_tax_due"], d["status"], d["note"]])
-    widths = [14, 14, 22, 28, 28, 14, 14, 12, 12, 12, 12, 16, 18, 60]
+                       d["gen_tax_due"] if d.get("tax_comparable") else None,
+                       d["fil_tax_due"], d["tax_diff"],
+                       d["status"], d["note"]])
+    widths = [14, 14, 22, 28, 28, 14, 14, 12, 12, 12, 12, 16, 16, 12, 18, 60]
     for i, w in enumerate(widths, start=1):
         detail.column_dimensions[get_column_letter(i)].width = w
 

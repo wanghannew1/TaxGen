@@ -190,3 +190,47 @@ def test_api_import_generated_and_compare(db, tmp_path, app_client):
     assert body["summary"]["dup_certs"] == 1
     assert body["total"] == 7
     assert body["same_name"][0]["name"] == "孙七"
+
+
+def test_parse_filing_export_and_tax_diff(db, tmp_path):
+    path = _filing_file(tmp_path)
+    recs = filing_compare.parse_generated_file(
+        path, 202609, allow_filing_export=True)
+    assert recs[0]["source_kind"] == "filing_export"
+    assert recs[0]["tax_comparable"] is True
+    assert recs[0]["tax_due"] == 10
+
+    filing_compare.import_generated_records(recs)
+    filing_history.import_filing_records(_filing_records())
+    res = filing_compare.compare_generated_vs_filing(
+        202609, "正常工资薪金", "税款计算")
+    d = [x for x in res["details"] if x["cert_no"] == "110101199001010011"][0]
+    assert d["status"] == "一致"
+    assert d["tax_diff"] == 0
+
+    updated = _filing_records()
+    for r in updated:
+        if r["cert_no"] == "110101199001010011":
+            r["tax_due"] = 12
+    filing_history.import_filing_records(updated)
+    res = filing_compare.compare_generated_vs_filing(
+        202609, "正常工资薪金", "税款计算")
+    d = [x for x in res["details"] if x["cert_no"] == "110101199001010011"][0]
+    assert d["status"] == "个税差异"
+    assert d["tax_diff"] == 2
+    assert res["summary"]["tax_diff_count"] >= 1
+
+
+def test_api_import_filing_export_source(db, tmp_path, app_client):
+    path = _filing_file(tmp_path)
+    with open(path, "rb") as f:
+        resp = app_client.post(
+            "/api/filing/import-generated",
+            data={"month": "202609", "source_kind": "filing_export",
+                  "files": (f, "filing_tax.csv")},
+            content_type="multipart/form-data",
+        )
+    assert resp.status_code == 200
+    body = resp.get_json()
+    assert body["source_kind"] == "filing_export"
+    assert body["types"] == ["正常工资薪金"]

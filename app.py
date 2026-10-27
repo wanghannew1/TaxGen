@@ -1007,9 +1007,13 @@ def api_filing_import_generated():
         month = _parse_month_arg(request.form.get("month"))
         if month is None:
             return jsonify({"error": "请选择税款所属期/发放月份（YYYYMM）"}), 400
+        source_kind = (request.form.get("source_kind") or "generated").strip()
+        if source_kind not in ("generated", "filing_export"):
+            return jsonify({"error": "source_kind 仅支持 generated / filing_export"}), 400
+        allow_filing_export = source_kind == "filing_export"
         files = request.files.getlist("files")
         if not files:
-            return jsonify({"error": "请选择生成的报税文件"}), 400
+            return jsonify({"error": "请选择上报侧文件"}), 400
         records = []
         results = []
         for i, f in enumerate(files):
@@ -1025,7 +1029,8 @@ def api_filing_import_generated():
                 f"_generated_tmp_{datetime.now().strftime('%Y%m%d%H%M%S%f')}_{i}{ext}")
             f.save(tmp_path)
             try:
-                recs = parse_generated_file(tmp_path, month, source_file=f.filename)
+                recs = parse_generated_file(tmp_path, month, source_file=f.filename,
+                                            allow_filing_export=allow_filing_export)
                 records.extend(recs)
                 results.append({"filename": f.filename, "count": len(recs),
                                 "item_type": recs[0]["item_type"] if recs else "",
@@ -1043,7 +1048,7 @@ def api_filing_import_generated():
         count = import_generated_records(records)
         types = sorted({r["item_type"] for r in records})
         return jsonify({"ok": True, "count": count, "month": month,
-                        "types": types, "files": results})
+                        "source_kind": source_kind, "types": types, "files": results})
     except Exception as e:
         return _log_api_error(e)
 

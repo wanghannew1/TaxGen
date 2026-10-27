@@ -39,11 +39,11 @@
     </div>
 
     <div class="card">
-        <div class="card-header"><strong>申报文件导入</strong></div>
+        <div class="card-header"><strong>个税端导出导入（申报后）</strong></div>
         <div class="card-body">
             <div class="row g-2 align-items-end">
                 <div class="col-md-4">
-                    <label class="form-label">申报文件（税款计算/正常工资薪金/劳务报酬/全年一次性奖金，可多选）</label>
+                    <label class="form-label">个税端导出文件（税款计算/正常工资薪金/劳务报酬/全年一次性奖金，可多选）</label>
                     <input type="file" id="filingFiles" class="form-control" accept=".xls,.xlsx,.csv" multiple>
                 </div>
                 <div class="col-md-2">
@@ -57,13 +57,23 @@
     </div>
 
     <div class="card">
-        <div class="card-header"><strong>报税后核对（生成文件 vs 个税端导出）</strong></div>
+        <div class="card-header d-flex justify-content-between align-items-center flex-wrap gap-2">
+            <strong>报税后核对（上报侧 vs 个税端导出）</strong>
+            <button id="btnCmpExport" class="btn btn-sm btn-success" disabled>导出比对 Excel</button>
+        </div>
         <div class="card-body">
             <div class="row g-2 align-items-end">
                 <div class="col-md-2">
                     <label class="form-label">税款所属期/发放月份</label>
                     <input type="number" id="cmpMonth" class="form-control" placeholder="如 202609" min="200001" max="209912">
                     <div class="form-text">生成文件无月份列，按此月份比对</div>
+                </div>
+                <div class="col-md-2">
+                    <label class="form-label">上报侧来源</label>
+                    <select id="cmpSourceKind" class="form-select">
+                        <option value="generated">本项目生成模板</option>
+                        <option value="filing_export">个税端导出文件（如5人合并）</option>
+                    </select>
                 </div>
                 <div class="col-md-2">
                     <label class="form-label">生成文件类型</label>
@@ -82,18 +92,15 @@
                         <option value="全年一次性奖金">全年一次性奖金</option>
                     </select>
                 </div>
-                <div class="col-md-3">
-                    <label class="form-label">生成的报税文件（可多选，重复证件会保留）</label>
+                <div class="col-md-2">
+                    <label class="form-label">上报侧文件（可多选）</label>
                     <input type="file" id="genFiles" class="form-control" accept=".xls,.xlsx,.csv" multiple>
                 </div>
                 <div class="col-md-1">
-                    <button id="btnGenImport" class="btn btn-outline-primary w-100">导入生成</button>
+                    <button id="btnGenImport" class="btn btn-outline-primary w-100">导入</button>
                 </div>
                 <div class="col-md-1">
                     <button id="btnCompare" class="btn btn-primary w-100">比对</button>
-                </div>
-                <div class="col-md-1">
-                    <button id="btnCmpExport" class="btn btn-success w-100" disabled>导出</button>
                 </div>
             </div>
             <div class="mt-2"><span id="genImportMsg" class="badge-warn"></span></div>
@@ -174,7 +181,8 @@
             </div>
             <div class="row mt-2 g-2">
                 <div class="col-md-4"><span class="badge-warn">生成侧重复证件：<strong id="cmpDup">0</strong> 人</span></div>
-                <div class="col-md-5"><span class="badge-warn">同名不同证/同名多人：<strong id="cmpSameName">0</strong> 组（明细标记 <strong id="cmpSameNameRows">0</strong> 行）</span></div>
+                <div class="col-md-4"><span class="badge-warn">同名不同证/同名多人：<strong id="cmpSameName">0</strong> 组（明细标记 <strong id="cmpSameNameRows">0</strong> 行）</span></div>
+                <div class="col-md-3"><span class="badge-warn">个税差异（上报侧 vs 个税端）：<strong id="cmpTaxDiff">0</strong> 行</span></div>
             </div>
         </div>
     </div>
@@ -209,6 +217,7 @@
                     <option value="收入差异">收入差异</option>
                     <option value="三险差异">三险差异</option>
                     <option value="单位差异">单位差异</option>
+                    <option value="个税差异">个税差异</option>
                     <option value="一致">一致</option>
                 </select>
                 <input type="text" id="cmpSearch" class="form-control form-control-sm" placeholder="姓名/证件号" style="width:200px;">
@@ -227,7 +236,8 @@
                             <th>生成单位</th><th>个税端单位</th>
                             <th style="width:100px">生成收入</th><th style="width:100px">个税端收入</th><th style="width:80px">收入差</th>
                             <th style="width:90px">生成三险</th><th style="width:90px">个税端三险</th><th style="width:80px">三险差</th>
-                            <th style="width:90px">个税端个税</th><th style="width:100px">状态</th><th>说明</th>
+                            <th style="width:90px">上报侧个税</th><th style="width:90px">个税端个税</th><th style="width:80px">个税差</th>
+                            <th style="width:100px">状态</th><th>说明</th>
                         </tr>
                     </thead>
                     <tbody id="cmpTbody"></tbody>
@@ -449,9 +459,10 @@
         const msg = document.getElementById('genImportMsg');
         const month = parseInt(cmpMonth.value);
         if (!month) { msg.textContent = '请先填写税款所属期/发放月份（如 202609）'; return; }
-        if (!genFiles.files.length) { msg.textContent = '请选择生成的报税文件'; return; }
+        if (!genFiles.files.length) { msg.textContent = '请选择上报侧文件'; return; }
         const fd = new FormData();
         fd.append('month', month);
+        fd.append('source_kind', document.getElementById('cmpSourceKind').value);
         for (const f of genFiles.files) fd.append('files', f);
         msg.textContent = '导入中...';
         try {
@@ -465,7 +476,7 @@
             const parts = (data.files || []).map(f => f.error
                 ? `${f.filename} 失败: ${f.error}`
                 : `${f.filename} (${f.item_type}, ${f.count}条)`);
-            msg.textContent = `导入成功 ${data.count} 条，月份 ${data.month}，类型 ${(data.types || []).join('、')}；` + parts.join('；');
+            msg.textContent = `导入成功 ${data.count} 条，月份 ${data.month}，来源 ${data.source_kind === 'filing_export' ? '个税端导出' : '生成模板'}，类型 ${(data.types || []).join('、')}；` + parts.join('；');
             if ((data.types || []).length === 1) {
                 const t = data.types[0];
                 document.getElementById('cmpGenType').value = t;
@@ -518,12 +529,12 @@
         if (search) params.set('search', search);
         if (document.getElementById('cmpSameOnly').checked) params.set('same_name', '1');
         const tbody = document.getElementById('cmpTbody');
-        tbody.innerHTML = '<tr><td colspan="15" class="text-center text-muted py-3">比对中...</td></tr>';
+        tbody.innerHTML = '<tr><td colspan="17" class="text-center text-muted py-3">比对中...</td></tr>';
         try {
             const resp = await fetch('/api/filing/compare?' + params.toString());
             const data = await resp.json();
             if (data.error) {
-                tbody.innerHTML = `<tr><td colspan="15" class="text-center text-danger py-3">${escapeHtml(data.error)}</td></tr>`;
+                tbody.innerHTML = `<tr><td colspan="17" class="text-center text-danger py-3">${escapeHtml(data.error)}</td></tr>`;
                 return;
             }
             cmpTotal = data.total;
@@ -532,7 +543,7 @@
             renderCompareDetails(data.details || []);
             document.getElementById('btnCmpExport').disabled = false;
         } catch (e) {
-            tbody.innerHTML = `<tr><td colspan="15" class="text-center text-danger py-3">比对失败: ${escapeHtml(e.message)}</td></tr>`;
+            tbody.innerHTML = `<tr><td colspan="17" class="text-center text-danger py-3">比对失败: ${escapeHtml(e.message)}</td></tr>`;
         }
     }
 
@@ -550,6 +561,7 @@
         set('cmpDup', s.dup_certs);
         set('cmpSameName', s.same_name_groups);
         set('cmpSameNameRows', s.same_name_rows);
+        set('cmpTaxDiff', s.tax_diff_count);
     }
 
     function renderSameName(rows) {
@@ -590,10 +602,12 @@
                 <td class="num-cell">${fmt2(d.gen_insurance)}</td>
                 <td class="num-cell">${fmt2(d.fil_insurance)}</td>
                 <td class="num-cell">${fmt2(d.insurance_diff)}</td>
+                <td class="num-cell">${d.tax_comparable ? fmt2(d.gen_tax_due) : '-'}</td>
                 <td class="num-cell">${fmt2(d.fil_tax_due)}</td>
+                <td class="num-cell">${fmt2(d.tax_diff)}</td>
                 <td class="${statusClass(d.status)}">${escapeHtml(d.status)}</td>
                 <td class="small" title="${escapeHtml(d.note)}">${escapeHtml(d.note)}</td>
-            </tr>`).join('') || '<tr><td colspan="15" class="text-center text-muted py-3">暂无数据（请先导入生成文件/确认个税端导出已导入）</td></tr>';
+            </tr>`).join('') || '<tr><td colspan="17" class="text-center text-muted py-3">暂无数据（请先导入上报侧文件/确认个税端导出已导入）</td></tr>';
         document.getElementById('cmpCount').textContent = `共 ${cmpTotal} 条`;
         document.getElementById('cmpPageInfo').textContent = `第 ${cmpPage}/${totalPages} 页`;
         document.getElementById('cmpPrev').disabled = cmpPage <= 1;
