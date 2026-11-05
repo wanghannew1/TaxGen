@@ -263,7 +263,6 @@
     const dataList = document.getElementById('dataList');
     const tableHeader = document.getElementById('tableHeader');
     const emptyState = document.getElementById('emptyState');
-    const selectAll = document.getElementById('selectAll');
     const btnDeleteSelected = document.getElementById('btnDeleteSelected');
     const btnDeleteAll = document.getElementById('btnDeleteAll');
     const btnColSettings = document.getElementById('btnColSettings');
@@ -388,9 +387,12 @@
         btnDeleteSelected.disabled = checks.length === 0;
     }
 
-    selectAll.addEventListener('change', (e) => {
-        document.querySelectorAll('.rowCheck').forEach(cb => cb.checked = e.target.checked);
-        updateDeleteBtn();
+    // selectAll 复选框由 renderHeader() 动态生成，改用事件委托绑定
+    tableHeader.addEventListener('change', (e) => {
+        if (e.target && e.target.id === 'selectAll') {
+            document.querySelectorAll('.rowCheck').forEach(cb => cb.checked = e.target.checked);
+            updateDeleteBtn();
+        }
     });
     dataList.addEventListener('change', updateDeleteBtn);
 
