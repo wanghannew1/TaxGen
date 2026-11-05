@@ -77,7 +77,7 @@
                     <input type="file" id="importFile" accept=".xlsx,.xls" class="form-control">
                 </div>
                 <div class="col-md-3">
-                    <button id="btnImport" class="btn btn-primary w-100">导入数据</button>
+                    <button id="btnImport" type="button" class="btn btn-primary w-100">导入数据</button>
                 </div>
             </div>
             <div id="importMsg" class="text-muted mb-2" style="font-size: 0.85rem;"></div>
@@ -260,9 +260,15 @@
                 method: 'POST',
                 body: formData
             });
-            if (!resp.ok) throw new Error('导入失败');
-            const result = await resp.json();
-            importMsg.textContent = `导入成功，共 ${result.count} 条`;
+            const text = await resp.text();
+            let result;
+            try {
+                result = JSON.parse(text);
+            } catch (e) {
+                throw new Error(`服务器返回异常(${resp.status}): ${text.substring(0, 200)}`);
+            }
+            if (!resp.ok) throw new Error(result.error || `导入失败 (HTTP ${resp.status})`);
+            importMsg.textContent = `导入成功，共 ${result.count} 条${result.etax_format ? '（个税端格式）' : ''}`;
             importMsg.className = 'text-success';
             importFile.value = '';
             loadStatus();

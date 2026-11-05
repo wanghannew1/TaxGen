@@ -2005,16 +2005,17 @@ def api_social_security_import():
     """
     try:
         from config_db import upsert_social_security_history
-        import xlrd
+        import xlrd, tempfile, os
+
         source = None
         rows = None
-        if request.content_type and request.content_type.startswith('multipart/form-data'):
+        is_etax = False
+
+        # 优先检查是否有文件上传 (multipart/form-data)
+        file = request.files.get("file")
+        if file:
             source = str(request.form.get("source") or "excel")
-            file = request.files.get("file")
-            if not file:
-                return jsonify({"error": "请选择文件"}), 400
             # 保存到临时文件读取
-            import tempfile, os
             tmp = tempfile.NamedTemporaryFile(delete=False, suffix=".xls")
             file.save(tmp.name)
             tmp.close()
@@ -2044,7 +2045,6 @@ def api_social_security_import():
                             header_map[i] = "housing_fund"
                         elif h == "备注":
                             header_map[i] = "unit_name"
-                        # 个税端文件无单元代码，从备注或留空
                     else:
                         # 兼容旧9列模板
                         if h in ("证件号", "身份证", "身份证号码", "cert_no"):
