@@ -2066,6 +2066,7 @@ def api_social_security_import():
                         elif h in ("结算单元名称", "单元名称", "unit_name"):
                             header_map[i] = "unit_name"
                 rows = []
+                seen_keys = set()
                 for r in range(1, ws.nrows):
                     row = {}
                     for i, field in header_map.items():
@@ -2078,6 +2079,11 @@ def api_social_security_import():
                     if "salary_month_raw" in row:
                         row["salary_month"] = row.pop("salary_month_raw")
                     if row.get("cert_no"):
+                        # 去重：同一证件号+所属月份+单元代码只保留一条
+                        dedup_key = (row["cert_no"], int(row.get("salary_month") or 0), int(row.get("unit_code") or 0))
+                        if dedup_key in seen_keys:
+                            continue
+                        seen_keys.add(dedup_key)
                         rows.append(row)
             finally:
                 os.unlink(tmp.name)
@@ -2085,6 +2091,25 @@ def api_social_security_import():
             data = request.get_json() or {}
             rows = data.get("rows") or []
             source = str(data.get("source") or "excel")
+            # 去重：同一证件号+所属月份+单元代码只保留一条
+            seen_keys = set()
+            deduped_rows = []
+            for r in rows:
+                cert = str(r.get("cert_no") or "").strip().upper()
+                if not cert:
+                    continue
+                try:
+                    month = int(r.get("salary_month") or 0)
+                except (TypeError, ValueError):
+                    continue
+                if month <= 0:
+                    continue
+                dedup_key = (cert, month, int(r.get("unit_code") or 0))
+                if dedup_key in seen_keys:
+                    continue
+                seen_keys.add(dedup_key)
+                deduped_rows.append(r)
+            rows = deduped_rows
         count = upsert_social_security_history(rows, source=source)
         return jsonify({"ok": True, "count": count, "source": source, "etax_format": is_etax})
     except Exception as e:

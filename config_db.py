@@ -660,9 +660,14 @@ def init_social_security_history() -> None:
     for col, coltype in _new_cols.items():
         if col not in cols:
             conn.execute(f"ALTER TABLE social_security_history ADD COLUMN {col} {coltype}")
+    # 旧库迁移: 删除带 unit_code 的旧唯一索引，改为仅 cert_no+salary_month
+    old_idx = conn.execute(
+        "SELECT sql FROM sqlite_master WHERE type='index' AND name='idx_ss_history_unique'").fetchone()
+    if old_idx and 'unit_code' in (old_idx["sql"] or ""):
+        conn.execute("DROP INDEX idx_ss_history_unique")
     conn.execute(
         "CREATE UNIQUE INDEX IF NOT EXISTS idx_ss_history_unique "
-        "ON social_security_history(cert_no, salary_month, unit_code)")
+        "ON social_security_history(cert_no, salary_month)")
     conn.execute(
         "CREATE INDEX IF NOT EXISTS idx_ss_history_cert_month "
         "ON social_security_history(cert_no, salary_month)")
@@ -675,11 +680,13 @@ def upsert_social_security_history(rows: list, source: str = "excel") -> int:
 
     rows: List[dict]，含 cert_no/name/cert_type/salary_month/本期收入/... 等全部字段，
           以及 raw_json（完整原始行数据 JSON 字符串）。
-    先按 source 删除旧记录再批量插入 (数据为全量快照)。
+    先删除所有与即将插入的 (cert_no, salary_month, unit_code) 组合匹配的记录
+    (不论 source)，再批量插入 (数据为全量快照)。
     返回写入条数。
     """
     init_social_security_history()
     inserts = []
+    dedup_keys = set()
     for r in rows or []:
         cert = str(r.get("cert_no") or "").strip().upper()
         if not cert:
@@ -690,6 +697,11 @@ def upsert_social_security_history(rows: list, source: str = "excel") -> int:
             continue
         if month <= 0:
             continue
+        unit_code = int(r.get("unit_code") or 0)
+        dedup_key = (cert, month, unit_code)
+        if dedup_key in dedup_keys:
+            continue
+        dedup_keys.add(dedup_key)
         inserts.append((
             cert,
             str(r.get("name") or "").strip(),
@@ -741,7 +753,7 @@ def upsert_social_security_history(rows: list, source: str = "excel") -> int:
             float(r.get("已缴税额") or 0),
             float(r.get("应补退税额") or 0),
             str(r.get("备注") or "").strip(),
-            int(r.get("unit_code") or 0),
+            unit_code,
             str(r.get("unit_name") or "").strip(),
             source,
             str(r.get("raw_json") or ""),
@@ -749,7 +761,11 @@ def upsert_social_security_history(rows: list, source: str = "excel") -> int:
     if not inserts:
         return 0
     conn = get_db()
-    conn.execute("DELETE FROM social_security_history WHERE source = ?", (source,))
+    # 先删除所有与即将插入的 (cert_no, salary_month, unit_code) 匹配的记录（不论 source）
+    for cert, month, unit_code in dedup_keys:
+        conn.execute(
+            "DELETE FROM social_security_history WHERE cert_no = ? AND salary_month = ? AND unit_code = ?",
+            (cert, month, unit_code))
     placeholders = ",".join("?" for _ in inserts[0])
     conn.executemany(f"""
         INSERT INTO social_security_history
