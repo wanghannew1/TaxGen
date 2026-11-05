@@ -2204,6 +2204,61 @@ def api_social_security_template():
         return _log_api_error(e)
 
 
+@app.route("/tax-compare")
+def page_tax_compare():
+    """报税数据核对页: 生成报税数据 vs 个税端税款计算 逐人逐月核对。"""
+    return render_template("tax_compare.html")
+
+
+@app.route("/api/tax-compare/months")
+def api_tax_compare_months():
+    """个税端已导入月份列表 (下拉用)。"""
+    try:
+        from tax_compare import get_available_months
+        return jsonify({"months": get_available_months()})
+    except Exception as e:
+        return _log_api_error(e)
+
+
+@app.route("/api/tax-compare/run")
+def api_tax_compare_run():
+    """逐人核对指定月份 (分页返回明细 + 汇总)。"""
+    try:
+        from tax_compare import query_details
+        month = _parse_month_arg(request.args.get("month"))
+        if month is None:
+            return jsonify({"error": "请选择核对月份 (YYYYMM)"}), 400
+        status = (request.args.get("status") or "").strip()
+        search = (request.args.get("search") or "").strip()
+        page = max(1, int(request.args.get("page") or 1))
+        page_size = max(1, min(int(request.args.get("page_size") or 100), 1000))
+        refresh = request.args.get("refresh") in ("1", "true", "yes")
+        return jsonify(query_details(month, status=status, search=search,
+                                     page=page, page_size=page_size, refresh=refresh))
+    except Exception as e:
+        return _log_api_error(e)
+
+
+@app.route("/api/tax-compare/export")
+def api_tax_compare_export():
+    """导出核对结果 Excel (汇总 + 逐人明细)。"""
+    try:
+        import io
+        from tax_compare import export_excel
+        month = _parse_month_arg(request.args.get("month"))
+        if month is None:
+            return jsonify({"error": "请选择核对月份 (YYYYMM)"}), 400
+        data = export_excel(month)
+        return send_file(
+            io.BytesIO(data),
+            mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            as_attachment=True,
+            download_name=f"{month}_报税数据核对.xlsx",
+        )
+    except Exception as e:
+        return _log_api_error(e)
+
+
 init_db()
 
 # 初始化自建 SQLite 配置库 (Oracle 只读, 配置数据不入 Oracle)

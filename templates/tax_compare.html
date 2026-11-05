@@ -1,0 +1,333 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>报税数据核对 - 个税填报服务</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+    <style>
+        body { background: #f5f6fa; overflow-x: hidden; }
+        .container { max-width: 1900px; }
+        .card { margin-bottom: 1rem; box-shadow: 0 1px 3px rgba(0,0,0,.1); }
+        .table-responsive { overflow-x: auto; }
+        #errorBox { display: none; }
+        .stat-card { text-align: center; }
+        .stat-card .num { font-size: 1.4rem; font-weight: 700; }
+        .stat-card .lbl { font-size: 0.8rem; color: #6c757d; }
+        tr.row-danger td { background: #f8d7da !important; }
+        tr.row-warn td { background: #fff3cd !important; }
+        tr.row-zero td { background: #e9ecef !important; color: #6c757d; }
+        #detailsTable td, #detailsTable th { white-space: nowrap; font-size: 0.82rem; }
+        #detailsTable td.note { white-space: normal; min-width: 220px; max-width: 420px; }
+    </style>
+</head>
+<body>
+<nav class="navbar navbar-dark bg-primary">
+    <div class="container" style="max-width: 1900px;">
+        <span class="navbar-brand">个税填报服务</span>
+    </div>
+</nav>
+
+<div class="container py-3" style="max-width: 1900px;">
+    <div class="d-flex gap-2 mb-3 flex-wrap">
+        <a href="/" class="btn btn-outline-primary">报税数据生成</a>
+        <a href="/tax-return" class="btn btn-outline-primary">报税状态统计</a>
+        <a href="/payroll-records" class="btn btn-outline-primary">工资发放情况查询</a>
+        <a href="/personnel-compare" class="btn btn-outline-success">增减员比对</a>
+        <a href="/special-units" class="btn btn-outline-primary">特殊结算单元配置</a>
+        <a href="/filing-history" class="btn btn-outline-primary">历史申报库</a>
+        <a href="/tax-adjust" class="btn btn-outline-primary">多退少补</a>
+        <a href="/social-security" class="btn btn-outline-primary">历史社保数据管理</a>
+        <a href="/tax-compare" class="btn btn-primary active">报税数据核对</a>
+    </div>
+
+    <div class="card">
+        <div class="card-header"><strong>生成报税数据 vs 个税端税款计算 · 逐人核对</strong></div>
+        <div class="card-body">
+            <div class="alert alert-info" style="font-size: 0.9rem;">
+                以「税款所属期」月份对齐：系统侧取 Oracle TC93 当月数据并按证件号码聚合（多批次/多结算单元合并），
+                个税端取已导入的 <code>税款计算_工资薪金所得</code>（一人一行）。金额容差 0.01 元。
+                默认按差异严重程度排序；除「一致」外的差异均计入差异人数，「零收入单边」单列不计差异。
+            </div>
+            <div class="row g-2 align-items-end mb-3">
+                <div class="col-md-3">
+                    <label class="form-label">核对月份（税款所属期）</label>
+                    <select id="monthSelect" class="form-select"></select>
+                </div>
+                <div class="col-md-4">
+                    <div class="d-flex gap-2">
+                        <button id="btnRun" class="btn btn-primary">开始核对</button>
+                        <button id="btnRefresh" class="btn btn-outline-secondary">重新核对(刷新缓存)</button>
+                        <a id="btnExport" class="btn btn-outline-success" href="#">导出 Excel</a>
+                    </div>
+                </div>
+            </div>
+            <div id="errorBox" class="alert alert-danger"></div>
+            <div id="loadingMsg" class="text-muted mb-2" style="display:none;">正在核对，请稍候（首次约需数秒）…</div>
+        </div>
+    </div>
+
+    <div class="card" id="summaryCard" style="display:none;">
+        <div class="card-header"><strong>核对汇总</strong></div>
+        <div class="card-body">
+            <div class="row g-2 mb-3">
+                <div class="col-md-2 col-6"><div class="card stat-card"><div class="num" id="sumGenPersons">-</div><div class="lbl">系统人数</div></div></div>
+                <div class="col-md-2 col-6"><div class="card stat-card"><div class="num" id="sumFilPersons">-</div><div class="lbl">个税端人数</div></div></div>
+                <div class="col-md-2 col-6"><div class="card stat-card"><div class="num text-success" id="sumMatched">-</div><div class="lbl">完全一致</div></div></div>
+                <div class="col-md-2 col-6"><div class="card stat-card"><div class="num text-danger" id="sumDiff">-</div><div class="lbl">存在差异</div></div></div>
+                <div class="col-md-2 col-6"><div class="card stat-card"><div class="num text-danger" id="sumOnlyGen">-</div><div class="lbl">仅系统侧</div></div></div>
+                <div class="col-md-2 col-6"><div class="card stat-card"><div class="num text-danger" id="sumOnlyFil">-</div><div class="lbl">仅个税端</div></div></div>
+            </div>
+            <div class="table-responsive">
+                <table class="table table-sm table-bordered mb-0" style="font-size:0.85rem;">
+                    <thead>
+                        <tr><th>项目</th><th class="text-end">系统侧合计</th><th class="text-end">个税端合计</th><th class="text-end">差额(个税端-系统)</th></tr>
+                    </thead>
+                    <tbody>
+                        <tr><td>本期收入</td><td class="text-end" id="sumGenIncome">-</td><td class="text-end" id="sumFilIncome">-</td><td class="text-end" id="sumIncomeDiff">-</td></tr>
+                        <tr><td>五险一金合计</td><td class="text-end" id="sumGenInsurance">-</td><td class="text-end" id="sumFilInsurance">-</td><td class="text-end" id="sumInsuranceDiff">-</td></tr>
+                        <tr><td>本期个税（系统 ATC93D / 个税端应补退）</td><td class="text-end" id="sumGenTax">-</td><td class="text-end" id="sumFilTax">-</td><td class="text-end" id="sumTaxDiff">-</td></tr>
+                    </tbody>
+                </table>
+            </div>
+            <div id="statusCounts" class="mt-2"></div>
+        </div>
+    </div>
+
+    <div class="card" id="detailsCard" style="display:none;">
+        <div class="card-header d-flex justify-content-between align-items-center flex-wrap gap-2">
+            <strong>逐人明细</strong>
+            <div class="d-flex gap-2 align-items-center">
+                <select id="statusFilter" class="form-select form-select-sm" style="width:auto;"></select>
+                <input id="searchInput" type="text" class="form-control form-control-sm" style="width:220px;" placeholder="证件号/姓名 搜索">
+                <button id="btnSearch" class="btn btn-outline-primary btn-sm">搜索</button>
+                <select id="pageSize" class="form-select form-select-sm" style="width:auto;">
+                    <option value="50">50 条/页</option>
+                    <option value="100" selected>100 条/页</option>
+                    <option value="200">200 条/页</option>
+                    <option value="500">500 条/页</option>
+                </select>
+            </div>
+        </div>
+        <div class="card-body">
+            <div class="table-responsive">
+                <table class="table table-sm table-hover table-bordered" id="detailsTable">
+                    <thead>
+                        <tr>
+                            <th>状态</th><th>证件号</th><th>系统姓名</th><th>个税端姓名</th>
+                            <th class="text-end">系统收入</th><th class="text-end">个税端收入</th><th class="text-end">收入差</th>
+                            <th class="text-end">系统五险一金</th><th class="text-end">个税端五险一金</th><th class="text-end">五险一金差</th>
+                            <th class="text-end">系统个税</th><th class="text-end">个税端个税</th><th class="text-end">个税差</th>
+                            <th>系统单位</th><th>个税端备注</th><th>说明</th>
+                        </tr>
+                    </thead>
+                    <tbody id="detailsBody"></tbody>
+                </table>
+            </div>
+            <div id="emptyState" class="text-muted text-center py-3" style="display:none;">无匹配数据</div>
+            <div class="d-flex justify-content-between align-items-center flex-wrap gap-2 mt-2">
+                <span class="text-muted" style="font-size:0.85rem;">共 <strong id="pgTotal">0</strong> 条</span>
+                <nav>
+                    <ul class="pagination pagination-sm mb-0">
+                        <li class="page-item" id="pgFirst"><a class="page-link" href="#">首页</a></li>
+                        <li class="page-item" id="pgPrev"><a class="page-link" href="#">上一页</a></li>
+                        <li class="page-item disabled"><span class="page-link" id="pgInfo">1 / 1</span></li>
+                        <li class="page-item" id="pgNext"><a class="page-link" href="#">下一页</a></li>
+                        <li class="page-item" id="pgLast"><a class="page-link" href="#">末页</a></li>
+                    </ul>
+                </nav>
+            </div>
+        </div>
+    </div>
+</div>
+
+<script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
+<script>
+    const monthSelect = document.getElementById('monthSelect');
+    const btnRun = document.getElementById('btnRun');
+    const btnRefresh = document.getElementById('btnRefresh');
+    const btnExport = document.getElementById('btnExport');
+    const btnSearch = document.getElementById('btnSearch');
+    const searchInput = document.getElementById('searchInput');
+    const statusFilter = document.getElementById('statusFilter');
+    const pageSize = document.getElementById('pageSize');
+    const errorBox = document.getElementById('errorBox');
+    const loadingMsg = document.getElementById('loadingMsg');
+    const summaryCard = document.getElementById('summaryCard');
+    const detailsCard = document.getElementById('detailsCard');
+    const detailsBody = document.getElementById('detailsBody');
+    const emptyState = document.getElementById('emptyState');
+    const pgTotal = document.getElementById('pgTotal');
+    const pgInfo = document.getElementById('pgInfo');
+    const pgFirst = document.getElementById('pgFirst');
+    const pgPrev = document.getElementById('pgPrev');
+    const pgNext = document.getElementById('pgNext');
+    const pgLast = document.getElementById('pgLast');
+
+    const STATUS_ORDER = ['仅系统(有收入)', '仅个税端(有收入)', '姓名不一致',
+        '收入差异', '五险一金差异', '个税差异', '单位差异',
+        '仅系统(零收入)', '仅个税端(零收入)', '一致'];
+
+    let currentPage = 1;
+    let currentPageSize = 100;
+    let lastSummary = null;
+    let loadedMonth = null;
+
+    function showError(msg) { errorBox.textContent = msg; errorBox.style.display = 'block'; }
+    function hideError() { errorBox.style.display = 'none'; }
+    function fmtMoney(v) {
+        if (v === null || v === undefined || v === '') return '';
+        const n = Number(v);
+        return isNaN(n) ? String(v) : n.toFixed(2);
+    }
+    function escapeHtml(s) {
+        if (s == null) return '';
+        return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;')
+            .replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#039;');
+    }
+    function rowClass(status) {
+        if (status === '一致') return '';
+        if (status === '仅系统(有收入)' || status === '仅个税端(有收入)') return 'row-danger';
+        if (status === '仅系统(零收入)' || status === '仅个税端(零收入)') return 'row-zero';
+        return 'row-warn';
+    }
+
+    async function loadMonths() {
+        try {
+            const resp = await fetch('/api/tax-compare/months');
+            if (!resp.ok) throw new Error('加载月份失败');
+            const data = await resp.json();
+            const months = data.months || [];
+            monthSelect.innerHTML = months.map(m =>
+                `<option value="${m.month}">${m.month}（${m.count} 条）</option>`).join('');
+            if (months.length > 0) {
+                monthSelect.value = months[0].month;
+                btnExport.href = `/api/tax-compare/export?month=${months[0].month}`;
+            }
+        } catch (e) {
+            showError(e.message);
+        }
+    }
+
+    function renderSummary(summary) {
+        lastSummary = summary;
+        document.getElementById('sumGenPersons').textContent = summary.gen_persons;
+        document.getElementById('sumFilPersons').textContent = summary.fil_persons;
+        document.getElementById('sumMatched').textContent = summary.matched;
+        document.getElementById('sumDiff').textContent = summary.diff;
+        document.getElementById('sumOnlyGen').textContent = summary.only_gen;
+        document.getElementById('sumOnlyFil').textContent = summary.only_fil;
+        document.getElementById('sumGenIncome').textContent = fmtMoney(summary.gen_income);
+        document.getElementById('sumFilIncome').textContent = fmtMoney(summary.fil_income);
+        document.getElementById('sumIncomeDiff').textContent = fmtMoney(summary.income_diff);
+        document.getElementById('sumGenInsurance').textContent = fmtMoney(summary.gen_insurance);
+        document.getElementById('sumFilInsurance').textContent = fmtMoney(summary.fil_insurance);
+        document.getElementById('sumInsuranceDiff').textContent = fmtMoney(summary.insurance_diff);
+        document.getElementById('sumGenTax').textContent = fmtMoney(summary.gen_tax);
+        document.getElementById('sumFilTax').textContent = fmtMoney(summary.fil_tax);
+        document.getElementById('sumTaxDiff').textContent = fmtMoney(summary.tax_diff);
+
+        const counts = summary.status_counts || {};
+        const opts = ['<option value="">全部状态（' + Object.values(counts).reduce((a, b) => a + b, 0) + '）</option>'];
+        for (const st of STATUS_ORDER) {
+            if (counts[st]) opts.push(`<option value="${escapeHtml(st)}">${escapeHtml(st)}（${counts[st]}）</option>`);
+        }
+        const cur = statusFilter.value;
+        statusFilter.innerHTML = opts.join('');
+        if (cur && counts[cur]) statusFilter.value = cur;
+
+        document.getElementById('statusCounts').innerHTML = STATUS_ORDER
+            .filter(st => counts[st])
+            .map(st => {
+                const cls = st === '一致' ? 'bg-success' : (st.includes('零收入') ? 'bg-secondary' : 'bg-warning text-dark');
+                return `<span class="badge ${cls} me-1 mb-1">${escapeHtml(st)}：${counts[st]}</span>`;
+            }).join('');
+
+        summaryCard.style.display = 'block';
+        detailsCard.style.display = 'block';
+    }
+
+    function renderRows(rows) {
+        emptyState.style.display = rows.length === 0 ? 'block' : 'none';
+        detailsBody.innerHTML = rows.map(r => `
+            <tr class="${rowClass(r.status)}">
+                <td>${escapeHtml(r.status)}</td>
+                <td>${escapeHtml(r.cert_no)}</td>
+                <td>${escapeHtml(r.gen_name)}</td>
+                <td>${escapeHtml(r.fil_name)}</td>
+                <td class="text-end">${fmtMoney(r.gen_income)}</td>
+                <td class="text-end">${fmtMoney(r.fil_income)}</td>
+                <td class="text-end">${fmtMoney(r.income_diff)}</td>
+                <td class="text-end">${fmtMoney(r.gen_insurance)}</td>
+                <td class="text-end">${fmtMoney(r.fil_insurance)}</td>
+                <td class="text-end">${fmtMoney(r.insurance_diff)}</td>
+                <td class="text-end">${fmtMoney(r.gen_tax)}</td>
+                <td class="text-end">${fmtMoney(r.fil_tax)}</td>
+                <td class="text-end">${fmtMoney(r.tax_diff)}</td>
+                <td>${escapeHtml(r.gen_unit)}</td>
+                <td>${escapeHtml(r.fil_unit)}</td>
+                <td class="note">${escapeHtml(r.note)}</td>
+            </tr>`).join('');
+    }
+
+    async function runCompare(resetPage, refresh) {
+        hideError();
+        const month = monthSelect.value;
+        if (!month) { showError('请先选择核对月份（需先导入个税端数据）'); return; }
+        if (resetPage) currentPage = 1;
+        loadingMsg.style.display = 'block';
+        summaryCard.style.display = 'none';
+        detailsCard.style.display = 'none';
+        btnRun.disabled = true;
+        btnRefresh.disabled = true;
+        const params = new URLSearchParams({
+            month: month, page: currentPage, page_size: currentPageSize,
+        });
+        if (statusFilter.value) params.append('status', statusFilter.value);
+        if (searchInput.value.trim()) params.append('search', searchInput.value.trim());
+        if (refresh) params.append('refresh', '1');
+        try {
+            const resp = await fetch(`/api/tax-compare/run?${params}`);
+            const data = await resp.json();
+            if (!resp.ok) throw new Error(data.error || `核对失败 (HTTP ${resp.status})`);
+            loadedMonth = Number(month);
+            currentPage = data.page || 1;
+            renderSummary(data.summary);
+            renderRows(data.rows || []);
+            pgTotal.textContent = data.total;
+            pgInfo.textContent = `${data.page} / ${data.pages}`;
+            pgFirst.classList.toggle('disabled', data.page <= 1);
+            pgPrev.classList.toggle('disabled', data.page <= 1);
+            pgNext.classList.toggle('disabled', data.page >= data.pages);
+            pgLast.classList.toggle('disabled', data.page >= data.pages);
+            btnExport.href = `/api/tax-compare/export?month=${month}`;
+        } catch (e) {
+            showError(e.message);
+        } finally {
+            loadingMsg.style.display = 'none';
+            btnRun.disabled = false;
+            btnRefresh.disabled = false;
+        }
+    }
+
+    btnRun.addEventListener('click', () => runCompare(true, false));
+    btnRefresh.addEventListener('click', () => runCompare(true, true));
+    btnSearch.addEventListener('click', () => runCompare(true, false));
+    searchInput.addEventListener('keydown', (e) => { if (e.key === 'Enter') runCompare(true, false); });
+    statusFilter.addEventListener('change', () => runCompare(true, false));
+    pageSize.addEventListener('change', () => {
+        currentPageSize = parseInt(pageSize.value, 10) || 100;
+        runCompare(true, false);
+    });
+    monthSelect.addEventListener('change', () => {
+        btnExport.href = `/api/tax-compare/export?month=${monthSelect.value}`;
+    });
+    pgFirst.addEventListener('click', (e) => { e.preventDefault(); if (currentPage > 1) { currentPage = 1; runCompare(false, false); } });
+    pgPrev.addEventListener('click', (e) => { e.preventDefault(); if (currentPage > 1) { currentPage--; runCompare(false, false); } });
+    pgNext.addEventListener('click', (e) => { e.preventDefault(); currentPage++; runCompare(false, false); });
+    pgLast.addEventListener('click', (e) => { e.preventDefault(); currentPage = 999999; runCompare(false, false); });
+
+    loadMonths();
+</script>
+</body>
+</html>
