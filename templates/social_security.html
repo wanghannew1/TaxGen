@@ -1,0 +1,316 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>历史社保数据管理 - 个税填报服务</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+    <style>
+        body { background: #f5f6fa; overflow-x: hidden; }
+        .container { max-width: 1800px; }
+        .card { margin-bottom: 1rem; box-shadow: 0 1px 3px rgba(0,0,0,.1); }
+        #errorBox { display: none; }
+        .status-badge { font-size: 0.85rem; }
+    </style>
+</head>
+<body>
+<nav class="navbar navbar-dark bg-primary">
+    <div class="container" style="max-width: 1800px;">
+        <span class="navbar-brand">个税填报服务</span>
+    </div>
+</nav>
+
+<div class="container py-3" style="max-width: 1800px;">
+    <div class="d-flex gap-2 mb-3 flex-wrap">
+        <a href="/" class="btn btn-outline-primary">报税数据生成</a>
+        <a href="/tax-return" class="btn btn-outline-primary">报税状态统计</a>
+        <a href="/payroll-records" class="btn btn-outline-primary">工资发放情况查询</a>
+        <a href="/personnel-compare" class="btn btn-outline-success">增减员比对</a>
+        <a href="/special-units" class="btn btn-outline-primary">特殊结算单元配置</a>
+        <a href="/filing-history" class="btn btn-outline-primary">历史申报库</a>
+        <a href="/tax-adjust" class="btn btn-outline-primary">多退少补</a>
+        <a href="/social-security" class="btn btn-primary active">历史社保数据管理</a>
+    </div>
+
+    <div class="card">
+        <div class="card-header"><strong>历史社保数据导入状态</strong></div>
+        <div class="card-body">
+            <div class="row g-3 mb-3 align-items-center">
+                <div class="col-md-3">
+                    <span class="badge bg-info status-badge">总条数</span>
+                    <span id="statusTotal" class="fs-4 fw-bold text-primary">-</span>
+                </div>
+                <div class="col-md-3">
+                    <span class="badge bg-secondary status-badge">最近导入</span>
+                    <span id="statusLatest" class="fs-5 text-muted">-</span>
+                </div>
+                <div class="col-md-3">
+                    <span class="badge bg-success status-badge">所属月份范围</span>
+                    <span id="statusMonthRange" class="fs-5 text-muted">-</span>
+                </div>
+                <div class="col-md-3">
+                    <div class="d-flex gap-2">
+                        <button id="btnRefreshStatus" class="btn btn-outline-secondary btn-sm">刷新</button>
+                        <a href="/api/social-security/template" class="btn btn-outline-warning btn-sm">下载导入模板</a>
+                    </div>
+                </div>
+            </div>
+            <div id="statusBySource" class="mb-2"></div>
+        </div>
+    </div>
+
+    <div class="card">
+        <div class="card-header"><strong>导入历史社保数据</strong></div>
+        <div class="card-body">
+            <div class="alert alert-info" style="font-size: 0.9rem;">
+                支持从个税端导出的 <code>税款计算_工资薪金所得.xls</code> 中提取五险一金数据并导入。
+                建议按月份导入（如 202607、202608、202609），覆盖式更新（相同证件号+所属月份+单元代码的记录会被更新）。
+                导入后业务人员可在「跨月合并确认」时核对某人某月的实际社保缴费值，避免 TC93 表数据与社保端不一致导致重复扣除或漏报。
+            </div>
+            <div class="row g-2 align-items-end mb-3">
+                <div class="col-md-4">
+                    <label class="form-label">数据来源标识</label>
+                    <input type="text" id="importSource" class="form-control" value="excel" placeholder="如 excel">
+                </div>
+                <div class="col-md-5">
+                    <label class="form-label">选择 Excel 文件</label>
+                    <input type="file" id="importFile" accept=".xlsx,.xls" class="form-control">
+                </div>
+                <div class="col-md-3">
+                    <button id="btnImport" class="btn btn-primary w-100">导入数据</button>
+                </div>
+            </div>
+            <div id="importMsg" class="text-muted mb-2" style="font-size: 0.85rem;"></div>
+            <div id="errorBox" class="alert alert-danger mt-2"></div>
+        </div>
+    </div>
+
+    <div class="card">
+        <div class="card-header"><strong>社保数据查询与管理</strong></div>
+        <div class="card-body">
+            <div class="row g-2 align-items-end mb-3">
+                <div class="col-md-3">
+                    <label class="form-label">证件号</label>
+                    <input type="text" id="queryCert" class="form-control" placeholder="如 220102198202104226">
+                </div>
+                <div class="col-md-3">
+                    <label class="form-label">所属月份</label>
+                    <input type="number" id="queryMonth" class="form-control" placeholder="如 202609">
+                </div>
+                <div class="col-md-3">
+                    <label class="form-label">结算单元代码</label>
+                    <input type="number" id="queryUnit" class="form-control" placeholder="如 37327">
+                </div>
+                <div class="col-md-3">
+                    <div class="d-flex gap-2">
+                        <button id="btnQuery" class="btn btn-outline-info w-100">查询</button>
+                        <button id="btnClear" class="btn btn-outline-secondary w-100">清空</button>
+                    </div>
+                </div>
+            </div>
+            <div class="d-flex gap-2 mb-2 flex-wrap">
+                <button id="btnDeleteSelected" class="btn btn-outline-danger btn-sm disabled">删除选中</button>
+                <button id="btnDeleteAll" class="btn btn-outline-danger btn-sm">清空全部数据</button>
+            </div>
+            <div id="queryErrorBox" class="alert alert-danger mt-2"></div>
+            <div class="table-responsive">
+                <table class="table table-striped table-hover">
+                    <thead>
+                        <tr>
+                            <th style="width:30px;"><input type="checkbox" id="selectAll"></th>
+                            <th>证件号</th>
+                            <th>姓名</th>
+                            <th>所属月份</th>
+                            <th>养老保险费</th>
+                            <th>医疗保险费</th>
+                            <th>失业保险费</th>
+                            <th>住房公积金</th>
+                            <th>结算单元代码</th>
+                            <th>结算单元名称</th>
+                            <th>数据来源</th>
+                            <th>导入时间</th>
+                        </tr>
+                    </thead>
+                    <tbody id="dataList"></tbody>
+                </table>
+            </div>
+            <div id="emptyState" class="text-muted text-center py-3">暂无数据</div>
+            <div id="pagination" class="mt-2"></div>
+        </div>
+    </div>
+</div>
+
+<script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
+<script>
+    const statusTotal = document.getElementById('statusTotal');
+    const statusLatest = document.getElementById('statusLatest');
+    const statusMonthRange = document.getElementById('statusMonthRange');
+    const statusBySource = document.getElementById('statusBySource');
+    const btnRefreshStatus = document.getElementById('btnRefreshStatus');
+    const importSource = document.getElementById('importSource');
+    const importFile = document.getElementById('importFile');
+    const btnImport = document.getElementById('btnImport');
+    const importMsg = document.getElementById('importMsg');
+    const errorBox = document.getElementById('errorBox');
+    const queryCert = document.getElementById('queryCert');
+    const queryMonth = document.getElementById('queryMonth');
+    const queryUnit = document.getElementById('queryUnit');
+    const btnQuery = document.getElementById('btnQuery');
+    const btnClear = document.getElementById('btnClear');
+    const queryErrorBox = document.getElementById('queryErrorBox');
+    const dataList = document.getElementById('dataList');
+    const emptyState = document.getElementById('emptyState');
+    const selectAll = document.getElementById('selectAll');
+    const btnDeleteSelected = document.getElementById('btnDeleteSelected');
+    const btnDeleteAll = document.getElementById('btnDeleteAll');
+
+    function showError(msg) { errorBox.textContent = msg; errorBox.style.display = 'block'; }
+    function hideError() { errorBox.style.display = 'none'; }
+    function showQueryError(msg) { queryErrorBox.textContent = msg; queryErrorBox.style.display = 'block'; }
+    function hideQueryError() { queryErrorBox.style.display = 'none'; }
+
+    async function loadStatus() {
+        try {
+            const resp = await fetch('/api/social-security/status');
+            if (!resp.ok) throw new Error('加载状态失败');
+            const data = await resp.json();
+            statusTotal.textContent = data.total || 0;
+            statusLatest.textContent = data.latest_import || '-';
+            if (data.month_min && data.month_max) {
+                statusMonthRange.textContent = `${data.month_min} ~ ${data.month_max}`;
+            } else {
+                statusMonthRange.textContent = '-';
+            }
+            if (data.by_source && Object.keys(data.by_source).length > 0) {
+                statusBySource.innerHTML = Object.entries(data.by_source).map(([src, cnt]) =>
+                    `<span class="badge bg-light text-dark me-1">${src}: ${cnt}条</span>`).join(' ');
+            } else {
+                statusBySource.innerHTML = '<span class="text-muted">暂无数据</span>';
+            }
+        } catch (e) {
+            showError(e.message);
+        }
+    }
+
+    async function loadData() {
+        hideQueryError();
+        const params = new URLSearchParams();
+        if (queryCert.value) params.append('cert_no', queryCert.value);
+        if (queryMonth.value) params.append('salary_month', queryMonth.value);
+        if (queryUnit.value) params.append('unit_code', queryUnit.value);
+        params.append('limit', 200);
+        try {
+            const resp = await fetch(`/api/social-security/query?${params}`);
+            if (!resp.ok) throw new Error('查询失败');
+            const data = await resp.json();
+            const rows = data.rows || [];
+            emptyState.style.display = rows.length === 0 ? 'block' : 'none';
+            dataList.innerHTML = rows.map((r, i) => `
+                <tr>
+                    <td><input type="checkbox" class="rowCheck" value="${r.id}"></td>
+                    <td>${r.cert_no}</td>
+                    <td>${r.name}</td>
+                    <td>${r.salary_month}</td>
+                    <td>${(r.pension_insurance || 0).toFixed(2)}</td>
+                    <td>${(r.medical_insurance || 0).toFixed(2)}</td>
+                    <td>${(r.unemployment_insurance || 0).toFixed(2)}</td>
+                    <td>${(r.housing_fund || 0).toFixed(2)}</td>
+                    <td>${r.unit_code}</td>
+                    <td>${r.unit_name}</td>
+                    <td>${r.source}</td>
+                    <td>${r.imported_at}</td>
+                </tr>
+            `).join('');
+            updateDeleteBtn();
+        } catch (e) {
+            showQueryError(e.message);
+        }
+    }
+
+    function updateDeleteBtn() {
+        const checks = document.querySelectorAll('.rowCheck:checked');
+        btnDeleteSelected.disabled = checks.length === 0;
+    }
+
+    selectAll.addEventListener('change', (e) => {
+        document.querySelectorAll('.rowCheck').forEach(cb => cb.checked = e.target.checked);
+        updateDeleteBtn();
+    });
+    dataList.addEventListener('change', updateDeleteBtn);
+
+    btnRefreshStatus.addEventListener('click', loadStatus);
+    btnQuery.addEventListener('click', loadData);
+    btnClear.addEventListener('click', () => {
+        queryCert.value = '';
+        queryMonth.value = '';
+        queryUnit.value = '';
+        loadData();
+    });
+
+    btnImport.addEventListener('click', async () => {
+        hideError();
+        importMsg.textContent = '';
+        const file = importFile.files[0];
+        if (!file) { importMsg.textContent = '请先选择文件'; importMsg.className = 'text-warning'; return; }
+        const formData = new FormData();
+        formData.append('file', file);
+        formData.append('source', importSource.value || 'excel');
+        try {
+            const resp = await fetch('/api/social-security/import', {
+                method: 'POST',
+                body: formData
+            });
+            if (!resp.ok) throw new Error('导入失败');
+            const result = await resp.json();
+            importMsg.textContent = `导入成功，共 ${result.count} 条`;
+            importMsg.className = 'text-success';
+            importFile.value = '';
+            loadStatus();
+            loadData();
+        } catch (e) {
+            showError(e.message);
+        }
+    });
+
+    btnDeleteSelected.addEventListener('click', async () => {
+        const ids = Array.from(document.querySelectorAll('.rowCheck:checked')).map(cb => cb.value);
+        if (ids.length === 0) return;
+        if (!confirm(`确定删除选中的 ${ids.length} 条记录吗？`)) return;
+        try {
+            const resp = await fetch('/api/social-security/delete', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({ids})
+            });
+            if (!resp.ok) throw new Error('删除失败');
+            const result = await resp.json();
+            loadData();
+            loadStatus();
+        } catch (e) {
+            showError(e.message);
+        }
+    });
+
+    btnDeleteAll.addEventListener('click', async () => {
+        if (!confirm('确定清空全部历史社保数据吗？此操作不可撤销。')) return;
+        try {
+            const resp = await fetch('/api/social-security/delete', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({})
+            });
+            if (!resp.ok) throw new Error('清空失败');
+            const result = await resp.json();
+            loadData();
+            loadStatus();
+        } catch (e) {
+            showError(e.message);
+        }
+    });
+
+    // 初始化
+    loadStatus();
+    loadData();
+</script>
+</body>
+</html>

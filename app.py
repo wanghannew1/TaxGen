@@ -1963,11 +1963,171 @@ def api_personnel_compare():
         return _log_api_error(e)
 
 
+@app.route("/social-security")
+def page_social_security():
+    return render_template("social_security.html")
+
+
+@app.route("/api/social-security/status", methods=["GET"])
+def api_social_security_status():
+    """获取历史社保数据导入状态 (SQLite config_db)。"""
+    try:
+        from config_db import get_social_security_history_status
+        return jsonify(get_social_security_history_status())
+    except Exception as e:
+        return _log_api_error(e)
+
+
+@app.route("/api/social-security/query", methods=["GET"])
+def api_social_security_query():
+    """查询历史社保数据 (支持 cert_no/salary_month/unit_code 过滤, SQLite config_db)。"""
+    try:
+        from config_db import query_social_security_history
+        cert_no = request.args.get("cert_no")
+        salary_month = request.args.get("salary_month")
+        unit_code = request.args.get("unit_code")
+        limit = int(request.args.get("limit") or 200)
+        sm = int(salary_month) if salary_month else None
+        uc = int(unit_code) if unit_code else None
+        rows = query_social_security_history(cert_no=cert_no, salary_month=sm, unit_code=uc, limit=limit)
+        return jsonify({"total": len(rows), "rows": rows})
+    except Exception as e:
+        return _log_api_error(e)
+
+
+@app.route("/api/social-security/import", methods=["POST"])
+def api_social_security_import():
+    """导入历史社保数据 (JSON 数组或 Excel 文件, 覆盖式更新, SQLite config_db)。
+
+    JSON Body: {"rows": [...], "source": "excel"}
+    或 multipart/form-data: file=Excel文件, source=来源标识
+    rows 每项含: cert_no/name/salary_month/pension_insurance/medical_insurance/unemployment_insurance/housing_fund/unit_code/unit_name
+    """
+    try:
+        from config_db import upsert_social_security_history
+        import xlrd
+        source = None
+        rows = None
+        if request.content_type and request.content_type.startswith('multipart/form-data'):
+            source = str(request.form.get("source") or "excel")
+            file = request.files.get("file")
+            if not file:
+                return jsonify({"error": "请选择文件"}), 400
+            # 保存到临时文件读取
+            import tempfile, os
+            tmp = tempfile.NamedTemporaryFile(delete=False, suffix=".xls")
+            file.save(tmp.name)
+            tmp.close()
+            try:
+                wb = xlrd.open_workbook(tmp.name)
+                ws = wb.sheet_by_index(0)
+                headers = [ws.cell_value(0, c) for c in range(ws.ncols)]
+                # 映射中文表头到字段名
+                header_map = {}
+                for i, h in enumerate(headers):
+                    h = str(h).strip()
+                    if h in ("证件号", "身份证", "身份证号码", "cert_no"):
+                        header_map[i] = "cert_no"
+                    elif h in ("姓名", "name"):
+                        header_map[i] = "name"
+                    elif h in ("所属月份", "salary_month", "月份"):
+                        header_map[i] = "salary_month"
+                    elif h in ("养老保险费", "养老", "pension_insurance"):
+                        header_map[i] = "pension_insurance"
+                    elif h in ("医疗保险费", "医疗", "medical_insurance"):
+                        header_map[i] = "medical_insurance"
+                    elif h in ("失业保险费", "失业", "unemployment_insurance"):
+                        header_map[i] = "unemployment_insurance"
+                    elif h in ("住房公积金", "公积金", "housing_fund"):
+                        header_map[i] = "housing_fund"
+                    elif h in ("结算单元代码", "单元代码", "unit_code"):
+                        header_map[i] = "unit_code"
+                    elif h in ("结算单元名称", "单元名称", "unit_name"):
+                        header_map[i] = "unit_name"
+                rows = []
+                for r in range(1, ws.nrows):
+                    row = {}
+                    for i, field in header_map.items():
+                        val = ws.cell_value(r, i)
+                        row[field] = val
+                    if row.get("cert_no"):
+                        rows.append(row)
+            finally:
+                os.unlink(tmp.name)
+        else:
+            data = request.get_json() or {}
+            rows = data.get("rows") or []
+            source = str(data.get("source") or "excel")
+        count = upsert_social_security_history(rows, source=source)
+        return jsonify({"ok": True, "count": count, "source": source})
+    except Exception as e:
+        return _log_api_error(e)
+
+
+@app.route("/api/social-security/delete", methods=["POST"])
+def api_social_security_delete():
+    """删除历史社保数据 (支持条件过滤或按 ID 列表删除, SQLite config_db)。
+
+    Body: {"cert_no": "...", "salary_month": 202609, "unit_code": 123, "source": "excel", "ids": [1,2,3]}
+    全部为空时清空全表。
+    """
+    try:
+        from config_db import delete_social_security_history
+        data = request.get_json() or {}
+        cert_no = data.get("cert_no")
+        salary_month = data.get("salary_month")
+        unit_code = data.get("unit_code")
+        source = data.get("source")
+        ids = data.get("ids")
+        sm = int(salary_month) if salary_month else None
+        uc = int(unit_code) if unit_code else None
+        deleted = delete_social_security_history(cert_no=cert_no, salary_month=sm, unit_code=uc, source=source, ids=ids)
+        return jsonify({"ok": True, "deleted": deleted})
+    except Exception as e:
+        return _log_api_error(e)
+
+
+@app.route("/api/social-security/template")
+def api_social_security_template():
+    """下载历史社保数据导入模板 (Excel, 9列: 证件号/姓名/所属月份/养老/医疗/失业/公积金/单元代码/单元名称)。"""
+    try:
+        from openpyxl import Workbook
+        import io
+        wb = Workbook()
+        ws = wb.active
+        ws.title = "历史社保数据模板"
+        headers = ["证件号", "姓名", "所属月份", "养老保险费", "医疗保险费", "失业保险费", "住房公积金", "结算单元代码", "结算单元名称"]
+        for col, h in enumerate(headers, 1):
+            ws.cell(row=1, column=col, value=h)
+        # 示例行
+        ws.cell(row=2, column=1, value="220102198202104226")
+        ws.cell(row=2, column=2, value="尹宁")
+        ws.cell(row=2, column=3, value=202609)
+        ws.cell(row=2, column=4, value=359.11)
+        ws.cell(row=2, column=5, value=87.86)
+        ws.cell(row=2, column=6, value=13.47)
+        ws.cell(row=2, column=7, value=277.0)
+        ws.cell(row=2, column=8, value=37327)
+        ws.cell(row=2, column=9, value="吉林大学和平校区幼儿园")
+        buf = io.BytesIO()
+        wb.save(buf)
+        buf.seek(0)
+        return send_file(
+            buf,
+            mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            as_attachment=True,
+            download_name="历史社保数据导入模板.xlsx",
+        )
+    except Exception as e:
+        return _log_api_error(e)
+
+
 init_db()
 
 # 初始化自建 SQLite 配置库 (Oracle 只读, 配置数据不入 Oracle)
 import config_db as _config_db
 _config_db.init_db()
+_config_db.init_social_security_history()
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=5000, debug=os.getenv("FLASK_DEBUG", "0") == "1")

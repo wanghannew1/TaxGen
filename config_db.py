@@ -528,3 +528,189 @@ def set_report_deadline_day(day: int) -> None:
     if not 1 <= day <= 31:
         raise ValueError("报税截止日必须为 1-31 的整数")
     set_app_config("report_deadline_day", str(day))
+
+
+# ---------------------------------------------------------------------------
+# social_security_history: 历史社保数据 (2026-11 新增)
+# 业务人员可将历史各月社保缴费明细导入本库，方便在"单月/多月"合并
+# 口径判断时核对某人某月实际社保缴费值，避免 TC93 表数据与社保端
+# 不一致导致重复扣除或漏报。全部存入 SQLite (config.db)，与 Oracle
+# 业务数据完全隔离。
+# ---------------------------------------------------------------------------
+
+def init_social_security_history() -> None:
+    """初始化历史社保数据表 (幂等)。"""
+    conn = get_db()
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS social_security_history (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            cert_no TEXT NOT NULL,
+            name TEXT DEFAULT '',
+            salary_month INTEGER NOT NULL,
+            pension_insurance REAL DEFAULT 0,
+            medical_insurance REAL DEFAULT 0,
+            unemployment_insurance REAL DEFAULT 0,
+            housing_fund REAL DEFAULT 0,
+            unit_code INTEGER DEFAULT 0,
+            unit_name TEXT DEFAULT '',
+            source TEXT DEFAULT 'manual',
+            imported_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+    """)
+    conn.execute(
+        "CREATE UNIQUE INDEX IF NOT EXISTS idx_ss_history_unique "
+        "ON social_security_history(cert_no, salary_month, unit_code)")
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_ss_history_cert_month "
+        "ON social_security_history(cert_no, salary_month)")
+    conn.commit()
+    conn.close()
+
+
+def upsert_social_security_history(rows: list, source: str = "excel") -> int:
+    """整体覆盖式导入历史社保数据 (按 cert_no+salary_month+unit_code 唯一)。
+
+    rows: List[dict], 含 cert_no/name/salary_month/pension_insurance/
+          medical_insurance/unemployment_insurance/housing_fund/
+          unit_code/unit_name。
+    先按 source 删除旧记录再批量插入 (社保数据为全量快照)。
+    返回写入条数。
+    """
+    init_social_security_history()
+    inserts = []
+    for r in rows or []:
+        cert = str(r.get("cert_no") or "").strip().upper()
+        if not cert:
+            continue
+        try:
+            month = int(r.get("salary_month") or 0)
+        except (TypeError, ValueError):
+            continue
+        if month <= 0:
+            continue
+        inserts.append((
+            cert,
+            str(r.get("name") or "").strip(),
+            month,
+            float(r.get("pension_insurance") or 0),
+            float(r.get("medical_insurance") or 0),
+            float(r.get("unemployment_insurance") or 0),
+            float(r.get("housing_fund") or 0),
+            int(r.get("unit_code") or 0),
+            str(r.get("unit_name") or "").strip(),
+            source,
+        ))
+    if not inserts:
+        return 0
+    conn = get_db()
+    conn.execute("DELETE FROM social_security_history WHERE source = ?", (source,))
+    conn.executemany("""
+        INSERT INTO social_security_history
+        (cert_no, name, salary_month, pension_insurance, medical_insurance,
+         unemployment_insurance, housing_fund, unit_code, unit_name, source, imported_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+    """, inserts)
+    conn.commit()
+    count = conn.execute("SELECT COUNT(*) FROM social_security_history WHERE source = ?", (source,)).fetchone()[0]
+    conn.close()
+    return int(count)
+
+
+def query_social_security_history(cert_no: Optional[str] = None,
+                                   salary_month: Optional[int] = None,
+                                   unit_code: Optional[int] = None,
+                                   limit: int = 200) -> list:
+    """查询历史社保数据。
+
+    可按证件号、所属月份、结算单元过滤。按 salary_month DESC, cert_no 排序。
+    """
+    init_social_security_history()
+    conn = get_db()
+    sql = """
+        SELECT id, cert_no, name, salary_month, pension_insurance, medical_insurance,
+               unemployment_insurance, housing_fund, unit_code, unit_name, source, imported_at
+        FROM social_security_history
+        WHERE 1=1
+    """
+    params = []
+    if cert_no:
+        sql += " AND UPPER(cert_no) = UPPER(?)"
+        params.append(cert_no.strip().upper())
+    if salary_month:
+        sql += " AND salary_month = ?"
+        params.append(int(salary_month))
+    if unit_code:
+        sql += " AND unit_code = ?"
+        params.append(int(unit_code))
+    sql += " ORDER BY salary_month DESC, cert_no LIMIT ?"
+    params.append(int(limit))
+    rows = conn.execute(sql, params).fetchall()
+    conn.close()
+    return [
+        {"id": r[0], "cert_no": r[1], "name": r[2], "salary_month": r[3],
+         "pension_insurance": r[4], "medical_insurance": r[5],
+         "unemployment_insurance": r[6], "housing_fund": r[7],
+         "unit_code": r[8], "unit_name": r[9], "source": r[10], "imported_at": r[11]}
+        for r in rows
+    ]
+
+
+def delete_social_security_history(cert_no: Optional[str] = None,
+                                    salary_month: Optional[int] = None,
+                                    unit_code: Optional[int] = None,
+                                    source: Optional[str] = None,
+                                    ids: Optional[list] = None) -> int:
+    """删除历史社保数据。可按条件过滤删除；全部为空时清空全表。
+
+    ids: 按主键 ID 列表删除（优先级最高）。
+    """
+    init_social_security_history()
+    conn = get_db()
+    if ids:
+        placeholders = ",".join("?" for _ in ids)
+        cursor = conn.execute(
+            f"DELETE FROM social_security_history WHERE id IN ({placeholders})", [int(i) for i in ids])
+    else:
+        sql = "DELETE FROM social_security_history WHERE 1=1"
+        params = []
+        if cert_no:
+            sql += " AND UPPER(cert_no) = UPPER(?)"
+            params.append(cert_no.strip().upper())
+        if salary_month:
+            sql += " AND salary_month = ?"
+            params.append(int(salary_month))
+        if unit_code:
+            sql += " AND unit_code = ?"
+            params.append(int(unit_code))
+        if source:
+            sql += " AND source = ?"
+            params.append(source)
+        cursor = conn.execute(sql, params)
+    conn.commit()
+    deleted = cursor.rowcount
+    conn.close()
+    return deleted
+
+
+def get_social_security_history_status() -> dict:
+    """历史社保数据导入状态: 总条数、分来源条数、最近导入时间、涉及月份范围。"""
+    init_social_security_history()
+    conn = get_db()
+    total = conn.execute("SELECT COUNT(*) FROM social_security_history").fetchone()[0]
+    by_source = {
+        str(r["source"]): int(r["n"])
+        for r in conn.execute(
+            "SELECT source, COUNT(*) AS n FROM social_security_history GROUP BY source").fetchall()
+    }
+    latest = conn.execute("SELECT MAX(imported_at) FROM social_security_history").fetchone()[0]
+    month_range = conn.execute(
+        "SELECT MIN(salary_month) AS min_m, MAX(salary_month) AS max_m FROM social_security_history").fetchone()
+    conn.close()
+    return {
+        "imported": total > 0,
+        "total": int(total),
+        "by_source": by_source,
+        "latest_import": str(latest or ""),
+        "month_min": int(month_range[0]) if month_range and month_range[0] else None,
+        "month_max": int(month_range[1]) if month_range and month_range[1] else None,
+    }
