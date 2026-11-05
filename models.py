@@ -22,7 +22,7 @@ class SalaryRecord:
     工资总额: Decimal = Decimal("0")  # ATC93AA - 本次工资总额
     独生子女费: Decimal = Decimal("0")  # ATC93W4 - 独生子女费
     采暖费: Decimal = Decimal("0")  # ATC93W21 - 采暖费
-    奖金: Decimal = Decimal("0")  # ATC93W1 - 奖金
+    奖金: Decimal = Decimal("0")  # ATC93K - 本次年终奖
 
     # 五险一金个人部分
     养老个人: Decimal = Decimal("0")  # BAA001 - 当月养老个人缴 (8%)
