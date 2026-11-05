@@ -1980,17 +1980,30 @@ def api_social_security_status():
 
 @app.route("/api/social-security/query", methods=["GET"])
 def api_social_security_query():
-    """查询历史社保数据 (支持 cert_no/salary_month/unit_code 过滤, SQLite config_db)。"""
+    """查询历史社保数据 (支持 cert_no/salary_month/unit_code 过滤与翻页, SQLite config_db)。
+
+    参数: page (1-based, 默认1), page_size (默认100, 最大1000); 兼容旧参数 limit。
+    返回: {total, page, page_size, pages, rows}
+    """
     try:
-        from config_db import query_social_security_history
+        from config_db import query_social_security_history, count_social_security_history
         cert_no = request.args.get("cert_no")
         salary_month = request.args.get("salary_month")
         unit_code = request.args.get("unit_code")
-        limit = int(request.args.get("limit") or 200)
+        page_size = int(request.args.get("page_size") or request.args.get("limit") or 100)
+        page_size = max(1, min(page_size, 1000))
+        page = max(1, int(request.args.get("page") or 1))
         sm = int(salary_month) if salary_month else None
         uc = int(unit_code) if unit_code else None
-        rows = query_social_security_history(cert_no=cert_no, salary_month=sm, unit_code=uc, limit=limit)
-        return jsonify({"total": len(rows), "rows": rows})
+        total = count_social_security_history(cert_no=cert_no, salary_month=sm, unit_code=uc)
+        pages = max(1, (total + page_size - 1) // page_size)
+        if page > pages:
+            page = pages
+        rows = query_social_security_history(
+            cert_no=cert_no, salary_month=sm, unit_code=uc,
+            limit=page_size, offset=(page - 1) * page_size)
+        return jsonify({"total": total, "page": page, "page_size": page_size,
+                        "pages": pages, "rows": rows})
     except Exception as e:
         return _log_api_error(e)
 

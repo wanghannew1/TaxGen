@@ -648,7 +648,14 @@ def init_social_security_history() -> None:
             else:
                 lit = f"'{default}'" if isinstance(default, str) else str(default)
                 conn.execute(f'ALTER TABLE social_security_history ADD COLUMN "{name}" {typ} DEFAULT {lit}')
-    # 唯一索引: 证件号码 + 派生月份 (个税端文件无单位代码, 不含 unit_code)
+    # unique index 等由 _ss_create_indexes 统一重建; renumber 后索引会随表重建丢失
+    _ss_create_indexes(conn)
+    conn.commit()
+    conn.close()
+
+
+def _ss_create_indexes(conn) -> None:
+    """创建/重建 social_security_history 索引 (幂等)。"""
     old_idx = conn.execute(
         "SELECT sql FROM sqlite_master WHERE type='index' AND name='idx_ss_history_unique'").fetchone()
     if old_idx and "cert_no" in (old_idx["sql"] or ""):
@@ -659,8 +666,23 @@ def init_social_security_history() -> None:
     conn.execute(
         'CREATE INDEX IF NOT EXISTS idx_ss_history_cert_month '
         'ON social_security_history("证件号码", salary_month)')
-    conn.commit()
-    conn.close()
+
+
+def _renumber_ss_history(conn) -> None:
+    """按当前 id 顺序 (= 导入顺序) 重排 id 为连续 1..N。
+
+    AUTOINCREMENT 在删除旧数据后不会复用 id, 多次导入会产生空洞;
+    重排后 id 连续且严格反映导入顺序, 便于与源 Excel 行序核对。
+    """
+    conn.execute(
+        "CREATE TABLE social_security_history_tmp (\n  " + _ss_table_ddl() + "\n)")
+    names = [name for name, _, _ in _SS_ALL_COLS]
+    col_sql = ", ".join(f'"{c}"' for c in names)
+    conn.execute(
+        f"INSERT INTO social_security_history_tmp ({col_sql}) "
+        f"SELECT {col_sql} FROM social_security_history ORDER BY id")
+    conn.execute("DROP TABLE social_security_history")
+    conn.execute("ALTER TABLE social_security_history_tmp RENAME TO social_security_history")
 
 
 def _ss_table_ddl() -> str:
@@ -783,6 +805,9 @@ def upsert_social_security_history(rows: list, source: str = "excel") -> int:
     conn.executemany(
         f"INSERT INTO social_security_history ({col_sql}) VALUES ({placeholders})",
         inserts)
+    # 重排 id 为连续序号 (严格反映导入顺序), 并重建索引
+    _renumber_ss_history(conn)
+    _ss_create_indexes(conn)
     conn.commit()
     count = conn.execute(
         "SELECT COUNT(*) FROM social_security_history WHERE source = ?", (source,)).fetchone()[0]
@@ -793,10 +818,11 @@ def upsert_social_security_history(rows: list, source: str = "excel") -> int:
 def query_social_security_history(cert_no: Optional[str] = None,
                                    salary_month: Optional[int] = None,
                                    unit_code: Optional[int] = None,
-                                   limit: int = 200) -> list:
+                                   limit: int = 200,
+                                   offset: int = 0) -> list:
     """查询历史社保/个税端税款计算数据。
 
-    可按证件号、所属月份、结算单元过滤。按 salary_month DESC, 证件号码 排序。
+    可按证件号、所属月份、结算单元过滤。按 id ASC 排序 (= Excel 行导入顺序)。
     返回 dict 键名 = 个税端 Excel 列名原样 + id/salary_month/unit_*/source/imported_at/raw_json。
     """
     init_social_security_history()
@@ -817,12 +843,35 @@ def query_social_security_history(cert_no: Optional[str] = None,
     if unit_code:
         sql += " AND unit_code = ?"
         params.append(int(unit_code))
-    sql += ' ORDER BY salary_month DESC, "证件号码" LIMIT ?'
+    sql += ' ORDER BY id ASC LIMIT ? OFFSET ?'
     params.append(int(limit))
+    params.append(int(offset))
     rows = conn.execute(sql, params).fetchall()
     conn.close()
     cols = ["id"] + [name for name, _, _ in _SS_ALL_COLS]
     return [dict(zip(cols, r)) for r in rows]
+
+
+def count_social_security_history(cert_no: Optional[str] = None,
+                                  salary_month: Optional[int] = None,
+                                  unit_code: Optional[int] = None) -> int:
+    """统计符合过滤条件的历史社保数据条数 (翻页用)。"""
+    init_social_security_history()
+    conn = get_db()
+    sql = "SELECT COUNT(*) FROM social_security_history WHERE 1=1"
+    params = []
+    if cert_no:
+        sql += ' AND UPPER("证件号码") = UPPER(?)'
+        params.append(cert_no.strip().upper())
+    if salary_month:
+        sql += " AND salary_month = ?"
+        params.append(int(salary_month))
+    if unit_code:
+        sql += " AND unit_code = ?"
+        params.append(int(unit_code))
+    n = conn.execute(sql, params).fetchone()[0]
+    conn.close()
+    return int(n)
 
 
 def delete_social_security_history(cert_no: Optional[str] = None,

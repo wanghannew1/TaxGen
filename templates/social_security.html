@@ -131,6 +131,26 @@
                 </table>
             </div>
             <div id="emptyState" class="text-muted text-center py-3">暂无数据</div>
+            <div class="d-flex justify-content-between align-items-center flex-wrap gap-2 mt-2">
+                <div class="d-flex align-items-center gap-2">
+                    <span class="text-muted" style="font-size:0.85rem;">共 <strong id="pgTotal">0</strong> 条</span>
+                    <select id="pgSize" class="form-select form-select-sm" style="width:auto;">
+                        <option value="50">50 条/页</option>
+                        <option value="100" selected>100 条/页</option>
+                        <option value="200">200 条/页</option>
+                        <option value="500">500 条/页</option>
+                    </select>
+                </div>
+                <nav>
+                    <ul class="pagination pagination-sm mb-0">
+                        <li class="page-item" id="pgFirst"><a class="page-link" href="#">首页</a></li>
+                        <li class="page-item" id="pgPrev"><a class="page-link" href="#">上一页</a></li>
+                        <li class="page-item disabled"><span class="page-link" id="pgInfo">1 / 1</span></li>
+                        <li class="page-item" id="pgNext"><a class="page-link" href="#">下一页</a></li>
+                        <li class="page-item" id="pgLast"><a class="page-link" href="#">末页</a></li>
+                    </ul>
+                </nav>
+            </div>
         </div>
     </div>
 
@@ -180,6 +200,7 @@
 <script>
     // 列定义：字段名 -> 显示名称 (字段名 = 个税端 Excel 列名原样)
     const ALL_COLUMNS = [
+        { key: 'id', label: '序号', width: '60px' },
         { key: '证件号码', label: '证件号', width: '120px' },
         { key: '姓名', label: '姓名', width: '80px' },
         { key: '证件类型', label: '证件类型', width: '80px' },
@@ -239,7 +260,7 @@
 
     // 默认显示的列（核心字段）
     const DEFAULT_VISIBLE = [
-        '证件号码', '姓名', '证件类型', 'salary_month',
+        'id', '证件号码', '姓名', '证件类型', 'salary_month',
         '本期收入', '本期基本养老保险费', '本期基本医疗保险费',
         '本期失业保险费', '本期住房公积金', '累计收入额', '已缴税额',
         '备注', 'unit_code', 'unit_name', 'source', 'imported_at'
@@ -271,6 +292,17 @@
     const btnColReset = document.getElementById('btnColReset');
     const btnColSave = document.getElementById('btnColSave');
     const rawJsonContent = document.getElementById('rawJsonContent');
+    const pgTotal = document.getElementById('pgTotal');
+    const pgSize = document.getElementById('pgSize');
+    const pgInfo = document.getElementById('pgInfo');
+    const pgFirst = document.getElementById('pgFirst');
+    const pgPrev = document.getElementById('pgPrev');
+    const pgNext = document.getElementById('pgNext');
+    const pgLast = document.getElementById('pgLast');
+
+    // 翻页状态
+    let currentPage = 1;
+    let pageSize = 100;
 
     // 列显示状态（从 localStorage 读取，或默认）；旧版键名(cert_no等)已废弃, 自动重置
     let visibleCols = JSON.parse(localStorage.getItem('ss_visible_cols') || 'null');
@@ -327,12 +359,23 @@
         if (queryCert.value) params.append('cert_no', queryCert.value);
         if (queryMonth.value) params.append('salary_month', queryMonth.value);
         if (queryUnit.value) params.append('unit_code', queryUnit.value);
-        params.append('limit', 500);
+        params.append('page', currentPage);
+        params.append('page_size', pageSize);
         try {
             const resp = await fetch(`/api/social-security/query?${params}`);
             if (!resp.ok) throw new Error('查询失败');
             const data = await resp.json();
             const rows = data.rows || [];
+            const total = data.total || 0;
+            const pages = data.pages || 1;
+            currentPage = data.page || 1;
+            // 更新翻页控件
+            pgTotal.textContent = total;
+            pgInfo.textContent = `${currentPage} / ${pages}`;
+            pgFirst.classList.toggle('disabled', currentPage <= 1);
+            pgPrev.classList.toggle('disabled', currentPage <= 1);
+            pgNext.classList.toggle('disabled', currentPage >= pages);
+            pgLast.classList.toggle('disabled', currentPage >= pages);
             emptyState.style.display = rows.length === 0 ? 'block' : 'none';
             dataList.innerHTML = rows.map((r) => {
                 const cells = ALL_COLUMNS.filter(c => visibleCols.includes(c.key)).map(c => {
@@ -399,13 +442,25 @@
     dataList.addEventListener('change', updateDeleteBtn);
 
     btnRefreshStatus.addEventListener('click', loadStatus);
-    btnQuery.addEventListener('click', loadData);
+    btnQuery.addEventListener('click', () => { currentPage = 1; loadData(); });
     btnClear.addEventListener('click', () => {
         queryCert.value = '';
         queryMonth.value = '';
         queryUnit.value = '';
+        currentPage = 1;
         loadData();
     });
+
+    // 翻页控件
+    pgSize.addEventListener('change', () => {
+        pageSize = parseInt(pgSize.value, 10) || 100;
+        currentPage = 1;
+        loadData();
+    });
+    pgFirst.addEventListener('click', (e) => { e.preventDefault(); if (currentPage > 1) { currentPage = 1; loadData(); } });
+    pgPrev.addEventListener('click', (e) => { e.preventDefault(); if (currentPage > 1) { currentPage--; loadData(); } });
+    pgNext.addEventListener('click', (e) => { e.preventDefault(); currentPage++; loadData(); });
+    pgLast.addEventListener('click', (e) => { e.preventDefault(); currentPage = 999999; loadData(); });
 
     btnImport.addEventListener('click', async () => {
         hideError();
@@ -434,6 +489,7 @@
             importMsg.textContent = `导入成功，共 ${result.count} 条${result.etax_format ? '（个税端格式）' : ''}`;
             importMsg.className = 'text-success';
             importFile.value = '';
+            currentPage = 1;
             loadStatus();
             loadData();
         } catch (e) {
