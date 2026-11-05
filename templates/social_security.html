@@ -408,6 +408,9 @@
         importMsg.textContent = '';
         const file = importFile.files[0];
         if (!file) { importMsg.textContent = '请先选择文件'; importMsg.className = 'text-warning'; return; }
+        // 禁用按钮并显示加载状态
+        btnImport.disabled = true;
+        btnImport.textContent = '导入中...';
         const formData = new FormData();
         formData.append('file', file);
         formData.append('source', importSource.value || 'excel');
@@ -431,6 +434,10 @@
             loadData();
         } catch (e) {
             showError(e.message);
+        } finally {
+            // 恢复按钮
+            btnImport.disabled = false;
+            btnImport.textContent = '导入数据';
         }
     });
 
