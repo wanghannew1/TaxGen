@@ -539,148 +539,192 @@ def set_report_deadline_day(day: int) -> None:
 # raw_json 字段保存个税端导出文件全部51列的完整原始数据。
 # ---------------------------------------------------------------------------
 
+# 个税端 税款计算_工资薪金所得.xls 的 51 列 (列名与文件完全一致, 原样建列)。
+# (列名, SQLite类型, 默认值) —— 证件号码为 NOT NULL 无默认, 特殊处理。
+_SS_ETAX_COLS = [
+    ("工号", "TEXT", ""),
+    ("姓名", "TEXT", ""),
+    ("证件类型", "TEXT", ""),
+    ("证件号码", "TEXT", None),
+    ("税款所属期起", "TEXT", ""),
+    ("税款所属期止", "TEXT", ""),
+    ("所得项目", "TEXT", ""),
+    ("本期收入", "REAL", 0),
+    ("本期费用", "REAL", 0),
+    ("本期免税收入", "REAL", 0),
+    ("本期基本养老保险费", "REAL", 0),
+    ("本期基本医疗保险费", "REAL", 0),
+    ("本期失业保险费", "REAL", 0),
+    ("本期住房公积金", "REAL", 0),
+    ("本期企业(职业)年金", "REAL", 0),
+    ("本期商业健康保险费", "REAL", 0),
+    ("本期税延养老保险费", "REAL", 0),
+    ("本期公务交通费用", "REAL", 0),
+    ("本期通讯费用", "REAL", 0),
+    ("本期律师办案费用", "REAL", 0),
+    ("本期住房公积金和年金调整", "REAL", 0),
+    ("本期西藏附加减除费用", "REAL", 0),
+    ("本期展业成本", "REAL", 0),
+    ("本期其他扣除(其他)", "REAL", 0),
+    ("累计收入额", "REAL", 0),
+    ("累计免税收入", "REAL", 0),
+    ("累计减除费用", "REAL", 0),
+    ("累计专项扣除", "REAL", 0),
+    ("累计子女教育支出扣除", "REAL", 0),
+    ("累计继续教育支出扣除", "REAL", 0),
+    ("累计住房贷款利息支出扣除", "REAL", 0),
+    ("累计住房租金支出扣除", "REAL", 0),
+    ("累计赡养老人支出扣除", "REAL", 0),
+    ("累计3岁以下婴幼儿照护", "REAL", 0),
+    ("累计个人养老金", "REAL", 0),
+    ("累计其他扣除", "REAL", 0),
+    ("累计准予扣除的捐赠", "REAL", 0),
+    ("其他单位累计收入", "REAL", 0),
+    ("其他单位累计扣除", "REAL", 0),
+    ("其他单位累计减免税额", "REAL", 0),
+    ("其他单位累计已缴税额", "REAL", 0),
+    ("累计应纳税所得额", "REAL", 0),
+    ("税率", "REAL", 0),
+    ("速算扣除数", "REAL", 0),
+    ("累计应纳税额", "REAL", 0),
+    ("累计减免税额", "REAL", 0),
+    ("累计协定减免", "REAL", 0),
+    ("累计应扣缴税额", "REAL", 0),
+    ("已缴税额", "REAL", 0),
+    ("应补(退)税额", "REAL", 0),
+    ("备注", "TEXT", ""),
+]
+# 派生/应用列 (非 Excel 列): salary_month 由「税款所属期起」转换供查询/唯一索引
+_SS_APP_COLS = [
+    ("salary_month", "INTEGER", 0),
+    ("unit_code", "INTEGER", 0),
+    ("unit_name", "TEXT", ""),
+    ("source", "TEXT", "manual"),
+    ("imported_at", "TIMESTAMP DEFAULT CURRENT_TIMESTAMP", None),
+    ("raw_json", "TEXT", ""),
+]
+_SS_ALL_COLS = _SS_ETAX_COLS + _SS_APP_COLS
+# 数值型列集合 (导入时做 float 转换)
+_SS_REAL_COLS = {name for name, typ, _ in _SS_ETAX_COLS if typ == "REAL"}
+
 def init_social_security_history() -> None:
-    """初始化历史社保/个税端税款计算数据表 (幂等)。"""
+    """初始化历史社保/个税端税款计算数据表 (幂等)。
+
+    表结构 = 个税端 税款计算_工资薪金所得.xls 的 51 列列名原样 + 派生/应用列。
+    - 结构化列名与 Excel 完全一致（含括号列名如 本期企业(职业)年金），
+      导入时零映射，杜绝键名不匹配导致的静默丢数。
+    - salary_month: 派生列 (202609 整数)，由「税款所属期起」转换，供查询/唯一索引；
+      原始日期 '2026-09-01' 同时完整保留在「税款所属期起」列。
+    - SQL 标识符统一双引号包裹（中文/括号列名必需）。
+    """
     conn = get_db()
-    conn.execute("""
-        CREATE TABLE IF NOT EXISTS social_security_history (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            cert_no TEXT NOT NULL,
-            name TEXT DEFAULT '',
-            cert_type TEXT DEFAULT '',
-            salary_month INTEGER NOT NULL,
-            salary_month_end TEXT DEFAULT '',
-            income_item TEXT DEFAULT '',
-            本期收入 REAL DEFAULT 0,
-            本期费用 REAL DEFAULT 0,
-            本期免税收入 REAL DEFAULT 0,
-            本期基本养老保险费 REAL DEFAULT 0,
-            本期基本医疗保险费 REAL DEFAULT 0,
-            本期失业保险费 REAL DEFAULT 0,
-            本期住房公积金 REAL DEFAULT 0,
-            本期企业年金 REAL DEFAULT 0,
-            本期商业健康保险费 REAL DEFAULT 0,
-            本期税延养老保险费 REAL DEFAULT 0,
-            本期公务交通费用 REAL DEFAULT 0,
-            本期通讯费用 REAL DEFAULT 0,
-            本期律师办案费用 REAL DEFAULT 0,
-            本期住房公积金和年金调整 REAL DEFAULT 0,
-            本期西藏附加减除费用 REAL DEFAULT 0,
-            本期展业成本 REAL DEFAULT 0,
-            本期其他扣除 REAL DEFAULT 0,
-            累计收入额 REAL DEFAULT 0,
-            累计免税收入 REAL DEFAULT 0,
-            累计减除费用 REAL DEFAULT 0,
-            累计专项扣除 REAL DEFAULT 0,
-            累计子女教育 REAL DEFAULT 0,
-            累计继续教育 REAL DEFAULT 0,
-            累计住房贷款利息 REAL DEFAULT 0,
-            累计住房租金 REAL DEFAULT 0,
-            累计赡养老人 REAL DEFAULT 0,
-            累计3岁以下婴幼儿照护 REAL DEFAULT 0,
-            累计个人养老金 REAL DEFAULT 0,
-            累计其他扣除 REAL DEFAULT 0,
-            累计准予扣除的捐赠 REAL DEFAULT 0,
-            其他单位累计收入 REAL DEFAULT 0,
-            其他单位累计扣除 REAL DEFAULT 0,
-            其他单位累计减免税额 REAL DEFAULT 0,
-            其他单位累计已缴税额 REAL DEFAULT 0,
-            累计应纳税所得额 REAL DEFAULT 0,
-            税率 REAL DEFAULT 0,
-            速算扣除数 REAL DEFAULT 0,
-            累计应纳税额 REAL DEFAULT 0,
-            累计减免税额 REAL DEFAULT 0,
-            累计协定减免 REAL DEFAULT 0,
-            累计应扣缴税额 REAL DEFAULT 0,
-            已缴税额 REAL DEFAULT 0,
-            应补退税额 REAL DEFAULT 0,
-            备注 TEXT DEFAULT '',
-            unit_code INTEGER DEFAULT 0,
-            unit_name TEXT DEFAULT '',
-            source TEXT DEFAULT 'manual',
-            imported_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-            raw_json TEXT DEFAULT ''
-        )
-    """)
-    # 旧库迁移: 为已存在的表补加新列 (SQLite 单次 ALTER 幂等)
     cols = {r[1] for r in conn.execute("PRAGMA table_info(social_security_history)").fetchall()}
-    _new_cols = {
-        "cert_type": "TEXT DEFAULT ''",
-        "salary_month_end": "TEXT DEFAULT ''",
-        "income_item": "TEXT DEFAULT ''",
-        "本期收入": "REAL DEFAULT 0",
-        "本期费用": "REAL DEFAULT 0",
-        "本期免税收入": "REAL DEFAULT 0",
-        "本期基本养老保险费": "REAL DEFAULT 0",
-        "本期基本医疗保险费": "REAL DEFAULT 0",
-        "本期失业保险费": "REAL DEFAULT 0",
-        "本期住房公积金": "REAL DEFAULT 0",
-        "本期企业年金": "REAL DEFAULT 0",
-        "本期商业健康保险费": "REAL DEFAULT 0",
-        "本期税延养老保险费": "REAL DEFAULT 0",
-        "本期公务交通费用": "REAL DEFAULT 0",
-        "本期通讯费用": "REAL DEFAULT 0",
-        "本期律师办案费用": "REAL DEFAULT 0",
-        "本期住房公积金和年金调整": "REAL DEFAULT 0",
-        "本期西藏附加减除费用": "REAL DEFAULT 0",
-        "本期展业成本": "REAL DEFAULT 0",
-        "本期其他扣除": "REAL DEFAULT 0",
-        "累计收入额": "REAL DEFAULT 0",
-        "累计免税收入": "REAL DEFAULT 0",
-        "累计减除费用": "REAL DEFAULT 0",
-        "累计专项扣除": "REAL DEFAULT 0",
-        "累计子女教育": "REAL DEFAULT 0",
-        "累计继续教育": "REAL DEFAULT 0",
-        "累计住房贷款利息": "REAL DEFAULT 0",
-        "累计住房租金": "REAL DEFAULT 0",
-        "累计赡养老人": "REAL DEFAULT 0",
-        "累计3岁以下婴幼儿照护": "REAL DEFAULT 0",
-        "累计个人养老金": "REAL DEFAULT 0",
-        "累计其他扣除": "REAL DEFAULT 0",
-        "累计准予扣除的捐赠": "REAL DEFAULT 0",
-        "其他单位累计收入": "REAL DEFAULT 0",
-        "其他单位累计扣除": "REAL DEFAULT 0",
-        "其他单位累计减免税额": "REAL DEFAULT 0",
-        "其他单位累计已缴税额": "REAL DEFAULT 0",
-        "累计应纳税所得额": "REAL DEFAULT 0",
-        "税率": "REAL DEFAULT 0",
-        "速算扣除数": "REAL DEFAULT 0",
-        "累计应纳税额": "REAL DEFAULT 0",
-        "累计减免税额": "REAL DEFAULT 0",
-        "累计协定减免": "REAL DEFAULT 0",
-        "累计应扣缴税额": "REAL DEFAULT 0",
-        "已缴税额": "REAL DEFAULT 0",
-        "应补退税额": "REAL DEFAULT 0",
-        "备注": "TEXT DEFAULT ''",
-        "unit_code": "INTEGER DEFAULT 0",
-        "unit_name": "TEXT DEFAULT ''",
-        "source": "TEXT DEFAULT 'manual'",
-        "raw_json": "TEXT DEFAULT ''",
-    }
-    for col, coltype in _new_cols.items():
-        if col not in cols:
-            conn.execute(f"ALTER TABLE social_security_history ADD COLUMN {col} {coltype}")
-    # 旧库迁移: 删除带 unit_code 的旧唯一索引，改为仅 cert_no+salary_month
+    if not cols:
+        # 全新建表
+        conn.execute("CREATE TABLE social_security_history (\n  " + _ss_table_ddl() + "\n)")
+    elif "cert_no" in cols:
+        # 旧结构迁移: 中文列归一化旧表 → 个税端原样列名新表
+        _migrate_ss_history_old_to_etax(conn, cols)
+        cols = {r[1] for r in conn.execute("PRAGMA table_info(social_security_history)").fetchall()}
+    elif "id" not in cols:
+        # 新列名但缺 id 主键 (中间版本): 重建表补 id, 数据同名拷贝
+        conn.execute(
+            "CREATE TABLE social_security_history_new (\n  " + _ss_table_ddl() + "\n)")
+        names = [name for name, _, _ in _SS_ALL_COLS]
+        col_sql = ", ".join(f'"{c}"' for c in names)
+        conn.execute(
+            f"INSERT INTO social_security_history_new ({col_sql}) "
+            f"SELECT {col_sql} FROM social_security_history")
+        conn.execute("DROP TABLE social_security_history")
+        conn.execute("ALTER TABLE social_security_history_new RENAME TO social_security_history")
+        cols = {r[1] for r in conn.execute("PRAGMA table_info(social_security_history)").fetchall()}
+    else:
+        # 已是新结构: 为旧版本库补加缺失列
+        for name, typ, default in _SS_ALL_COLS:
+            if name in cols:
+                continue
+            if default is None:
+                conn.execute(f'ALTER TABLE social_security_history ADD COLUMN "{name}" {typ}')
+            else:
+                lit = f"'{default}'" if isinstance(default, str) else str(default)
+                conn.execute(f'ALTER TABLE social_security_history ADD COLUMN "{name}" {typ} DEFAULT {lit}')
+    # 唯一索引: 证件号码 + 派生月份 (个税端文件无单位代码, 不含 unit_code)
     old_idx = conn.execute(
         "SELECT sql FROM sqlite_master WHERE type='index' AND name='idx_ss_history_unique'").fetchone()
-    if old_idx and 'unit_code' in (old_idx["sql"] or ""):
+    if old_idx and "cert_no" in (old_idx["sql"] or ""):
         conn.execute("DROP INDEX idx_ss_history_unique")
     conn.execute(
-        "CREATE UNIQUE INDEX IF NOT EXISTS idx_ss_history_unique "
-        "ON social_security_history(cert_no, salary_month)")
+        'CREATE UNIQUE INDEX IF NOT EXISTS idx_ss_history_unique '
+        'ON social_security_history("证件号码", salary_month)')
     conn.execute(
-        "CREATE INDEX IF NOT EXISTS idx_ss_history_cert_month "
-        "ON social_security_history(cert_no, salary_month)")
+        'CREATE INDEX IF NOT EXISTS idx_ss_history_cert_month '
+        'ON social_security_history("证件号码", salary_month)')
     conn.commit()
     conn.close()
 
 
-def upsert_social_security_history(rows: list, source: str = "excel") -> int:
-    """整体覆盖式导入历史社保/个税端税款计算数据 (按 cert_no+salary_month+unit_code 唯一)。
+def _ss_table_ddl() -> str:
+    """生成 social_security_history 建表列定义 (含 id 主键, 列名双引号包裹)。"""
+    col_defs = ['id INTEGER PRIMARY KEY AUTOINCREMENT']
+    for name, typ, default in _SS_ALL_COLS:
+        if name == "证件号码":
+            col_defs.append(f'"{name}" TEXT NOT NULL')
+        elif default is None:
+            col_defs.append(f'"{name}" {typ}')
+        else:
+            lit = f"'{default}'" if isinstance(default, str) else str(default)
+            col_defs.append(f'"{name}" {typ} DEFAULT {lit}')
+    return ",\n  ".join(col_defs)
 
-    rows: List[dict]，含 cert_no/name/cert_type/salary_month/本期收入/... 等全部字段，
-          以及 raw_json（完整原始行数据 JSON 字符串）。
-    先删除所有与即将插入的 (cert_no, salary_month, unit_code) 组合匹配的记录
+
+def _migrate_ss_history_old_to_etax(conn, old_cols: set) -> None:
+    """旧表(归一化中文列/cert_no) → 新表(个税端原样列名) 数据迁移。"""
+    # 旧列名 → 新列名 (同名列不列出)
+    old_to_new = {
+        "cert_no": "证件号码",
+        "name": "姓名",
+        "cert_type": "证件类型",
+        "salary_month_end": "税款所属期止",
+        "income_item": "所得项目",
+        "本期企业年金": "本期企业(职业)年金",
+        "本期其他扣除": "本期其他扣除(其他)",
+        "累计子女教育": "累计子女教育支出扣除",
+        "累计继续教育": "累计继续教育支出扣除",
+        "累计住房贷款利息": "累计住房贷款利息支出扣除",
+        "累计住房租金": "累计住房租金支出扣除",
+        "累计赡养老人": "累计赡养老人支出扣除",
+        "应补退税额": "应补(退)税额",
+    }
+    new_to_old = {v: k for k, v in old_to_new.items()}
+    conn.execute(
+        "CREATE TABLE social_security_history_new (\n  " + _ss_table_ddl() + "\n)")
+    # 每个新列: 旧表有对应列则拷贝, 否则用默认值
+    selects = []
+    insert_cols = []
+    for name, typ, default in _SS_ALL_COLS:
+        insert_cols.append(f'"{name}"')
+        old_col = new_to_old.get(name, name)
+        if old_col in old_cols:
+            selects.append(f'"{old_col}"')
+        elif default is None:
+            selects.append("''")
+        elif isinstance(default, str):
+            selects.append(f"'{default}'")
+        else:
+            selects.append(str(default))
+    conn.execute(
+        f"INSERT INTO social_security_history_new ({', '.join(insert_cols)}) "
+        f"SELECT {', '.join(selects)} FROM social_security_history")
+    conn.execute("DROP TABLE social_security_history")
+    conn.execute("ALTER TABLE social_security_history_new RENAME TO social_security_history")
+
+
+def upsert_social_security_history(rows: list, source: str = "excel") -> int:
+    """整体覆盖式导入历史社保/个税端税款计算数据 (按 证件号码+salary_month+unit_code 唯一)。
+
+    rows: List[dict]，键名 = 个税端 Excel 列名原样 (证件号码/姓名/本期收入/...)，
+          外加 salary_month(派生 202609)、unit_code/unit_name(旧模板)、raw_json。
+    先删除所有与即将插入的 (证件号码, salary_month, unit_code) 组合匹配的记录
     (不论 source)，再批量插入 (数据为全量快照)。
     返回写入条数。
     """
@@ -688,7 +732,7 @@ def upsert_social_security_history(rows: list, source: str = "excel") -> int:
     inserts = []
     dedup_keys = set()
     for r in rows or []:
-        cert = str(r.get("cert_no") or "").strip().upper()
+        cert = str(r.get("证件号码") or r.get("cert_no") or "").strip().upper()
         if not cert:
             continue
         try:
@@ -702,90 +746,46 @@ def upsert_social_security_history(rows: list, source: str = "excel") -> int:
         if dedup_key in dedup_keys:
             continue
         dedup_keys.add(dedup_key)
-        inserts.append((
-            cert,
-            str(r.get("name") or "").strip(),
-            str(r.get("cert_type") or "").strip(),
-            month,
-            str(r.get("salary_month_end") or "").strip(),
-            str(r.get("income_item") or "").strip(),
-            float(r.get("本期收入") or 0),
-            float(r.get("本期费用") or 0),
-            float(r.get("本期免税收入") or 0),
-            float(r.get("本期基本养老保险费") or 0),
-            float(r.get("本期基本医疗保险费") or 0),
-            float(r.get("本期失业保险费") or 0),
-            float(r.get("本期住房公积金") or 0),
-            float(r.get("本期企业年金") or 0),
-            float(r.get("本期商业健康保险费") or 0),
-            float(r.get("本期税延养老保险费") or 0),
-            float(r.get("本期公务交通费用") or 0),
-            float(r.get("本期通讯费用") or 0),
-            float(r.get("本期律师办案费用") or 0),
-            float(r.get("本期住房公积金和年金调整") or 0),
-            float(r.get("本期西藏附加减除费用") or 0),
-            float(r.get("本期展业成本") or 0),
-            float(r.get("本期其他扣除") or 0),
-            float(r.get("累计收入额") or 0),
-            float(r.get("累计免税收入") or 0),
-            float(r.get("累计减除费用") or 0),
-            float(r.get("累计专项扣除") or 0),
-            float(r.get("累计子女教育") or 0),
-            float(r.get("累计继续教育") or 0),
-            float(r.get("累计住房贷款利息") or 0),
-            float(r.get("累计住房租金") or 0),
-            float(r.get("累计赡养老人") or 0),
-            float(r.get("累计3岁以下婴幼儿照护") or 0),
-            float(r.get("累计个人养老金") or 0),
-            float(r.get("累计其他扣除") or 0),
-            float(r.get("累计准予扣除的捐赠") or 0),
-            float(r.get("其他单位累计收入") or 0),
-            float(r.get("其他单位累计扣除") or 0),
-            float(r.get("其他单位累计减免税额") or 0),
-            float(r.get("其他单位累计已缴税额") or 0),
-            float(r.get("累计应纳税所得额") or 0),
-            float(r.get("税率") or 0),
-            float(r.get("速算扣除数") or 0),
-            float(r.get("累计应纳税额") or 0),
-            float(r.get("累计减免税额") or 0),
-            float(r.get("累计协定减免") or 0),
-            float(r.get("累计应扣缴税额") or 0),
-            float(r.get("已缴税额") or 0),
-            float(r.get("应补退税额") or 0),
-            str(r.get("备注") or "").strip(),
-            unit_code,
-            str(r.get("unit_name") or "").strip(),
-            source,
-            str(r.get("raw_json") or ""),
-        ))
+        vals = []
+        for name, typ, default in _SS_ALL_COLS:
+            if name == "imported_at":
+                continue  # 由 CURRENT_TIMESTAMP 生成
+            val = r.get(name)
+            if name in _SS_REAL_COLS:
+                try:
+                    val = float(val or 0)
+                except (TypeError, ValueError):
+                    val = 0.0
+            elif name == "证件号码":
+                val = cert
+            elif name == "salary_month":
+                val = month
+            elif name == "unit_code":
+                val = unit_code
+            elif name == "source":
+                val = source
+            else:
+                val = str(val if val is not None else "").strip()
+            vals.append(val)
+        inserts.append(tuple(vals))
     if not inserts:
         return 0
     conn = get_db()
-    # 先删除所有与即将插入的 (cert_no, salary_month, unit_code) 匹配的记录（不论 source）
+    # 先删除所有与即将插入的 (证件号码, salary_month, unit_code) 匹配的记录（不论 source）
     for cert, month, unit_code in dedup_keys:
         conn.execute(
-            "DELETE FROM social_security_history WHERE cert_no = ? AND salary_month = ? AND unit_code = ?",
+            'DELETE FROM social_security_history WHERE "证件号码" = ? AND salary_month = ? AND unit_code = ?',
             (cert, month, unit_code))
-    placeholders = ",".join("?" for _ in inserts[0])
-    conn.executemany(f"""
-        INSERT INTO social_security_history
-        (cert_no, name, cert_type, salary_month, salary_month_end, income_item,
-         本期收入, 本期费用, 本期免税收入,
-         本期基本养老保险费, 本期基本医疗保险费, 本期失业保险费, 本期住房公积金,
-         本期企业年金, 本期商业健康保险费, 本期税延养老保险费,
-         本期公务交通费用, 本期通讯费用, 本期律师办案费用,
-         本期住房公积金和年金调整, 本期西藏附加减除费用, 本期展业成本, 本期其他扣除,
-         累计收入额, 累计免税收入, 累计减除费用, 累计专项扣除,
-         累计子女教育, 累计继续教育, 累计住房贷款利息, 累计住房租金,
-         累计赡养老人, 累计3岁以下婴幼儿照护, 累计个人养老金, 累计其他扣除,
-         累计准予扣除的捐赠,
-         其他单位累计收入, 其他单位累计扣除, 其他单位累计减免税额, 其他单位累计已缴税额,
-         累计应纳税所得额, 税率, 速算扣除数, 累计应纳税额, 累计减免税额, 累计协定减免,
-         累计应扣缴税额, 已缴税额, 应补退税额, 备注, unit_code, unit_name, source, raw_json, imported_at)
-        VALUES ({placeholders}, CURRENT_TIMESTAMP)
-    """, inserts)
+    insert_cols = [name for name, _, _ in _SS_ALL_COLS if name != "imported_at"]
+    col_sql = ", ".join(f'"{c}"' for c in insert_cols)
+    placeholders = ",".join("?" for _ in insert_cols)
+    # imported_at 不在插入列中, 由表默认值 CURRENT_TIMESTAMP 自动生成
+    conn.executemany(
+        f"INSERT INTO social_security_history ({col_sql}) VALUES ({placeholders})",
+        inserts)
     conn.commit()
-    count = conn.execute("SELECT COUNT(*) FROM social_security_history WHERE source = ?", (source,)).fetchone()[0]
+    count = conn.execute(
+        "SELECT COUNT(*) FROM social_security_history WHERE source = ?", (source,)).fetchone()[0]
     conn.close()
     return int(count)
 
@@ -796,31 +796,20 @@ def query_social_security_history(cert_no: Optional[str] = None,
                                    limit: int = 200) -> list:
     """查询历史社保/个税端税款计算数据。
 
-    可按证件号、所属月份、结算单元过滤。按 salary_month DESC, cert_no 排序。
+    可按证件号、所属月份、结算单元过滤。按 salary_month DESC, 证件号码 排序。
+    返回 dict 键名 = 个税端 Excel 列名原样 + id/salary_month/unit_*/source/imported_at/raw_json。
     """
     init_social_security_history()
     conn = get_db()
-    sql = """
-        SELECT id, cert_no, name, cert_type, salary_month, salary_month_end, income_item,
-               本期收入, 本期费用, 本期免税收入,
-               本期基本养老保险费, 本期基本医疗保险费, 本期失业保险费, 本期住房公积金,
-               本期企业年金, 本期商业健康保险费, 本期税延养老保险费,
-               本期公务交通费用, 本期通讯费用, 本期律师办案费用,
-               本期住房公积金和年金调整, 本期西藏附加减除费用, 本期展业成本, 本期其他扣除,
-               累计收入额, 累计免税收入, 累计减除费用, 累计专项扣除,
-               累计子女教育, 累计继续教育, 累计住房贷款利息, 累计住房租金,
-               累计赡养老人, 累计3岁以下婴幼儿照护, 累计个人养老金, 累计其他扣除,
-               累计准予扣除的捐赠,
-               其他单位累计收入, 其他单位累计扣除, 其他单位累计减免税额, 其他单位累计已缴税额,
-               累计应纳税所得额, 税率, 速算扣除数, 累计应纳税额, 累计减免税额, 累计协定减免,
-               累计应扣缴税额, 已缴税额, 应补退税额, 备注, unit_code, unit_name,
-               source, imported_at, raw_json
+    select_cols = ["id"] + [f'"{name}"' for name, _, _ in _SS_ALL_COLS]
+    sql = f"""
+        SELECT {', '.join(select_cols)}
         FROM social_security_history
         WHERE 1=1
     """
     params = []
     if cert_no:
-        sql += " AND UPPER(cert_no) = UPPER(?)"
+        sql += ' AND UPPER("证件号码") = UPPER(?)'
         params.append(cert_no.strip().upper())
     if salary_month:
         sql += " AND salary_month = ?"
@@ -828,24 +817,11 @@ def query_social_security_history(cert_no: Optional[str] = None,
     if unit_code:
         sql += " AND unit_code = ?"
         params.append(int(unit_code))
-    sql += " ORDER BY salary_month DESC, cert_no LIMIT ?"
+    sql += ' ORDER BY salary_month DESC, "证件号码" LIMIT ?'
     params.append(int(limit))
     rows = conn.execute(sql, params).fetchall()
     conn.close()
-    cols = ["id", "cert_no", "name", "cert_type", "salary_month", "salary_month_end",
-            "income_item", "本期收入", "本期费用", "本期免税收入",
-            "本期基本养老保险费", "本期基本医疗保险费", "本期失业保险费", "本期住房公积金",
-            "本期企业年金", "本期商业健康保险费", "本期税延养老保险费",
-            "本期公务交通费用", "本期通讯费用", "本期律师办案费用",
-            "本期住房公积金和年金调整", "本期西藏附加减除费用", "本期展业成本", "本期其他扣除",
-            "累计收入额", "累计免税收入", "累计减除费用", "累计专项扣除",
-            "累计子女教育", "累计继续教育", "累计住房贷款利息", "累计住房租金",
-            "累计赡养老人", "累计3岁以下婴幼儿照护", "累计个人养老金", "累计其他扣除",
-            "累计准予扣除的捐赠",
-            "其他单位累计收入", "其他单位累计扣除", "其他单位累计减免税额", "其他单位累计已缴税额",
-            "累计应纳税所得额", "税率", "速算扣除数", "累计应纳税额", "累计减免税额", "累计协定减免",
-            "累计应扣缴税额", "已缴税额", "应补退税额", "备注", "unit_code", "unit_name",
-            "source", "imported_at", "raw_json"]
+    cols = ["id"] + [name for name, _, _ in _SS_ALL_COLS]
     return [dict(zip(cols, r)) for r in rows]
 
 
@@ -868,7 +844,7 @@ def delete_social_security_history(cert_no: Optional[str] = None,
         sql = "DELETE FROM social_security_history WHERE 1=1"
         params = []
         if cert_no:
-            sql += " AND UPPER(cert_no) = UPPER(?)"
+            sql += ' AND UPPER("证件号码") = UPPER(?)'
             params.append(cert_no.strip().upper())
         if salary_month:
             sql += " AND salary_month = ?"

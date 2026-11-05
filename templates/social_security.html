@@ -178,14 +178,15 @@
 
 <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
 <script>
-    // 列定义：字段名 -> 显示名称
+    // 列定义：字段名 -> 显示名称 (字段名 = 个税端 Excel 列名原样)
     const ALL_COLUMNS = [
-        { key: 'cert_no', label: '证件号', width: '120px' },
-        { key: 'name', label: '姓名', width: '80px' },
-        { key: 'cert_type', label: '证件类型', width: '80px' },
+        { key: '证件号码', label: '证件号', width: '120px' },
+        { key: '姓名', label: '姓名', width: '80px' },
+        { key: '证件类型', label: '证件类型', width: '80px' },
         { key: 'salary_month', label: '所属月份', width: '80px' },
-        { key: 'salary_month_end', label: '所属期止', width: '80px' },
-        { key: 'income_item', label: '所得项目', width: '100px' },
+        { key: '税款所属期起', label: '所属期起', width: '90px' },
+        { key: '税款所属期止', label: '所属期止', width: '90px' },
+        { key: '所得项目', label: '所得项目', width: '100px' },
         { key: '本期收入', label: '本期收入', width: '90px' },
         { key: '本期费用', label: '本期费用', width: '80px' },
         { key: '本期免税收入', label: '本期免税收入', width: '90px' },
@@ -193,7 +194,7 @@
         { key: '本期基本医疗保险费', label: '医疗保险费', width: '90px' },
         { key: '本期失业保险费', label: '失业保险费', width: '90px' },
         { key: '本期住房公积金', label: '住房公积金', width: '90px' },
-        { key: '本期企业年金', label: '企业年金', width: '80px' },
+        { key: '本期企业(职业)年金', label: '企业年金', width: '80px' },
         { key: '本期商业健康保险费', label: '商业健康保险', width: '100px' },
         { key: '本期税延养老保险费', label: '税延养老保险', width: '100px' },
         { key: '本期公务交通费用', label: '公务交通费用', width: '100px' },
@@ -202,16 +203,16 @@
         { key: '本期住房公积金和年金调整', label: '公积金和年金调整', width: '110px' },
         { key: '本期西藏附加减除费用', label: '西藏附加减除', width: '100px' },
         { key: '本期展业成本', label: '展业成本', width: '80px' },
-        { key: '本期其他扣除', label: '其他扣除', width: '80px' },
+        { key: '本期其他扣除(其他)', label: '其他扣除', width: '80px' },
         { key: '累计收入额', label: '累计收入额', width: '90px' },
         { key: '累计免税收入', label: '累计免税收入', width: '90px' },
         { key: '累计减除费用', label: '累计减除费用', width: '90px' },
         { key: '累计专项扣除', label: '累计专项扣除', width: '90px' },
-        { key: '累计子女教育', label: '子女教育', width: '80px' },
-        { key: '累计继续教育', label: '继续教育', width: '80px' },
-        { key: '累计住房贷款利息', label: '贷款利息', width: '80px' },
-        { key: '累计住房租金', label: '住房租金', width: '80px' },
-        { key: '累计赡养老人', label: '赡养老人', width: '80px' },
+        { key: '累计子女教育支出扣除', label: '子女教育', width: '80px' },
+        { key: '累计继续教育支出扣除', label: '继续教育', width: '80px' },
+        { key: '累计住房贷款利息支出扣除', label: '贷款利息', width: '80px' },
+        { key: '累计住房租金支出扣除', label: '住房租金', width: '80px' },
+        { key: '累计赡养老人支出扣除', label: '赡养老人', width: '80px' },
         { key: '累计3岁以下婴幼儿照护', label: '婴幼儿照护', width: '100px' },
         { key: '累计个人养老金', label: '个人养老金', width: '90px' },
         { key: '累计其他扣除', label: '其他扣除', width: '80px' },
@@ -228,7 +229,7 @@
         { key: '累计协定减免', label: '协定减免', width: '80px' },
         { key: '累计应扣缴税额', label: '累计应扣缴税额', width: '100px' },
         { key: '已缴税额', label: '已缴税额', width: '80px' },
-        { key: '应补退税额', label: '应补退税额', width: '90px' },
+        { key: '应补(退)税额', label: '应补退税额', width: '90px' },
         { key: '备注', label: '备注', width: '120px' },
         { key: 'unit_code', label: '结算单元代码', width: '100px' },
         { key: 'unit_name', label: '结算单元名称', width: '150px' },
@@ -238,7 +239,7 @@
 
     // 默认显示的列（核心字段）
     const DEFAULT_VISIBLE = [
-        'cert_no', 'name', 'cert_type', 'salary_month',
+        '证件号码', '姓名', '证件类型', 'salary_month',
         '本期收入', '本期基本养老保险费', '本期基本医疗保险费',
         '本期失业保险费', '本期住房公积金', '累计收入额', '已缴税额',
         '备注', 'unit_code', 'unit_name', 'source', 'imported_at'
@@ -271,9 +272,9 @@
     const btnColSave = document.getElementById('btnColSave');
     const rawJsonContent = document.getElementById('rawJsonContent');
 
-    // 列显示状态（从 localStorage 读取，或默认）
+    // 列显示状态（从 localStorage 读取，或默认）；旧版键名(cert_no等)已废弃, 自动重置
     let visibleCols = JSON.parse(localStorage.getItem('ss_visible_cols') || 'null');
-    if (!visibleCols || !Array.isArray(visibleCols)) {
+    if (!visibleCols || !Array.isArray(visibleCols) || visibleCols.includes('cert_no')) {
         visibleCols = [...DEFAULT_VISIBLE];
     }
 
@@ -337,7 +338,8 @@
                 const cells = ALL_COLUMNS.filter(c => visibleCols.includes(c.key)).map(c => {
                     let val = r[c.key];
                     if (val == null || val === '') val = '';
-                    if (typeof val === 'number') val = fmtNum(val);
+                    // 所属月份为整数月份(202609)，不格式化为小数
+                    if (typeof val === 'number') val = (c.key === 'salary_month') ? String(val) : fmtNum(val);
                     return `<td>${escapeHtml(val)}</td>`;
                 }).join('');
                 const rawJson = r.raw_json || '{}';

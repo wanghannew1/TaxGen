@@ -2028,39 +2028,25 @@ def api_social_security_import():
                 header_map = {}
                 for i, h in enumerate(headers):
                     if is_etax:
-                        # 个税端导出列结构映射
-                        if h == "证件号码":
-                            header_map[i] = "cert_no"
-                        elif h == "姓名":
-                            header_map[i] = "name"
-                        elif h == "税款所属期起":
-                            header_map[i] = "salary_month_raw"
-                        elif h == "本期基本养老保险费":
-                            header_map[i] = "pension_insurance"
-                        elif h == "本期基本医疗保险费":
-                            header_map[i] = "medical_insurance"
-                        elif h == "本期失业保险费":
-                            header_map[i] = "unemployment_insurance"
-                        elif h == "本期住房公积金":
-                            header_map[i] = "housing_fund"
-                        elif h == "备注":
-                            header_map[i] = "unit_name"
+                        # 个税端格式: 列名原样作为键, 与数据库列一一对应, 零映射
+                        if h:
+                            header_map[i] = h
                     else:
-                        # 兼容旧9列模板
+                        # 兼容旧9列模板: 同义词归并到个税端列名
                         if h in ("证件号", "身份证", "身份证号码", "cert_no"):
-                            header_map[i] = "cert_no"
+                            header_map[i] = "证件号码"
                         elif h in ("姓名", "name"):
-                            header_map[i] = "name"
+                            header_map[i] = "姓名"
                         elif h in ("所属月份", "salary_month", "月份"):
                             header_map[i] = "salary_month"
                         elif h in ("养老保险费", "养老", "pension_insurance"):
-                            header_map[i] = "pension_insurance"
+                            header_map[i] = "本期基本养老保险费"
                         elif h in ("医疗保险费", "医疗", "medical_insurance"):
-                            header_map[i] = "medical_insurance"
+                            header_map[i] = "本期基本医疗保险费"
                         elif h in ("失业保险费", "失业", "unemployment_insurance"):
-                            header_map[i] = "unemployment_insurance"
+                            header_map[i] = "本期失业保险费"
                         elif h in ("住房公积金", "公积金", "housing_fund"):
-                            header_map[i] = "housing_fund"
+                            header_map[i] = "本期住房公积金"
                         elif h in ("结算单元代码", "单元代码", "unit_code"):
                             header_map[i] = "unit_code"
                         elif h in ("结算单元名称", "单元名称", "unit_name"):
@@ -2069,18 +2055,28 @@ def api_social_security_import():
                 seen_keys = set()
                 for r in range(1, ws.nrows):
                     row = {}
+                    raw = {}
+                    for c_idx, h in enumerate(headers):
+                        raw[h] = ws.cell_value(r, c_idx)
                     for i, field in header_map.items():
-                        val = ws.cell_value(r, i)
-                        # 个税端所属月份是日期格式 "2026-09-01"，转为 202609
-                        if field == "salary_month_raw" and val:
-                            val = str(val)[:7].replace("-", "")
-                        row[field] = val
-                    # 兼容：将 salary_month_raw 重命名为 salary_month
-                    if "salary_month_raw" in row:
-                        row["salary_month"] = row.pop("salary_month_raw")
-                    if row.get("cert_no"):
+                        row[field] = ws.cell_value(r, i)
+                    # 派生 salary_month (202609 整数): 个税端取「税款所属期起」'2026-09-01'
+                    # 原始日期完整保留在「税款所属期起」列, 不覆盖
+                    if is_etax:
+                        period = str(row.get("税款所属期起") or "").strip()
+                        row["salary_month"] = int(period[:7].replace("-", "")) if period else 0
+                    elif row.get("salary_month"):
+                        try:
+                            row["salary_month"] = int(float(row["salary_month"]))
+                        except (TypeError, ValueError):
+                            row["salary_month"] = 0
+                    # 保存完整原始行数据
+                    row["raw_json"] = json.dumps(raw, ensure_ascii=False, default=str)
+                    cert = str(row.get("证件号码") or "").strip()
+                    if cert:
+                        row["证件号码"] = cert
                         # 去重：同一证件号+所属月份+单元代码只保留一条
-                        dedup_key = (row["cert_no"], int(row.get("salary_month") or 0), int(row.get("unit_code") or 0))
+                        dedup_key = (cert.upper(), int(row.get("salary_month") or 0), int(row.get("unit_code") or 0))
                         if dedup_key in seen_keys:
                             continue
                         seen_keys.add(dedup_key)
@@ -2091,11 +2087,32 @@ def api_social_security_import():
             data = request.get_json() or {}
             rows = data.get("rows") or []
             source = str(data.get("source") or "excel")
+            # 旧键名归一化: cert_no/name/... → 个税端 Excel 列名
+            _OLD_KEY_MAP = {
+                "cert_no": "证件号码", "name": "姓名", "cert_type": "证件类型",
+                "salary_month_end": "税款所属期止", "income_item": "所得项目",
+                "pension_insurance": "本期基本养老保险费",
+                "medical_insurance": "本期基本医疗保险费",
+                "unemployment_insurance": "本期失业保险费",
+                "housing_fund": "本期住房公积金",
+            }
+            normalized_rows = []
+            for r in rows:
+                nr = dict(r)
+                for old_k, new_k in _OLD_KEY_MAP.items():
+                    if old_k in nr and new_k not in nr:
+                        nr[new_k] = nr.pop(old_k)
+                # 派生 salary_month: 优先已有值, 否则从「税款所属期起」转换
+                if not nr.get("salary_month") and nr.get("税款所属期起"):
+                    period = str(nr["税款所属期起"]).strip()
+                    nr["salary_month"] = int(period[:7].replace("-", "")) if period else 0
+                normalized_rows.append(nr)
+            rows = normalized_rows
             # 去重：同一证件号+所属月份+单元代码只保留一条
             seen_keys = set()
             deduped_rows = []
             for r in rows:
-                cert = str(r.get("cert_no") or "").strip().upper()
+                cert = str(r.get("证件号码") or "").strip().upper()
                 if not cert:
                     continue
                 try:
