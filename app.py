@@ -2021,35 +2021,62 @@ def api_social_security_import():
             try:
                 wb = xlrd.open_workbook(tmp.name)
                 ws = wb.sheet_by_index(0)
-                headers = [ws.cell_value(0, c) for c in range(ws.ncols)]
-                # 映射中文表头到字段名
+                headers = [str(ws.cell_value(0, c)).strip() for c in range(ws.ncols)]
+                # 判断是否为个税端导出的税款计算文件（51列，含“税款所属期起”）
+                is_etax = any("税款所属期" in h for h in headers) and ws.ncols >= 14
                 header_map = {}
                 for i, h in enumerate(headers):
-                    h = str(h).strip()
-                    if h in ("证件号", "身份证", "身份证号码", "cert_no"):
-                        header_map[i] = "cert_no"
-                    elif h in ("姓名", "name"):
-                        header_map[i] = "name"
-                    elif h in ("所属月份", "salary_month", "月份"):
-                        header_map[i] = "salary_month"
-                    elif h in ("养老保险费", "养老", "pension_insurance"):
-                        header_map[i] = "pension_insurance"
-                    elif h in ("医疗保险费", "医疗", "medical_insurance"):
-                        header_map[i] = "medical_insurance"
-                    elif h in ("失业保险费", "失业", "unemployment_insurance"):
-                        header_map[i] = "unemployment_insurance"
-                    elif h in ("住房公积金", "公积金", "housing_fund"):
-                        header_map[i] = "housing_fund"
-                    elif h in ("结算单元代码", "单元代码", "unit_code"):
-                        header_map[i] = "unit_code"
-                    elif h in ("结算单元名称", "单元名称", "unit_name"):
-                        header_map[i] = "unit_name"
+                    if is_etax:
+                        # 个税端导出列结构映射
+                        if h == "证件号码":
+                            header_map[i] = "cert_no"
+                        elif h == "姓名":
+                            header_map[i] = "name"
+                        elif h == "税款所属期起":
+                            header_map[i] = "salary_month_raw"
+                        elif h == "本期基本养老保险费":
+                            header_map[i] = "pension_insurance"
+                        elif h == "本期基本医疗保险费":
+                            header_map[i] = "medical_insurance"
+                        elif h == "本期失业保险费":
+                            header_map[i] = "unemployment_insurance"
+                        elif h == "本期住房公积金":
+                            header_map[i] = "housing_fund"
+                        elif h == "备注":
+                            header_map[i] = "unit_name"
+                        # 个税端文件无单元代码，从备注或留空
+                    else:
+                        # 兼容旧9列模板
+                        if h in ("证件号", "身份证", "身份证号码", "cert_no"):
+                            header_map[i] = "cert_no"
+                        elif h in ("姓名", "name"):
+                            header_map[i] = "name"
+                        elif h in ("所属月份", "salary_month", "月份"):
+                            header_map[i] = "salary_month"
+                        elif h in ("养老保险费", "养老", "pension_insurance"):
+                            header_map[i] = "pension_insurance"
+                        elif h in ("医疗保险费", "医疗", "medical_insurance"):
+                            header_map[i] = "medical_insurance"
+                        elif h in ("失业保险费", "失业", "unemployment_insurance"):
+                            header_map[i] = "unemployment_insurance"
+                        elif h in ("住房公积金", "公积金", "housing_fund"):
+                            header_map[i] = "housing_fund"
+                        elif h in ("结算单元代码", "单元代码", "unit_code"):
+                            header_map[i] = "unit_code"
+                        elif h in ("结算单元名称", "单元名称", "unit_name"):
+                            header_map[i] = "unit_name"
                 rows = []
                 for r in range(1, ws.nrows):
                     row = {}
                     for i, field in header_map.items():
                         val = ws.cell_value(r, i)
+                        # 个税端所属月份是日期格式 "2026-09-01"，转为 202609
+                        if field == "salary_month_raw" and val:
+                            val = str(val)[:7].replace("-", "")
                         row[field] = val
+                    # 兼容：将 salary_month_raw 重命名为 salary_month
+                    if "salary_month_raw" in row:
+                        row["salary_month"] = row.pop("salary_month_raw")
                     if row.get("cert_no"):
                         rows.append(row)
             finally:
@@ -2059,7 +2086,7 @@ def api_social_security_import():
             rows = data.get("rows") or []
             source = str(data.get("source") or "excel")
         count = upsert_social_security_history(rows, source=source)
-        return jsonify({"ok": True, "count": count, "source": source})
+        return jsonify({"ok": True, "count": count, "source": source, "etax_format": is_etax})
     except Exception as e:
         return _log_api_error(e)
 
