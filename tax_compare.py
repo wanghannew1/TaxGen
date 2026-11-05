@@ -2,8 +2,11 @@
 
 口径
 ----
-- 月份: 个税端「税款所属期起」YYYYMM = TC93 工资所属年月 ATC931 (已抽样验证一致)
-- 系统侧: Oracle TC93 实时取数, 按证件号码聚合 (跨结算单元/多批次求和),
+- 月份: 个税端「税款所属期起」= 发放月 (TC8M.ATC8G7), 已用跨月发放样例验证:
+  安刚 202608 发放 202607(1140)+202608(3370), 个税端 202608 收入=4510 精确一致。
+  注意: config_db.social_security_history.salary_month 字段沿用旧名, 实为申报/发放月。
+- 系统侧: Oracle TC8M 该发放月已确认发放批次的组合 (ATC8M3=2), 取 TC93 记录后
+  按证件号码聚合 (跨工资所属月/多批次/多结算单元求和);
   本期收入用 calc_本期收入(), 五险一金取个人缴 BAA001/BAA002/BAA003/CAA002,
   免税取 ATC936, 个税取 ATC93D。
 - 个税端: config_db.social_security_history (所得项目=正常工资薪金), 一人一月一行。
@@ -84,14 +87,20 @@ def get_available_months() -> list:
 
 
 def _build_generated_side(month: int) -> dict:
-    """Oracle TC93 → 按证件号码聚合的系统生成侧数据。"""
+    """Oracle TC8M 该发放月已发批次 → TC93 记录 → 按证件号码聚合的系统生成侧数据。
+
+    关键: 个税端税款所属期 = 发放月, 与工资所属年月(ATC931)不同; 跨月发放
+    (如 202608 发 202607+202608 工资) 必须按发放月组合取数后合并, 否则会
+    把同一人的收入拆到两个系统月份, 与个税端对不上。
+    """
     from db import get_connection
-    from queries import get_salary_records
+    from queries import get_suggestions, get_salary_records_by_combos
     from templates_gen.formulas import calc_本期收入
 
     conn = get_connection()
     try:
-        records = get_salary_records(conn, month)
+        combos = get_suggestions(conn, month)
+        records = get_salary_records_by_combos(conn, combos) if combos else []
     finally:
         conn.close()
 

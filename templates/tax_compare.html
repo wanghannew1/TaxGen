@@ -45,9 +45,11 @@
         <div class="card-header"><strong>生成报税数据 vs 个税端税款计算 · 逐人核对</strong></div>
         <div class="card-body">
             <div class="alert alert-info" style="font-size: 0.9rem;">
-                以「税款所属期」月份对齐：系统侧取 Oracle TC93 当月数据并按证件号码聚合（多批次/多结算单元合并），
-                个税端取已导入的 <code>税款计算_工资薪金所得</code>（一人一行）。金额容差 0.01 元。
-                默认按差异严重程度排序；除「一致」外的差异均计入差异人数，「零收入单边」单列不计差异。
+                按「税款所属期」= 发放月对齐：系统侧取 Oracle TC8M 当月已确认发放批次（ATC8M3=2）
+                对应的 TC93 工资记录，按证件号码聚合（跨工资所属月/多批次/多结算单元合并）；
+                个税端取已导入的 <code>税款计算_工资薪金所得</code>（一人一行）。
+                金额容差 0.01 元。默认按差异严重程度排序；除「一致」外的差异均计入差异人数，
+                「零收入单边」单列不计差异。
             </div>
             <div class="row g-2 align-items-end mb-3">
                 <div class="col-md-3">
