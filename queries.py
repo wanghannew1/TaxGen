@@ -247,7 +247,7 @@ def get_salary_records(conn, month: int, filter_empty_cert: Optional[bool] = Non
           t93.ATC93AA AS 工资总额,
           t93.ATC93W4 AS 独生子女费,
           t93.ATC93W21 AS 采暖费,
-          t93.ATC93K AS 奖金,
+          t93.ATC93W1 AS 日常工资中的奖金,
           t93.ATB930 AS 结算单元,
           t93.ATC937 AS 工资发放次数,
           t93.ATC93W2 AS 加班费,
@@ -270,7 +270,8 @@ def get_salary_records(conn, month: int, filter_empty_cert: Optional[bool] = Non
           t93.ATC93BH AS 意外险个人,
           t93.ATC930 AS tc930_id,
           t93.ATB931 AS 结算单元名称,
-          t93.ATC93M AS 经济补偿金
+          t93.ATC93M AS 经济补偿金,
+          t93.ATC93K AS 本年度终奖
         FROM TC93 t93
         LEFT JOIN AC01 ac01 ON t93.AAC001 = ac01.AAC001
         WHERE t93.ATC931 = :month
@@ -296,6 +297,7 @@ def get_salary_records(conn, month: int, filter_empty_cert: Optional[bool] = Non
                 独生子女费=Decimal(str(row[9] or 0)),
                 采暖费=Decimal(str(row[10] or 0)),
                 奖金=Decimal(str(row[11] or 0)),
+                年终奖=Decimal(str(row[35] or 0)),
                 养老个人=Decimal(str(row[18] or 0)),
                 医疗个人=Decimal(str(row[19] or 0)),
                 失业个人=Decimal(str(row[20] or 0)),
@@ -349,7 +351,7 @@ def get_salary_records_by_combos(conn, combos: List[Dict],
           t93.ATC93AA AS 工资总额,
           t93.ATC93W4 AS 独生子女费,
           t93.ATC93W21 AS 采暖费,
-          t93.ATC93K AS 奖金,
+          t93.ATC93W1 AS 日常工资中的奖金,
           t93.ATB930 AS 结算单元,
           t93.ATC937 AS 工资发放次数,
           t93.ATC93W2 AS 加班费,
@@ -372,7 +374,8 @@ def get_salary_records_by_combos(conn, combos: List[Dict],
           t93.ATC93BH AS 意外险个人,
           t93.ATC930 AS tc930_id,
           t93.ATB931 AS 结算单元名称,
-          t93.ATC93M AS 经济补偿金
+          t93.ATC93M AS 经济补偿金,
+          t93.ATC93K AS 本年度终奖
         FROM TC93 t93
         LEFT JOIN AC01 ac01 ON t93.AAC001 = ac01.AAC001
         WHERE t93.ATC93G = '1'
@@ -407,6 +410,7 @@ def get_salary_records_by_combos(conn, combos: List[Dict],
                     独生子女费=Decimal(str(row[9] or 0)),
                     采暖费=Decimal(str(row[10] or 0)),
                     奖金=Decimal(str(row[11] or 0)),
+                    年终奖=Decimal(str(row[35] or 0)),
                     养老个人=Decimal(str(row[18] or 0)),
                     医疗个人=Decimal(str(row[19] or 0)),
                     失业个人=Decimal(str(row[20] or 0)),

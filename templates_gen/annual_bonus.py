@@ -26,8 +26,8 @@ def generate_annual_bonus(records: List[SalaryRecord], title: str, output_dir: s
     output_path = os.path.join(output_dir, f"全年一次性奖金收入_{timestamp}.xlsx")
     remark = extract_remark(title)
     
-    # 只包含奖金 > 0 的记录
-    bonus_records = [r for r in records if r.奖金 > 0]
+    # 只包含年终奖 > 0 的记录
+    bonus_records = [r for r in records if r.年终奖 > 0]
     
     wb = Workbook()
     ws = wb.active
@@ -48,7 +48,7 @@ def generate_annual_bonus(records: List[SalaryRecord], title: str, output_dir: s
         ws.cell(row=row, column=2, value=rec.姓名)
         ws.cell(row=row, column=3, value="居民身份证")
         ws.cell(row=row, column=4, value=rec.身份证)
-        ws.cell(row=row, column=5, value=rec.奖金)
+        ws.cell(row=row, column=5, value=rec.年终奖)
         ws.cell(row=row, column=11, value=remark)
     
     add_explanation_sheet(wb, [
