@@ -217,7 +217,11 @@ def api_merge_suggestions():
         if any(not c.get("seq") for c in combos):
             return jsonify({"error": "组合缺少批次号"}), 400
         conn = get_connection()
-        return jsonify(build_merge_suggestions(conn, pay_month, combos))
+        try:
+            from tax_forecast import build_confirm_merge_suggestions
+            return jsonify(build_confirm_merge_suggestions(conn, pay_month, combos))
+        finally:
+            conn.close()
     except Exception as e:
         return _log_api_error(e)
 
@@ -304,8 +308,12 @@ def api_merge_suggestions_export():
         if not pay_month or not combos:
             return jsonify({"error": "请选择月份并勾选待报组合"}), 400
         conn = get_connection()
-        res = build_merge_suggestions(conn, pay_month, combos)
-        return _merge_suggestions_to_xlsx(res)
+        try:
+            from tax_forecast import build_confirm_merge_suggestions
+            res = build_confirm_merge_suggestions(conn, pay_month, combos)
+            return _merge_suggestions_to_xlsx(res)
+        finally:
+            conn.close()
     except Exception as e:
         return _log_api_error(e)
 

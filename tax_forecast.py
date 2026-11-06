@@ -366,15 +366,58 @@ def _predict_merge_candidate(c: dict, ctx: dict) -> dict:
     out.update({
         "predicted": predicted,
         "default_chosen": predicted,
+        "suggested": predicted,
         "confidence": confidence,
         "prediction_rule": rule,
         "prediction_reason": reason,
         "reason": reason,
-        "suggested_label": MERGE_LABELS.get(c.get("suggested"), c.get("suggested")),
+        "suggested_label": MERGE_LABELS.get(predicted, predicted),
         "default_label": MERGE_LABELS.get(predicted, predicted),
     })
     out.update(hn)
     return out
+
+
+def _confirm_filing_map(month: int) -> dict:
+    """确认页默认建议用的上月档案：个税端导入历史优先，社保历史库兜底。"""
+    result = _filing_map(month)
+    try:
+        from tax_merge import get_filing_map as _record_map
+        record_map = _record_map(month, "税款计算")
+        if record_map:
+            result.update(record_map)
+    except Exception:
+        pass
+    return result
+
+
+def build_confirm_merge_suggestions(conn, pay_month: int, combos: list) -> dict:
+    """生成前「检查合并规则并确认」的默认建议。
+
+    已导入个税端历史（social_security_history 覆盖上一申报月）时，默认值与
+    「报税预判」页一致：用上月申报收入反推已报月份等实证规则逐人预判
+    （202604-202609 回测合并准确率约 95%），每个候选附 prediction_rule /
+    prediction_reason 便于向前端说明来源；未导入历史时保持 tax_merge
+    原保守规则（上月未找到 → 单月）。
+    """
+    from tax_merge import build_merge_suggestions
+
+    try:
+        ctx = _history_context(pay_month)
+        prev_month = ctx.get("prev_month")
+    except Exception:
+        prev_month, ctx = None, None
+    if not prev_month:
+        res = build_merge_suggestions(conn, pay_month, combos)
+        return res
+
+    res = build_merge_suggestions(
+        conn, pay_month, combos, history_month=prev_month,
+        filing_map_provider=_confirm_filing_map)
+    for c in res.get("candidates") or []:
+        c.update(_predict_merge_candidate(c, ctx))
+    res["forecast_applied"] = True
+    return res
 
 
 def _predict_zero_person(p: dict, unit: dict, ctx: dict) -> dict:
