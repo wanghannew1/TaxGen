@@ -1,0 +1,527 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>报税预判 - 个税填报服务</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+    <style>
+        body { background: #f5f6fa; overflow-x: hidden; }
+        .container { max-width: 1900px; }
+        .card { margin-bottom: 1rem; box-shadow: 0 1px 3px rgba(0,0,0,.1); }
+        .table-responsive { overflow-x: auto; }
+        .stat-card { text-align: center; }
+        .stat-card .num { font-size: 1.4rem; font-weight: 700; }
+        .stat-card .lbl { font-size: 0.8rem; color: #6c757d; }
+        .data-table td, .data-table th { white-space: nowrap; font-size: 0.82rem; }
+        .data-table td.reason { white-space: normal; min-width: 260px; max-width: 520px; }
+        .data-table td.hist { white-space: normal; min-width: 220px; max-width: 420px; }
+        .badge-high { background: #198754; }
+        .badge-medium { background: #fd7e14; }
+        .badge-low { background: #6c757d; }
+        .badge-single { background: #0d6efd; }
+        .badge-double { background: #6f42c1; }
+        .badge-skip { background: #adb5bd; color: #212529; }
+        .badge-declare { background: #198754; }
+        #backtestSamples td, #backtestSamples th { font-size: 0.8rem; white-space: nowrap; }
+        .small-muted { font-size: 0.8rem; color: #6c757d; }
+    </style>
+</head>
+<body>
+<nav class="navbar navbar-dark bg-primary">
+    <div class="container" style="max-width: 1900px;">
+        <span class="navbar-brand">个税填报服务</span>
+    </div>
+</nav>
+
+<div class="container py-3" style="max-width: 1900px;">
+    <div class="d-flex gap-2 mb-3 flex-wrap">
+        <a href="/" class="btn btn-outline-primary">报税数据生成</a>
+        <a href="/tax-return" class="btn btn-outline-primary">报税状态统计</a>
+        <a href="/payroll-records" class="btn btn-outline-primary">工资发放情况查询</a>
+        <a href="/personnel-compare" class="btn btn-outline-success">增减员比对</a>
+        <a href="/special-units" class="btn btn-outline-primary">特殊结算单元配置</a>
+        <a href="/filing-history" class="btn btn-outline-primary">历史申报库</a>
+        <a href="/tax-adjust" class="btn btn-outline-primary">多退少补</a>
+        <a href="/social-security" class="btn btn-outline-primary">历史社保数据管理</a>
+        <a href="/tax-compare" class="btn btn-outline-primary">报税数据核对</a>
+        <a href="/tax-forecast" class="btn btn-primary active">报税预判</a>
+    </div>
+
+    <div class="card">
+        <div class="card-header"><strong>下一次报税预判 · 基于历史申报规律</strong></div>
+        <div class="card-body">
+            <div class="alert alert-info mb-3" style="font-size: 0.9rem;">
+                口径：「税款所属期」= <strong>发放月</strong>（TC8M.ATC8G7）。系统侧取该发放月已确认发放批次，
+                跨工资所属月/多批次按人合并。历史样本来自已导入的个税端
+                <code>税款计算_工资薪金所得</code>（默认回看 6 个月）。
+                预判结果仅供生成前参考，标注「高/中/低」置信度与依据；历史回测展示同口径下过去月份的实际命中率。
+            </div>
+            <div class="row g-2 align-items-end">
+                <div class="col-md-3">
+                    <label class="form-label">发放月（预判目标）</label>
+                    <select id="monthSelect" class="form-select"></select>
+                </div>
+                <div class="col-md-6">
+                    <div class="d-flex gap-2 flex-wrap">
+                        <button id="btnRun" class="btn btn-primary">生成预判</button>
+                        <button id="btnRefresh" class="btn btn-outline-secondary">刷新缓存重算</button>
+                        <a id="btnExport" class="btn btn-outline-success" href="#">导出预判 Excel</a>
+                    </div>
+                </div>
+            </div>
+            <div id="loadingMsg" class="text-muted mt-2" style="display:none;"></div>
+            <div id="errorBox" class="alert alert-danger mt-2" style="display:none;"></div>
+        </div>
+    </div>
+
+    <div class="row g-2 mb-2" id="summaryRow" style="display:none;">
+        <div class="col-md-2 col-6"><div class="card stat-card"><div class="num" id="sMerge">-</div><div class="lbl">合并候选</div></div></div>
+        <div class="col-md-2 col-6"><div class="card stat-card"><div class="num text-primary" id="sMergeDouble">-</div><div class="lbl">预判多月</div></div></div>
+        <div class="col-md-2 col-6"><div class="card stat-card"><div class="num" id="sZero">-</div><div class="lbl">零申报候选</div></div></div>
+        <div class="col-md-2 col-6"><div class="card stat-card"><div class="num text-success" id="sZeroDeclare">-</div><div class="lbl">预判申报</div></div></div>
+        <div class="col-md-2 col-6"><div class="card stat-card"><div class="num" id="sRoster">-</div><div class="lbl">历史在册无工资</div></div></div>
+        <div class="col-md-2 col-6"><div class="card stat-card"><div class="num" id="sMain">-</div><div class="lbl">多单元人员</div></div></div>
+    </div>
+
+    <div class="card" id="tabsCard" style="display:none;">
+        <div class="card-header p-0">
+            <ul class="nav nav-tabs card-header-tabs px-2" id="mainTabs">
+                <li class="nav-item"><a class="nav-link active" data-tab="merge" href="#">合并预判 <span class="badge bg-secondary" id="tabMergeCount">0</span></a></li>
+                <li class="nav-item"><a class="nav-link" data-tab="zero" href="#">零申报预判 <span class="badge bg-secondary" id="tabZeroCount">0</span></a></li>
+                <li class="nav-item"><a class="nav-link" data-tab="roster" href="#">历史在册无工资 <span class="badge bg-secondary" id="tabRosterCount">0</span></a></li>
+                <li class="nav-item"><a class="nav-link" data-tab="main" href="#">主单元预判 <span class="badge bg-secondary" id="tabMainCount">0</span></a></li>
+                <li class="nav-item"><a class="nav-link" data-tab="backtest" href="#">历史回测</a></li>
+            </ul>
+        </div>
+        <div class="card-body">
+            <div id="tab-merge" class="tab-pane">
+                <div class="d-flex gap-2 mb-2 align-items-center flex-wrap">
+                    <select id="mergeConf" class="form-select form-select-sm" style="width:auto;">
+                        <option value="">全部置信度</option><option value="high">高</option><option value="medium">中</option><option value="low">低</option>
+                    </select>
+                    <select id="mergePred" class="form-select form-select-sm" style="width:auto;">
+                        <option value="">全部预判</option><option value="single">单月</option><option value="double">多月</option><option value="skip">不报</option>
+                    </select>
+                    <input id="mergeSearch" class="form-control form-control-sm" style="width:220px;" placeholder="姓名/证件号 搜索">
+                    <span class="small-muted" id="mergeCount"></span>
+                </div>
+                <div class="table-responsive">
+                    <table class="table table-sm table-hover table-bordered data-table">
+                        <thead><tr>
+                            <th>姓名</th><th>证件号</th><th>主结算单元</th><th>预判</th><th>置信度</th><th>依据</th>
+                            <th class="text-end">本期收入</th><th class="text-end">单月三险</th><th class="text-end">多月三险</th>
+                            <th>工资所属月</th><th>上期申报</th><th>历史说明</th><th>涉及结算单元</th>
+                        </tr></thead>
+                        <tbody id="mergeBody"></tbody>
+                    </table>
+                </div>
+            </div>
+
+            <div id="tab-zero" class="tab-pane" style="display:none;">
+                <div class="d-flex gap-2 mb-2 align-items-center flex-wrap">
+                    <select id="zeroCat" class="form-select form-select-sm" style="width:auto;"><option value="">全部分类</option></select>
+                    <select id="zeroPred" class="form-select form-select-sm" style="width:auto;">
+                        <option value="">全部预判</option><option value="declare">申报</option><option value="skip">不申报</option>
+                    </select>
+                    <input id="zeroSearch" class="form-control form-control-sm" style="width:220px;" placeholder="姓名/证件号 搜索">
+                    <span class="small-muted" id="zeroCount"></span>
+                </div>
+                <div class="table-responsive">
+                    <table class="table table-sm table-hover table-bordered data-table">
+                        <thead><tr>
+                            <th>姓名</th><th>证件号</th><th>结算单元</th><th>分类</th><th>预判</th><th>置信度</th><th>依据</th>
+                            <th class="text-end">收入合计</th><th>上期申报</th><th>历史说明</th><th>工资所属月</th><th>单位配置</th>
+                        </tr></thead>
+                        <tbody id="zeroBody"></tbody>
+                    </table>
+                </div>
+            </div>
+
+            <div id="tab-roster" class="tab-pane" style="display:none;">
+                <div class="d-flex gap-2 mb-2 align-items-center flex-wrap">
+                    <select id="rosterConf" class="form-select form-select-sm" style="width:auto;">
+                        <option value="">全部置信度</option><option value="high">高</option><option value="medium">中</option><option value="low">低</option>
+                    </select>
+                    <select id="rosterPred" class="form-select form-select-sm" style="width:auto;">
+                        <option value="">全部预判</option><option value="declare">申报</option><option value="skip">不申报</option>
+                    </select>
+                    <input id="rosterSearch" class="form-control form-control-sm" style="width:220px;" placeholder="姓名/证件号 搜索">
+                    <span class="small-muted" id="rosterCount"></span>
+                </div>
+                <div class="table-responsive">
+                    <table class="table table-sm table-hover table-bordered data-table">
+                        <thead><tr>
+                            <th>姓名</th><th>证件号</th><th>上期申报单位</th><th>预判</th><th>置信度</th><th>依据</th>
+                            <th class="text-end">上期收入</th><th>上期申报月</th><th>历史说明</th><th>系统信息</th>
+                        </tr></thead>
+                        <tbody id="rosterBody"></tbody>
+                    </table>
+                </div>
+            </div>
+
+            <div id="tab-main" class="tab-pane" style="display:none;">
+                <div class="d-flex gap-2 mb-2 align-items-center flex-wrap">
+                    <select id="mainConf" class="form-select form-select-sm" style="width:auto;">
+                        <option value="">全部置信度</option><option value="high">高</option><option value="medium">中</option><option value="low">低</option>
+                    </select>
+                    <input id="mainSearch" class="form-control form-control-sm" style="width:220px;" placeholder="姓名/证件号 搜索">
+                    <span class="small-muted" id="mainCount"></span>
+                </div>
+                <div class="table-responsive">
+                    <table class="table table-sm table-hover table-bordered data-table">
+                        <thead><tr>
+                            <th>姓名</th><th>证件号</th><th>预判主结算单元</th><th>置信度</th><th>依据</th>
+                            <th>历史申报单位</th><th>是否一致</th><th>工资所属月</th><th>涉及结算单元</th>
+                        </tr></thead>
+                        <tbody id="mainBody"></tbody>
+                    </table>
+                </div>
+            </div>
+
+            <div id="tab-backtest" class="tab-pane" style="display:none;">
+                <div class="d-flex gap-2 mb-2 align-items-center flex-wrap">
+                    <button id="btnBacktest" class="btn btn-outline-primary btn-sm">运行历史回测（最近6个月）</button>
+                    <a id="btnBacktestExport" class="btn btn-outline-success btn-sm" href="/api/tax-forecast/backtest/export">导出回测 Excel</a>
+                    <span class="small-muted">用该月之前的历史数据预判，再与个税端实际申报对比；首次约需 1~2 分钟。</span>
+                </div>
+                <div id="backtestLoading" class="text-muted" style="display:none;">正在回测，请稍候…</div>
+                <div id="backtestBox" style="display:none;">
+                    <div class="alert alert-secondary py-2" id="backtestOverall"></div>
+                    <div class="table-responsive mb-3">
+                        <table class="table table-sm table-bordered" id="backtestTable">
+                            <thead><tr>
+                                <th>月份</th><th class="text-end">发薪人数</th><th class="text-end">申报人数</th>
+                                <th class="text-end">合并准确率</th><th class="text-end">零申报准确率</th>
+                                <th class="text-end">历史在册准确率</th><th class="text-end">主单元准确率</th>
+                                <th class="text-end">合并可比/正确</th><th class="text-end">零申报可比/正确</th>
+                            </tr></thead>
+                            <tbody id="backtestBody"></tbody>
+                        </table>
+                    </div>
+                    <h6>历史在册/零申报分类命中率</h6>
+                    <div class="table-responsive mb-3">
+                        <table class="table table-sm table-bordered">
+                            <thead><tr><th>分类</th><th class="text-end">可比数</th><th class="text-end">正确</th><th class="text-end">准确率</th></tr></thead>
+                            <tbody id="backtestCatBody"></tbody>
+                        </table>
+                    </div>
+                    <h6>误判样例（每月最多10条）</h6>
+                    <div class="table-responsive">
+                        <table class="table table-sm table-bordered" id="backtestSamples">
+                            <thead><tr><th>月份</th><th>类型</th><th>证件号</th><th>姓名</th><th>预测</th><th>实际</th><th>说明</th></tr></thead>
+                            <tbody id="backtestSampleBody"></tbody>
+                        </table>
+                    </div>
+                </div>
+            </div>
+
+            <div class="d-flex justify-content-between align-items-center flex-wrap gap-2 mt-2" id="pager" style="display:none;">
+                <span class="small-muted">共 <strong id="pgTotal">0</strong> 条</span>
+                <div class="d-flex gap-2 align-items-center">
+                    <select id="pageSize" class="form-select form-select-sm" style="width:auto;">
+                        <option value="50">50 条/页</option><option value="100" selected>100 条/页</option><option value="200">200 条/页</option><option value="500">500 条/页</option>
+                    </select>
+                    <ul class="pagination pagination-sm mb-0">
+                        <li class="page-item" id="pgPrev"><a class="page-link" href="#">上一页</a></li>
+                        <li class="page-item disabled"><span class="page-link" id="pgInfo">1 / 1</span></li>
+                        <li class="page-item" id="pgNext"><a class="page-link" href="#">下一页</a></li>
+                    </ul>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
+<script>
+    const monthSelect = document.getElementById('monthSelect');
+    const btnRun = document.getElementById('btnRun');
+    const btnRefresh = document.getElementById('btnRefresh');
+    const btnExport = document.getElementById('btnExport');
+    const loadingMsg = document.getElementById('loadingMsg');
+    const errorBox = document.getElementById('errorBox');
+    const summaryRow = document.getElementById('summaryRow');
+    const tabsCard = document.getElementById('tabsCard');
+
+    let currentTab = 'merge';
+    let data = null;
+    const pager = {
+        merge: {page: 1, size: 100},
+        zero: {page: 1, size: 100},
+        roster: {page: 1, size: 100},
+        main: {page: 1, size: 100},
+    };
+
+    const esc = (s) => (s == null ? '' : String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;')
+        .replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&#039;'));
+    const money = (v) => (v == null || v === '' || isNaN(Number(v))) ? '' : Number(v).toFixed(2);
+    const confBadge = (c) => `<span class="badge badge-${c === 'high' ? 'high' : (c === 'medium' ? 'medium' : 'low')}">${c === 'high' ? '高' : (c === 'medium' ? '中' : '低')}</span>`;
+    const mergeBadge = (p) => {
+        const label = p === 'double' ? '多月' : (p === 'skip' ? '不报' : '单月');
+        return `<span class="badge badge-${p === 'double' ? 'double' : (p === 'skip' ? 'skip' : 'single')}">${label}</span>`;
+    };
+    const zeroBadge = (p) => `<span class="badge badge-${p === 'declare' ? 'declare' : 'skip'}">${p === 'declare' ? '申报' : '不申报'}</span>`;
+
+    function showError(msg) { errorBox.textContent = msg; errorBox.style.display = 'block'; }
+    function hideError() { errorBox.style.display = 'none'; }
+
+    async function loadMonths() {
+        try {
+            const resp = await fetch('/api/tax-forecast/months');
+            const payload = await resp.json();
+            if (!resp.ok) throw new Error(payload.error || '加载发放月失败');
+            const months = payload.months || [];
+            monthSelect.innerHTML = months.map(m =>
+                `<option value="${m.month}">${m.month}（${m.has_filing ? '已申报' : '未申报'}）</option>`).join('');
+            if (months.length) {
+                const filed = months.filter(m => m.has_filing).map(m => m.month);
+                const maxFiled = filed.length ? Math.max(...filed) : 0;
+                const next = months.filter(m => !m.has_filing && m.month > maxFiled)
+                    .map(m => m.month).sort((a, b) => a - b)[0];
+                monthSelect.value = next || months[0].month;
+                btnExport.href = `/api/tax-forecast/export?month=${monthSelect.value}`;
+            }
+        } catch (e) { showError(e.message); }
+    }
+
+    function renderSummary(s) {
+        document.getElementById('sMerge').textContent = s.merge_candidates;
+        document.getElementById('sMergeDouble').textContent = s.merge_double;
+        document.getElementById('sZero').textContent = s.zero_candidates;
+        document.getElementById('sZeroDeclare').textContent = s.zero_declare;
+        document.getElementById('sRoster').textContent = s.zero_hist_roster;
+        document.getElementById('sMain').textContent = s.multi_unit_persons;
+        document.getElementById('tabMergeCount').textContent = data.merge_candidates.length;
+        document.getElementById('tabZeroCount').textContent = data.zero_candidates.length;
+        document.getElementById('tabRosterCount').textContent = data.history_roster.length;
+        document.getElementById('tabMainCount').textContent = data.main_units.length;
+        summaryRow.style.display = 'flex';
+        tabsCard.style.display = 'block';
+    }
+
+    function filterMerge() {
+        const conf = document.getElementById('mergeConf').value;
+        const pred = document.getElementById('mergePred').value;
+        const kw = document.getElementById('mergeSearch').value.trim().toUpperCase();
+        return data.merge_candidates.filter(r =>
+            (!conf || r.confidence === conf) &&
+            (!pred || r.default_chosen === pred) &&
+            (!kw || (r.name || '').toUpperCase().includes(kw) || (r.cert_no || '').toUpperCase().includes(kw)));
+    }
+    function filterZero() {
+        const cat = document.getElementById('zeroCat').value;
+        const pred = document.getElementById('zeroPred').value;
+        const kw = document.getElementById('zeroSearch').value.trim().toUpperCase();
+        return data.zero_candidates.filter(r =>
+            (!cat || r.category === cat) &&
+            (!pred || r.default_chosen === pred) &&
+            (!kw || (r.name || '').toUpperCase().includes(kw) || (r.cert_no || '').toUpperCase().includes(kw)));
+    }
+    function filterRoster() {
+        const conf = document.getElementById('rosterConf').value;
+        const pred = document.getElementById('rosterPred').value;
+        const kw = document.getElementById('rosterSearch').value.trim().toUpperCase();
+        return data.history_roster.filter(r =>
+            (!conf || r.confidence === conf) &&
+            (!pred || r.default_chosen === pred) &&
+            (!kw || (r.name || '').toUpperCase().includes(kw) || (r.cert_no || '').toUpperCase().includes(kw)));
+    }
+    function filterMain() {
+        const conf = document.getElementById('mainConf').value;
+        const kw = document.getElementById('mainSearch').value.trim().toUpperCase();
+        return data.main_units.filter(r =>
+            (!conf || r.confidence === conf) &&
+            (!kw || (r.name || '').toUpperCase().includes(kw) || (r.cert_no || '').toUpperCase().includes(kw)));
+    }
+
+    const filters = {merge: filterMerge, zero: filterZero, roster: filterRoster, main: filterMain};
+    const tbodyIds = {merge: 'mergeBody', zero: 'zeroBody', roster: 'rosterBody', main: 'mainBody'};
+    const countIds = {merge: 'mergeCount', zero: 'zeroCount', roster: 'rosterCount', main: 'mainCount'};
+
+    function renderTab(tab) {
+        const rows = filters[tab]();
+        const p = pager[tab];
+        const pages = Math.max(1, Math.ceil(rows.length / p.size));
+        if (p.page > pages) p.page = pages;
+        const start = (p.page - 1) * p.size;
+        const slice = rows.slice(start, start + p.size);
+        const tbody = document.getElementById(tbodyIds[tab]);
+        if (tab === 'merge') {
+            tbody.innerHTML = slice.map(r => `<tr>
+                <td>${esc(r.name)}</td><td>${esc(r.cert_no)}</td><td>${esc(r.main_unit_name)}</td>
+                <td>${mergeBadge(r.default_chosen)}</td><td>${confBadge(r.confidence)}</td>
+                <td class="reason">${esc(r.reason)}</td>
+                <td class="text-end">${money(r.income_total)}</td>
+                <td class="text-end">${money(r.insurance_single)}</td>
+                <td class="text-end">${money(r.insurance_double)}</td>
+                <td>${(r.salary_months || []).join(',')}</td>
+                <td>${esc(r.prev_filing_status)}</td><td class="hist">${esc(r.history_note)}</td>
+                <td>${esc(Object.values(r.unit_names || {}).join('；'))}</td></tr>`).join('');
+        } else if (tab === 'zero') {
+            tbody.innerHTML = slice.map(r => `<tr>
+                <td>${esc(r.name)}</td><td>${esc(r.cert_no)}</td><td>${esc(r.unit_name)}</td>
+                <td>${esc(r.category_label)}</td><td>${zeroBadge(r.default_chosen)}</td>
+                <td>${confBadge(r.confidence)}</td><td class="reason">${esc(r.reason)}</td>
+                <td class="text-end">${money(r.income_total)}</td>
+                <td>${esc(r.prev_filing_status)}</td><td class="hist">${esc(r.history_note)}</td>
+                <td>${(r.salary_months || []).join(',')}</td><td>${esc(r.unit_config)}</td></tr>`).join('');
+        } else if (tab === 'roster') {
+            tbody.innerHTML = slice.map(r => `<tr>
+                <td>${esc(r.name)}</td><td>${esc(r.cert_no)}</td><td>${esc(r.unit_name)}</td>
+                <td>${zeroBadge(r.default_chosen)}</td><td>${confBadge(r.confidence)}</td>
+                <td class="reason">${esc(r.reason)}</td>
+                <td class="text-end">${money(r.last_income)}</td><td>${esc(r.last_filing_month)}</td>
+                <td class="hist">${esc(r.history_note)}</td><td>${esc(r.sys_info)}</td></tr>`).join('');
+        } else {
+            tbody.innerHTML = slice.map(r => `<tr>
+                <td>${esc(r.name)}</td><td>${esc(r.cert_no)}</td><td>${esc(r.predicted_unit_name)}</td>
+                <td>${confBadge(r.confidence)}</td><td class="reason">${esc(r.reason)}</td>
+                <td>${esc(r.history_unit)}</td>
+                <td>${r.history_match ? '<span class="text-success">是</span>' : '<span class="text-danger">否</span>'}</td>
+                <td>${(r.salary_months || []).join(',')}</td>
+                <td>${esc(Object.values(r.unit_names || {}).join('；'))}</td></tr>`).join('');
+        }
+        document.getElementById(countIds[tab]).textContent = `筛选后 ${rows.length} 条`;
+        document.getElementById('pgTotal').textContent = rows.length;
+        document.getElementById('pgInfo').textContent = `${p.page} / ${pages}`;
+        document.getElementById('pgPrev').classList.toggle('disabled', p.page <= 1);
+        document.getElementById('pgNext').classList.toggle('disabled', p.page >= pages);
+        document.getElementById('pager').style.display = 'flex';
+    }
+
+    function switchTab(tab) {
+        currentTab = tab;
+        document.querySelectorAll('#mainTabs .nav-link').forEach(a =>
+            a.classList.toggle('active', a.dataset.tab === tab));
+        for (const t of ['merge', 'zero', 'roster', 'main', 'backtest']) {
+            document.getElementById('tab-' + t).style.display = (t === tab ? 'block' : 'none');
+        }
+        document.getElementById('pager').style.display = (tab === 'backtest') ? 'none' : 'flex';
+        if (tab !== 'backtest' && data) renderTab(tab);
+    }
+
+    async function runForecast(refresh) {
+        const month = monthSelect.value;
+        if (!month) { showError('请先选择发放月'); return; }
+        hideError();
+        loadingMsg.style.display = 'block';
+        loadingMsg.textContent = '正在生成预判（首次约 20 秒，含 Oracle 取数与历史分析）…';
+        btnRun.disabled = btnRefresh.disabled = true;
+        summaryRow.style.display = 'none';
+        tabsCard.style.display = 'none';
+        try {
+            const resp = await fetch(`/api/tax-forecast/run?month=${month}${refresh ? '&refresh=1' : ''}`);
+            const payload = await resp.json();
+            if (!resp.ok || payload.error) throw new Error(payload.error || `预判失败 (HTTP ${resp.status})`);
+            data = payload;
+            for (const k of Object.keys(pager)) pager[k].page = 1;
+            const cat = document.getElementById('zeroCat');
+            const cats = [...new Set(data.zero_candidates.map(r => r.category))];
+            cat.innerHTML = '<option value="">全部分类</option>' +
+                cats.map(c => { const label = data.zero_candidates.find(r => r.category === c)?.category_label || c;
+                    return `<option value="${esc(c)}">${esc(label)}</option>`; }).join('');
+            renderSummary(data.summary);
+            renderTab(currentTab === 'backtest' ? 'merge' : currentTab);
+            switchTab(currentTab === 'backtest' ? 'merge' : currentTab);
+            btnExport.href = `/api/tax-forecast/export?month=${month}`;
+        } catch (e) {
+            showError(e.message);
+        } finally {
+            loadingMsg.style.display = 'none';
+            btnRun.disabled = btnRefresh.disabled = false;
+        }
+    }
+
+    async function runBacktest() {
+        document.getElementById('backtestLoading').style.display = 'block';
+        document.getElementById('backtestBox').style.display = 'none';
+        try {
+            const resp = await fetch('/api/tax-forecast/backtest');
+            const payload = await resp.json();
+            if (!resp.ok || payload.error) throw new Error(payload.error || '回测失败');
+            renderBacktest(payload);
+        } catch (e) { showError(e.message); }
+        finally { document.getElementById('backtestLoading').style.display = 'none'; }
+    }
+
+    function pct(v) { return v == null ? '-' : (v * 100).toFixed(1) + '%'; }
+
+    function renderBacktest(bt) {
+        const o = bt.overall;
+        document.getElementById('backtestOverall').innerHTML =
+            `<strong>整体命中率</strong>：合并 ${pct(o.merge.accuracy)}（${o.merge.correct}/${o.merge.comparable}）` +
+            ` · 零申报 ${pct(o.zero.accuracy)}（${o.zero.correct}/${o.zero.comparable}）` +
+            ` · 历史在册 ${pct(o.history_roster.accuracy)}（${o.history_roster.correct}/${o.history_roster.comparable}）` +
+            ` · 主单元 ${pct(o.main_unit.accuracy)}（${o.main_unit.correct}/${o.main_unit.comparable}）`;
+        document.getElementById('backtestBody').innerHTML = bt.months.map(r => {
+            if (r.error) return `<tr><td>${r.month}</td><td colspan="8">${esc(r.error)}</td></tr>`;
+            return `<tr>
+                <td>${r.month}</td><td class="text-end">${r.pay_persons}</td><td class="text-end">${r.filing_persons}</td>
+                <td class="text-end">${pct(r.merge.accuracy)}</td><td class="text-end">${pct(r.zero.accuracy)}</td>
+                <td class="text-end">${pct(r.history_roster.accuracy)}</td><td class="text-end">${pct(r.main_unit.accuracy)}</td>
+                <td class="text-end">${r.merge.comparable}/${r.merge.correct}</td>
+                <td class="text-end">${r.zero.comparable}/${r.zero.correct}</td></tr>`;
+        }).join('');
+        const catAgg = {};
+        for (const r of bt.months) {
+            for (const [k, v] of Object.entries(r.zero?.by_category || {})) {
+                const a = catAgg[k] || (catAgg[k] = {label: v.label, count: 0, correct: 0});
+                a.count += v.count; a.correct += v.correct;
+            }
+        }
+        document.getElementById('backtestCatBody').innerHTML = Object.values(catAgg)
+            .sort((a, b) => b.count - a.count).map(a =>
+                `<tr><td>${esc(a.label)}</td><td class="text-end">${a.count}</td>` +
+                `<td class="text-end">${a.correct}</td><td class="text-end">${pct(a.correct / a.count)}</td></tr>`).join('');
+        const samples = [];
+        for (const r of bt.months) {
+            for (const [key, label] of [['merge', '合并'], ['zero', '零申报'], ['history_roster', '历史在册'], ['main_unit', '主单元']]) {
+                for (const s of (r[key]?.samples || [])) {
+                    let detail = '';
+                    if (key === 'merge') detail = `实际三险 ${s.actual_insurance}；单月 ${s.single}；多月 ${s.double}`;
+                    else if (key === 'main_unit') detail = `预测 ${s.predicted_unit}；实际 ${s.actual_unit}`;
+                    else detail = s.history_note || '';
+                    samples.push(`<tr><td>${r.month}</td><td>${label}</td><td>${esc(s.cert_no)}</td>` +
+                        `<td>${esc(s.name)}</td><td>${esc(s.predicted || s.predicted_unit)}</td>` +
+                        `<td>${esc(s.actual_label || s.actual_unit)}</td><td>${esc(detail)}</td></tr>`);
+                }
+            }
+        }
+        document.getElementById('backtestSampleBody').innerHTML = samples.join('');
+        document.getElementById('backtestBox').style.display = 'block';
+        document.getElementById('btnBacktestExport').href = '/api/tax-forecast/backtest/export';
+    }
+
+    document.querySelectorAll('#mainTabs .nav-link').forEach(a => {
+        a.addEventListener('click', (e) => { e.preventDefault(); switchTab(a.dataset.tab); });
+    });
+    btnRun.addEventListener('click', () => runForecast(false));
+    btnRefresh.addEventListener('click', () => runForecast(true));
+    monthSelect.addEventListener('change', () => {
+        btnExport.href = `/api/tax-forecast/export?month=${monthSelect.value}`;
+    });
+    document.getElementById('btnBacktest').addEventListener('click', runBacktest);
+    ['mergeConf', 'mergePred', 'mergeSearch'].forEach(id =>
+        document.getElementById(id).addEventListener('input', () => { pager.merge.page = 1; renderTab('merge'); }));
+    ['zeroCat', 'zeroPred', 'zeroSearch'].forEach(id =>
+        document.getElementById(id).addEventListener('input', () => { pager.zero.page = 1; renderTab('zero'); }));
+    ['rosterConf', 'rosterPred', 'rosterSearch'].forEach(id =>
+        document.getElementById(id).addEventListener('input', () => { pager.roster.page = 1; renderTab('roster'); }));
+    ['mainConf', 'mainSearch'].forEach(id =>
+        document.getElementById(id).addEventListener('input', () => { pager.main.page = 1; renderTab('main'); }));
+    document.getElementById('pageSize').addEventListener('change', (e) => {
+        const size = parseInt(e.target.value, 10) || 100;
+        if (pager[currentTab]) { pager[currentTab].size = size; pager[currentTab].page = 1; renderTab(currentTab); }
+    });
+    document.getElementById('pgPrev').addEventListener('click', (e) => {
+        e.preventDefault(); if (pager[currentTab] && pager[currentTab].page > 1) { pager[currentTab].page--; renderTab(currentTab); }
+    });
+    document.getElementById('pgNext').addEventListener('click', (e) => {
+        e.preventDefault(); if (pager[currentTab]) { pager[currentTab].page++; renderTab(currentTab); }
+    });
+
+    loadMonths();
+</script>
+</body>
+</html>

@@ -233,13 +233,19 @@ def _status_of(prev):
     return "有报"  # 收入>0 但三险=0（异常档，按已报处理，不虚构三险）
 
 
-def build_merge_suggestions(conn, pay_month, combos):
+def build_merge_suggestions(conn, pay_month, combos, history_month=None,
+                            filing_map_provider=None):
     """扫描指定发放月已确认组合中的跨月合并人员，给出多月/单月判定建议。
 
     Args:
         conn: Oracle 连接（只读）
         pay_month: 发放月份（TC8M.ATC8G7），如 202606
         combos: 前端确认的组合列表，每项含 unit/salary_month/seq 等
+        history_month: 指定用于判定"上月档案"的税款所属期月份（如发放月-1）。
+            默认 None 保持原口径（取候选记录中最早的工资所属月）。
+        filing_map_provider: 自定义历史档案读取函数 month -> {cert_no: {...}}。
+            默认 None 使用 filing_record（tax_return.db）。
+            报税预判传入 social_security_history 数据源，不改变生成流程行为。
 
     "不报"可见性 (2026-09-10 用户确认, 去掉开关): 当月(发放月)无三险一金的候选
     均提供"不报"选项(can_skip=True), 不再受全局/结算单元开关控制——把报不报的
@@ -314,11 +320,14 @@ def build_merge_suggestions(conn, pay_month, combos):
         months = sorted({r.工资所属年月 for r in recs})
         if len(months) < 2:
             continue  # 不跨所属月 → 无多月/单月问题
-        pm = _prev_month_of(months)
+        pm = history_month if history_month else _prev_month_of(months)
         prev_months.add(pm)
         persons[cert] = (pm, recs)
 
-    prev_maps = {pm: get_filing_map(pm, "税款计算") for pm in prev_months}
+    if filing_map_provider is None:
+        prev_maps = {pm: get_filing_map(pm, "税款计算") for pm in prev_months}
+    else:
+        prev_maps = {pm: filing_map_provider(pm) for pm in prev_months}
     overrides = get_merge_overrides()
     pay_pattern_map = get_pay_pattern_map()
 

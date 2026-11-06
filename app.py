@@ -2259,6 +2259,85 @@ def api_tax_compare_export():
         return _log_api_error(e)
 
 
+@app.route("/tax-forecast")
+def page_tax_forecast():
+    """报税预判页: 基于历史申报规律预判合并方式/零申报/主结算单元。"""
+    return render_template("tax_forecast.html")
+
+
+@app.route("/api/tax-forecast/months")
+def api_tax_forecast_months():
+    try:
+        from tax_forecast import get_forecast_months
+        return jsonify({"months": get_forecast_months()})
+    except Exception as e:
+        return _log_api_error(e)
+
+
+@app.route("/api/tax-forecast/run")
+def api_tax_forecast_run():
+    try:
+        from tax_forecast import build_forecast
+        month = _parse_month_arg(request.args.get("month"))
+        if month is None:
+            return jsonify({"error": "请选择发放月 (YYYYMM)"}), 400
+        refresh = request.args.get("refresh") in ("1", "true", "yes")
+        return jsonify(build_forecast(month, refresh=refresh))
+    except Exception as e:
+        return _log_api_error(e)
+
+
+@app.route("/api/tax-forecast/backtest")
+def api_tax_forecast_backtest():
+    try:
+        from tax_forecast import run_backtest
+        raw = (request.args.get("months") or "").strip()
+        months = None
+        if raw:
+            months = [int(x) for x in raw.split(",") if x.strip().isdigit()]
+        refresh = request.args.get("refresh") in ("1", "true", "yes")
+        return jsonify(run_backtest(months=months, refresh=refresh))
+    except Exception as e:
+        return _log_api_error(e)
+
+
+@app.route("/api/tax-forecast/export")
+def api_tax_forecast_export():
+    try:
+        import io
+        from tax_forecast import export_excel
+        month = _parse_month_arg(request.args.get("month"))
+        if month is None:
+            return jsonify({"error": "请选择发放月 (YYYYMM)"}), 400
+        data = export_excel(month)
+        return send_file(
+            io.BytesIO(data),
+            mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            as_attachment=True,
+            download_name=f"{month}_报税预判.xlsx",
+        )
+    except Exception as e:
+        return _log_api_error(e)
+
+
+@app.route("/api/tax-forecast/backtest/export")
+def api_tax_forecast_backtest_export():
+    try:
+        import io
+        from tax_forecast import export_backtest_excel
+        raw = (request.args.get("months") or "").strip()
+        months = [int(x) for x in raw.split(",") if x.strip().isdigit()] or None
+        data = export_backtest_excel(months=months)
+        return send_file(
+            io.BytesIO(data),
+            mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            as_attachment=True,
+            download_name="报税预判_历史回测.xlsx",
+        )
+    except Exception as e:
+        return _log_api_error(e)
+
+
 init_db()
 
 # 初始化自建 SQLite 配置库 (Oracle 只读, 配置数据不入 Oracle)
