@@ -149,16 +149,33 @@ def _filing_index(refresh: bool = False) -> dict:
     return data
 
 
-def _history_context(before_month: int) -> dict:
-    """取 before_month 之前最近 N 个申报月（不含当月）作为预判历史窗口。"""
+def _history_context(before_month: int, conn=None) -> dict:
+    """取 before_month 之前最近 N 个申报月（不含当月）作为预判历史窗口。
+
+    conn 传入 Oracle 连接时，附带"上月申报窗口已结清的 TC93 卡片所属月"
+    （{cert: {(所属月, 批次)}}）与"本年度逐月对账"数据（属月→结清金额+结算窗），
+    用于精确判定上月已报月份并做自然年度漏报对账；无 conn 时置 None，
+    退化到上月申报收入金额兜底逻辑。
+    """
     idx = _filing_index()
     months = [m for m in idx["months"] if m < int(before_month)][-HISTORY_LOOKBACK:]
-    return {
+    ctx = {
         "months": months,
         "prev_month": months[-1] if months else None,
         "by_month": {m: idx["by_month"][m] for m in months},
         "unit_stats": {m: idx["unit_stats"][m] for m in months},
+        "prev_cards_months": None,
+        "cards_ytd": None,
     }
+    if ctx["prev_month"] and conn is not None:
+        try:
+            from queries import get_paid_cards_months, get_paid_cards_ytd
+            ctx["prev_cards_months"] = get_paid_cards_months(conn, int(ctx["prev_month"]))
+            ctx["cards_ytd"] = get_paid_cards_ytd(conn, int(ctx["prev_month"]))
+        except Exception:
+            ctx["prev_cards_months"] = None
+            ctx["cards_ytd"] = None
+    return ctx
 
 
 def _filing_map(month: int) -> dict:
@@ -252,19 +269,95 @@ def _candidate_month_incomes(c: dict) -> dict:
     return inc
 
 
-def _empirical_merge_rule(c: dict):
-    """按"上月申报收入覆盖了本次哪几个所属月"判定单月/多月。
+def _empirical_merge_rule(c: dict, ctx: dict = None):
+    """合并预判：TC93 卡片窗口语义优先，上月申报金额子集匹配仅作兜底。
 
-    回测（202604-202609，2050 个可比候选）合并准确率约 95%：
-    - 上月申报收入能匹配本次部分所属月 → 剩余月份才是新增；
-      新增 1 个月 → 单月，新增 >=2 个月 → 多月；
-    - 匹配不上且两个所属月不相邻（如上月已报 5 月、本次发 5+7 月）
-      且上月有申报 → 只报最近单月；
-    - 上月零申报/未找到 → 多月合并。
+    判定顺序（2026-11-06 定稿，兼容历史 94.9% 实证 + 本期补发多倍三险语义）：
+    1. 上月零申报/未找到 → 多月合并（两套语义一致）;
+    2. 上月窗口结清过本次候选的 (所属月, 批次) 卡片 → 精确已报:
+       新增 1 个月 → 单月，新增 >=2 → 多月，新增 0 → 不报/单月;
+    3. 上月窗口结清的是其他所属月或同月其他批次（固定工资跨月补发窗口，
+       如 202610 窗口结清 202608+202609 而上月申报实为 202607 月的钱）
+       → 金额撞车是误配 → 候选全部视作新增 → 多月合并（多倍三险）;
+    4. 年度逐月对账（默认来源）：今年 1 月起逐月核对"已结清卡片金额 vs
+       属期申报行金额"，找出"已发放但个税端无申报行"的漏报月；候选月命中
+       漏报月 → 多月合并补报（多倍三险）；
+    5. 上月窗口未结清该人任何卡片（发放断档/申报与发放脱钩，如上月窗口
+       无 TC93 卡片但申报仍有数据）或无映射数据 → 退回原金额子集
+       匹配兜底（202604-202609 回测实证约 95%）。
     """
     months = sorted(int(m) for m in (c.get("salary_months") or []) if m)
     if len(months) < 2:
         return None
+    cards = (ctx or {}).get("prev_cards_months", None) if ctx else None
+    if cards is not None:
+        prev_settled = set(cards.get(c["cert_no"], ()))
+        settled_months = sorted({m for m, _ in prev_settled})
+        covered = sorted({int(sl["salary_month"]) for sl in (c.get("slips") or [])
+                          if (int(sl["salary_month"]), str(sl["seq"])) in prev_settled})
+        new = [m for m in months if m not in covered]
+        shown_r = "、".join(str(m) for m in covered) or "无"
+        shown_n = "、".join(str(m) for m in new) or "无"
+        if covered:
+            # 上月窗口确实结清过本次候选的 (所属月, 批次) → 属于已报
+            if len(new) >= 2:
+                return ("double", "high", "new_months_double",
+                        f"上月申报已覆盖{shown_r}，本次新增{shown_n}共{len(new)}个月 "
+                        "→ 多月合并（多倍三险）")
+            if len(new) == 1:
+                return ("single", "medium", "new_month_single",
+                        f"上月申报已覆盖{shown_r}所属月份，仅{shown_n}新增 → 按单月报（避免重复扣除）")
+            if c.get("can_skip"):
+                return ("skip", "medium", "already_reported_skip",
+                        f"上月申报已覆盖本次全部所属月（{shown_r}）且当月无三险 → 倾向不报")
+            return ("single", "medium", "already_reported_single",
+                    f"上月申报已覆盖本次全部所属月（{shown_r}）→ 按单月报")
+        if settled_months:
+            # 上月窗口结清的是其他所属月/其他批次 → 本次候选月份均为新增
+            overlap = sorted(set(settled_months) & set(months))
+            if overlap:
+                prev_str = "、".join(str(m) for m in overlap)
+                return ("double", "high", "new_months_double",
+                        f"上月申报已结清{prev_str}的其他批次，本次候选批次均未申报 "
+                        "→ 多月合并（多倍三险）")
+            prev_str = "、".join(str(m) for m in settled_months)
+            return ("double", "high", "new_months_double",
+                    f"上月申报结清的是其他所属月（{prev_str}）的工资，本次候选{shown_n}"
+                    f"共{len(new)}个月均为未申报新增 → 多月合并（多倍三险）")
+        # prev_settled 为空：上月窗口未结清该人任何卡片（发放断档/申报与发放
+        # 可能脱钩，如魏毅型：窗口空但申报仍有数据）→ 继续年度对账/金额兜底
+
+    # 年度逐月对账 (2026-11-06 用户确认口径)：个税按自然年累计，从当年 1 月
+    # 起逐月对账——属月 M 的卡片在窗口 W≤上月结清后，个税端应存在属期 W（或 M）
+    # 的申报行；对不上且卡片金额>0 的月份即"已发放未申报"的漏报月，候选命中
+    # → 多月合并补报（多倍三险）。
+    ytd = (ctx or {}).get("cards_ytd", None) if ctx else None
+    if ytd is not None:
+        bym = (ctx or {}).get("by_month") or {}
+        cert_recon = ytd.get(c["cert_no"]) or {}
+        unreported, covered, amounts = [], [], {}
+        for m in months:
+            info = cert_recon.get(int(m))
+            if not info:
+                continue
+            amount = float(info.get("amount") or 0)
+            if amount <= 0.02:
+                continue  # 属月非今年/卡片未在上月窗口前结清 → 对账不适用
+            amounts[m] = round(amount, 2)
+            seen = False
+            for x in sorted({int(m)} | {int(w) for w in (info.get("windows") or ())}):
+                row = (bym.get(x) or {}).get(c["cert_no"])
+                if row and abs(float(row["income"]) - amount) <= 0.02:
+                    seen = True
+                    break
+            (covered if seen else unreported).append(m)
+        if unreported and [m for m in months if m in {u for u in unreported}]:
+            l_str = "、".join(str(m) for m in unreported)
+            a_str = "+".join(f"{amounts[m]:.2f}" for m in unreported if m in amounts)
+            return ("double", "high", "year_recon_multi",
+                    f"年度对账：{l_str}月份工资已发放并结清（合计{a_str}元），"
+                    f"个税端未找到对应申报记录，本次候选一并补报 → 多月合并（多倍三险）")
+
     raw_prev = c.get("prev_status")
     prev_income = float(c.get("prev_income") or 0)
     if raw_prev in ("零申报", "未找到") or prev_income <= 0:
@@ -347,7 +440,7 @@ def _predict_merge_candidate(c: dict, ctx: dict) -> dict:
             predicted, confidence, rule = "single", "low", "history_default"
             reason = "历史无申报记录，默认按单月报"
     else:
-        empirical = _empirical_merge_rule(c)
+        empirical = _empirical_merge_rule(c, ctx)
         if empirical:
             predicted, confidence, rule, reason = empirical
         elif prev_status == "零申报":
@@ -403,7 +496,7 @@ def build_confirm_merge_suggestions(conn, pay_month: int, combos: list) -> dict:
     from tax_merge import build_merge_suggestions
 
     try:
-        ctx = _history_context(pay_month)
+        ctx = _history_context(pay_month, conn)
         prev_month = ctx.get("prev_month")
     except Exception:
         prev_month, ctx = None, None
@@ -722,7 +815,7 @@ def build_forecast(pay_month: int, refresh: bool = False) -> dict:
             _CACHE[("forecast", pay_month)] = (now, result)
             return result
         records = get_salary_records_by_combos(conn, combos)
-        ctx = _history_context(pay_month)
+        ctx = _history_context(pay_month, conn)
         prev_month = ctx.get("prev_month")
 
         merge_res = build_merge_suggestions(
@@ -940,7 +1033,7 @@ def run_backtest(months=None, refresh: bool = False) -> dict:
     try:
         roster = get_tax_roster() or []
         for m in targets:
-            ctx = _history_context(m)
+            ctx = _history_context(m, conn)
             actual = idx["by_month"].get(m, {})
             combos = get_suggestions(conn, m)
             if not combos:

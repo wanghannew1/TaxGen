@@ -1155,6 +1155,77 @@ def get_unpaid_salary_cert_months(conn, salary_months) -> Set[Tuple[str, int]]:
     return pairs
 
 
+def get_paid_cards_ytd(conn, end_window: int) -> Dict[str, Dict[int, Dict[str, object]]]:
+    """按自然年累计：每人本年度 1 月至 end_window 窗口已结清的属月卡片 (只读)。
+
+    用途：报税预判"年度逐月对账"——属月 M 的卡片若在窗口 W（≤end_window）
+    结清，个税端应存在属期 W（或 M）的申报记录；找不到对应申报行的月份即
+    "已发放未申报"的漏报月。属月范围 = 当年 1 月起（个税按自然年累计，
+    去年收入不掺和，2026-11-06 用户确认口径）。
+    本期收入公式与 templates_gen/formulas.calc_本期收入 一致：
+        ATC93AA − ATC936 − ATC93BD − ATC93BE + ATC93X3 − ATC93E（负值截 0）
+    返回 {证件号大写: {属月: {"amount": 合计金额, "windows": {结算窗口}}}}
+    """
+    year = int(end_window) // 100
+    ym_start = year * 100 + 1
+    sql = """
+        SELECT ac01.AAC002, t93.ATC931, m.ATC8G7,
+               NVL(t93.ATC93AA,0) - NVL(t93.ATC936,0) - NVL(t93.ATC93BD,0)
+               - NVL(t93.ATC93BE,0) + NVL(t93.ATC93X3,0) - NVL(t93.ATC93E,0) AS INCOME_AMT
+        FROM TC93 t93
+        JOIN TC8M m ON m.ATB930 = t93.ATB930
+                   AND m.ATC931 = t93.ATC931
+                   AND m.ATC937 = t93.ATC937
+        LEFT JOIN AC01 ac01 ON t93.AAC001 = ac01.AAC001
+        WHERE t93.ATC93G = '1'
+          AND NVL(t93.ATC93AA,0) > 0
+          AND t93.ATC931 >= :ws AND t93.ATC931 <= :we
+          AND m.ATC8G7 >= :ws AND m.ATC8G7 <= :we
+          AND m.ATC8M3 = 2
+    """
+    result: Dict[str, Dict[int, Dict[str, object]]] = {}
+    with conn.cursor() as cursor:
+        cursor.execute(sql, {"ws": ym_start, "we": int(end_window)})
+        for cert, month, window, amt in cursor.fetchall():
+            key = str(cert or "").strip().upper()
+            if not key or not month or not window:
+                continue
+            income = max(0.0, round(float(amt or 0), 2))
+            info = result.setdefault(key, {}).setdefault(int(month), {"amount": 0.0, "windows": set()})
+            info["amount"] = round(info["amount"] + income, 2)
+            info["windows"].add(int(window))
+    return result
+
+
+def get_paid_cards_months(conn, pay_month: int) -> Dict[str, Set[Tuple[int, str]]]:
+    """按发放窗口返回每人已结清工资卡片 (TC93+AC01, 只读)。
+
+    卡片键 = (工资所属月 ATC931, 批次 ATC937)，对应 TC8M.ATC8G7=pay_month
+    且 ATC8M3=2 的发放行。合并预判据此精确判定"上月申报窗口已结清哪些
+    (所属月, 批次)"；上月窗口没有该人卡片（发放断档/申报与发放脱钩）时，
+    上层退回上月申报金额子集匹配兜底。返回 {证件号大写: {(所属月, 批次)}}
+    """
+    sql = """
+        SELECT ac01.AAC002, t93.ATC931, t93.ATC937
+        FROM TC93 t93
+        LEFT JOIN AC01 ac01 ON t93.AAC001 = ac01.AAC001
+        WHERE t93.ATC93G = '1'
+          AND NVL(t93.ATC93AA, 0) > 0
+          AND (t93.ATB930, t93.ATC931, t93.ATC937) IN (
+              SELECT m.ATB930, m.ATC931, m.ATC937 FROM TC8M m
+              WHERE m.ATC8G7 = :pm AND m.ATC8M3 = 2
+          )
+    """
+    result: Dict[str, Set[Tuple[int, str]]] = {}
+    with conn.cursor() as cursor:
+        cursor.execute(sql, {"pm": int(pay_month)})
+        for cert, month, seq in cursor.fetchall():
+            key = str(cert or "").strip().upper()
+            if key and month:
+                result.setdefault(key, set()).add((int(month), str(seq or "")))
+    return result
+
+
 def get_paid_batch_pay_map(conn, units, months) -> Dict[Tuple[int, int, str], Set[int]]:
     """查询 TC8M 已发放批次 (ATC8M3=2) 的发放月集合。
 
