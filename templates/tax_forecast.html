@@ -51,11 +51,91 @@
     <div class="card">
         <div class="card-header"><strong>下一次报税预判 · 基于历史申报规律</strong></div>
         <div class="card-body">
-            <div class="alert alert-info mb-3" style="font-size: 0.9rem;">
+            <div class="alert alert-info mb-3 position-relative" style="font-size: 0.9rem; padding-right: 9rem;">
                 口径：「税款所属期」= <strong>发放月</strong>（TC8M.ATC8G7）。系统侧取该发放月已确认发放批次，
                 跨工资所属月/多批次按人合并。历史样本来自已导入的个税端
                 <code>税款计算_工资薪金所得</code>（默认回看 6 个月）。
                 预判结果仅供生成前参考，标注「高/中/低」置信度与依据；历史回测展示同口径下过去月份的实际命中率。
+                <button class="btn btn-sm btn-info position-absolute top-0 end-0 m-2" type="button"
+                        data-bs-toggle="collapse" data-bs-target="#rulesBox"
+                        aria-expanded="false" aria-controls="rulesBox">判断规则说明</button>
+            </div>
+
+            <div class="collapse" id="rulesBox">
+                <div class="card border-info mb-3">
+                    <div class="card-body" style="font-size: .85rem;">
+                        <h6 class="mb-1">一、数据口径</h6>
+                        <ul class="mb-2">
+                            <li>「税款所属期」= <strong>发放月</strong>（TC8M.ATC8G7）；候选取该发放月已确认发放批次（ATC8M3=2），跨工资所属月/多批次按人合并。</li>
+                            <li>历史样本 = 已导入的个税端「税款计算_工资薪金所得」，默认回看 <strong>6 个申报月</strong>；「单位零申报率」回看最近 <strong>3 个月</strong>。</li>
+                            <li>每条预判带置信度：<strong>高</strong>（用户配置或历史实证强）、<strong>中</strong>（样本一般）、<strong>低</strong>（样本不足，仅兜底沿用现有生成规则）。每行「依据」列显示实际命中的规则与实证数字，「历史说明」列显示本人近 6 月申报状态。</li>
+                        </ul>
+
+                        <h6 class="mb-1">二、三险一金合并（单月 / 多月 / 不报）——按顺序命中即采用</h6>
+                        <div class="table-responsive mb-1">
+                            <table class="table table-sm table-bordered mb-1">
+                                <thead><tr><th>顺序</th><th>条件</th><th>预判</th><th>依据 / 实证</th></tr></thead>
+                                <tbody>
+                                    <tr><td>1</td><td>该人此前保存过合并方式选择</td><td>沿用保存的选择</td><td>人工选择最高优先</td></tr>
+                                    <tr><td>2</td><td>结算单元配置「压月发」</td><td>单月</td><td>业务配置</td></tr>
+                                    <tr><td>2</td><td>结算单元配置「双月发」</td><td>多月</td><td>业务配置</td></tr>
+                                    <tr><td>3</td><td>单月三险 = 多月三险，且发放月无三险</td><td>上月零申报 → 不报；上月有收入 → 单月；无记录 → 单月（低）</td><td>回测实证</td></tr>
+                                    <tr><td>4</td><td>上月零申报，或上月个税端查无此人</td><td>多月</td><td>历史约 90% 按多月合并</td></tr>
+                                    <tr><td>5</td><td>上月有申报收入：用上月申报收入与本次各工资所属月收入比对（容差 ≤ 0.02 元）</td><td>能对上部分月份 → 剩余为新增月：新增 ≥2 个月 → 多月；新增 1 个月 → 单月；全部已覆盖 → 当月有三险报单月、无三险报不报</td><td>以上月申报反推已报月份，历史约 80%~95%</td></tr>
+                                    <tr><td>5b</td><td>比对不上，且两个所属月不相邻（间隔 ≥2 个月，如 5 月 + 7 月）</td><td>单月</td><td>历史同类 32/35 只报最近单月</td></tr>
+                                    <tr><td>5c</td><td>比对不上，且所属月相邻</td><td>多月</td><td>兜底规则</td></tr>
+                                    <tr><td>6</td><td>借支/补缴标记（ATC93BE ≠ 0）</td><td>不强制单月，仅在该行依据中提示</td><td>回测显示与选择无强关联</td></tr>
+                                </tbody>
+                            </table>
+                        </div>
+                        <p class="small-muted mb-2">回测：202604–202609 共 2050 个可比候选，正确 1946，合并准确率 <strong>94.9%</strong>。</p>
+
+                        <h6 class="mb-1">三、零申报是否申报（A1 工资0 / A2 做了未发 / B 名单在册 / C 合同新入职 / A2 次月发放 / A3 无批次）——按顺序命中即采用</h6>
+                        <div class="table-responsive mb-1">
+                            <table class="table table-sm table-bordered mb-1">
+                                <thead><tr><th>顺序</th><th>条件</th><th>预判</th><th>依据 / 实证</th></tr></thead>
+                                <tbody>
+                                    <tr><td>1</td><td>该人此前保存过申报选择</td><td>沿用保存的选择</td><td>人工选择最高优先</td></tr>
+                                    <tr><td>2</td><td>结算单元配置「工资为0不增员不报税」</td><td>不申报</td><td>业务配置</td></tr>
+                                    <tr><td>3</td><td>名单在册但已离职 / 不在系统（TC90 无合同，或工资结束年月早于本期）</td><td>不申报</td><td>离职/无合同人员不再申报</td></tr>
+                                    <tr><td>4</td><td>名单在册且系统内有合同</td><td>申报</td><td>个税端在册人员需保留申报</td></tr>
+                                    <tr><td>5</td><td>其余候选有零申报惯性（上月零申报，或近 6 月出现过零申报）</td><td>申报（近 6 月零申报 ≥2 次或上月零申报 → 高置信）</td><td>零申报惯性</td></tr>
+                                    <tr><td>5b</td><td>无惯性，但所属单位近 3 月零申报率 ≥ 20%</td><td>申报（中置信）</td><td>单位历史申报习惯</td></tr>
+                                    <tr><td>5c</td><td>无惯性，且单位从不零申报、本人无申报历史</td><td>不申报</td><td>历史无零申报先例</td></tr>
+                                    <tr><td>6</td><td>历史样本不足</td><td>沿用现有生成规则（低置信）</td><td>不确定时保守沿用</td></tr>
+                                </tbody>
+                            </table>
+                        </div>
+                        <p class="small-muted mb-2">回测：202604–202609 共 6240 个可比候选，正确 4993，准确率 <strong>80.0%</strong>。</p>
+
+                        <h6 class="mb-1">四、历史在册无工资（上期个税端在册、本期系统无任何工资记录）</h6>
+                        <div class="table-responsive mb-1">
+                            <table class="table table-sm table-bordered mb-1">
+                                <thead><tr><th>顺序</th><th>条件</th><th>预判</th></tr></thead>
+                                <tbody>
+                                    <tr><td>1</td><td>工资结束年月早于本期</td><td>不申报（判定已离职，建议减员）</td></tr>
+                                    <tr><td>2</td><td>系统查无该人合同</td><td>不申报（可能人工管理）</td></tr>
+                                    <tr><td>3</td><td>上期零申报，或近 6 月有零申报</td><td>申报，保留在册（高置信）</td></tr>
+                                    <tr><td>4</td><td>无零申报惯性，但单位零申报率 ≥ 20%</td><td>申报（中置信）</td></tr>
+                                    <tr><td>5</td><td>其余</td><td>不申报（倾向已不在个税申报范围）</td></tr>
+                                </tbody>
+                            </table>
+                        </div>
+                        <p class="small-muted mb-2">回测准确率 <strong>76.7%</strong>（2240 个可比候选）。</p>
+
+                        <h6 class="mb-1">五、主结算单元归属（多结算单元发薪人员）</h6>
+                        <ul class="mb-1">
+                            <li>「主结算单元」是<strong>单元级属性</strong>：该单元本期发薪人数 ≥ 5 人，且缴五险一金人数占比 ≥ 80%。</li>
+                            <li>人员归属 = 本人发薪单元 ∩ 主单元集合，取最早发薪月的单元；本人所有单元都不是主单元（如只在奖金/补贴单元发薪）→ 回落最早发薪单元（低置信）。</li>
+                            <li>高置信：落在主单元集合且与历史申报单位一致（或本人无历史可比）；覆盖率达标但历史申报单位不同 → 中置信；不在主单元集合 → 低置信。</li>
+                        </ul>
+                        <p class="small-muted mb-2">回测命中率 <strong>99.65%</strong>（3983 个可比候选）。</p>
+
+                        <h6 class="mb-1">六、历史回测口径（结果见「历史回测」页签）</h6>
+                        <p class="mb-0">对每个历史申报月，仅使用<strong>该月之前</strong>的历史数据生成预判，再与个税端实际申报逐人比对：
+                        合并对比实际三险金额 ≈ 单月/多月/0 哪种口径；零申报对比该人是否出现在个税端（收入 ≈ 0 视为申报）；主单元对比申报备注单位。可导出回测 Excel 复核全部误判样例。</p>
+                    </div>
+                </div>
             </div>
             <div class="row g-2 align-items-end">
                 <div class="col-md-3">
@@ -350,7 +430,7 @@
         if (tab === 'merge') {
             tbody.innerHTML = slice.map(r => `<tr>
                 <td>${esc(r.name)}</td><td>${esc(r.cert_no)}</td><td>${esc(r.main_unit_name)}</td>
-                <td>${mergeBadge(r.default_chosen)}</td><td>${confBadge(r.confidence)}</td>
+                <td title="规则代码: ${esc(r.prediction_rule || '')}">${mergeBadge(r.default_chosen)}</td><td>${confBadge(r.confidence)}</td>
                 <td class="reason">${esc(r.reason)}</td>
                 <td class="text-end">${money(r.income_total)}</td>
                 <td class="text-end">${money(r.insurance_single)}</td>
@@ -361,7 +441,7 @@
         } else if (tab === 'zero') {
             tbody.innerHTML = slice.map(r => `<tr>
                 <td>${esc(r.name)}</td><td>${esc(r.cert_no)}</td><td>${esc(r.unit_name)}</td>
-                <td>${esc(r.category_label)}</td><td>${zeroBadge(r.default_chosen)}</td>
+                <td>${esc(r.category_label)}</td><td title="规则代码: ${esc(r.prediction_rule || '')}">${zeroBadge(r.default_chosen)}</td>
                 <td>${confBadge(r.confidence)}</td><td class="reason">${esc(r.reason)}</td>
                 <td class="text-end">${money(r.income_total)}</td>
                 <td>${esc(r.prev_filing_status)}</td><td class="hist">${esc(r.history_note)}</td>
@@ -369,7 +449,7 @@
         } else if (tab === 'roster') {
             tbody.innerHTML = slice.map(r => `<tr>
                 <td>${esc(r.name)}</td><td>${esc(r.cert_no)}</td><td>${esc(r.unit_name)}</td>
-                <td>${zeroBadge(r.default_chosen)}</td><td>${confBadge(r.confidence)}</td>
+                <td title="规则代码: ${esc(r.prediction_rule || '')}">${zeroBadge(r.default_chosen)}</td><td>${confBadge(r.confidence)}</td>
                 <td class="reason">${esc(r.reason)}</td>
                 <td class="text-end">${money(r.last_income)}</td><td>${esc(r.last_filing_month)}</td>
                 <td class="hist">${esc(r.history_note)}</td><td>${esc(r.sys_info)}</td></tr>`).join('');
